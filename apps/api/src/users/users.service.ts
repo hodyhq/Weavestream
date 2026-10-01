@@ -354,19 +354,26 @@ export class UsersService {
     });
 
     if (isDeactivation) {
-      // Revoke all sessions so a deactivated user is signed out everywhere.
-      await this.prisma.session.updateMany({
-        where: { userId: id, revokedAt: null },
-        data: { revokedAt: new Date() },
+      // Both revocations in one transaction: a failure between them would
+      // leave sessions revoked but keys live, which is the partial state the
+      // sibling paths in MeService deliberately guard against.
+      await this.prisma.$transaction(async (tx) => {
+        // Revoke all sessions so a deactivated user is signed out everywhere.
+        await tx.session.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        // Revoke keys too, rather than leaving them merely inert. AuthGuard
+        // rejects on `!isActive`, so without this a reactivation a week later
+        // silently resurrects every key an attacker minted beforehand — and
+        // none of them show up in the sessions UI to warn anyone.
+        await tx.apiKey.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
       });
-      // Revoke keys too, rather than leaving them merely inert. AuthGuard
-      // rejects on `!isActive`, so without this a reactivation a week later
-      // silently resurrects every key an attacker minted beforehand — and
-      // none of them show up in the sessions UI to warn anyone.
-      await this.prisma.apiKey.updateMany({
-        where: { userId: id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
+      // Outside the transaction: cache invalidation is not part of the
+      // atomic unit and must not roll it back if it fails.
       await this.cache.invalidate(id);
     }
     if (isActivation) {
