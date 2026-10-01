@@ -375,6 +375,7 @@ describe('UsersService.resetMfa', () => {
       prisma as never,
       makeAudit() as never,
       makeCache() as never,
+      makeSetupTokens() as never,
     );
     await svc.resetMfa(
       { id: 'admin', role: 'SUPER_ADMIN' } as never,
