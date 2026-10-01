@@ -1,0 +1,208 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { NotFoundException } from '@nestjs/common';
+import { ApiKeyService, DEFAULT_EXPIRY_DAYS } from './api-key.service.js';
+
+/** Everything after the second separator — the secret may itself contain `_`. */
+const secretOf = (token: string) =>
+  token.slice(token.indexOf('_', token.indexOf('_') + 1) + 1);
+
+const sha256 = (v: string) => createHash('sha256').update(v, 'utf8').digest('hex');
+
+function makeService() {
+  const rows = new Map<string, Record<string, unknown>>();
+  const prisma = {
+    apiKey: {
+      create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const row = {
+          id: `id-${rows.size + 1}`,
+          lastUsedAt: null,
+          revokedAt: null,
+          createdAt: new Date(),
+          ...data,
+        };
+        rows.set(row.keyId as string, row);
+        return row;
+      }),
+      findUnique: jest.fn(
+        async ({ where }: { where: { keyId: string } }) =>
+          rows.get(where.keyId) ?? null,
+      ),
+      updateMany: jest.fn(
+        async ({ where }: { where: { id: string; userId: string } }) => {
+          for (const row of rows.values()) {
+            if (row.id === where.id && row.userId === where.userId && !row.revokedAt) {
+              row.revokedAt = new Date();
+              return { count: 1 };
+            }
+          }
+          return { count: 0 };
+        },
+      ),
+      update: jest.fn(async () => ({})),
+      findMany: jest.fn(async () => []),
+    },
+  } as never;
+  const audit = { log: jest.fn().mockResolvedValue(undefined) };
+  return { svc: new ApiKeyService(prisma, audit as never), rows, audit };
+}
+
+const META = { ip: '198.51.100.7', userAgent: 'jest' };
+const ACTOR = { id: 'u-1', sessionId: 's-1' } as never;
+
+describe('ApiKeyService', () => {
+  describe('mint', () => {
+    it('returns a ws_<keyId>_<secret> token whose secret is only stored hashed', async () => {
+      const { svc, rows } = makeService();
+      const { record, token } = await svc.mint({
+        userId: 'u-1',
+        name: 'ci',
+        createdBy: 'u-1',
+      });
+
+      const first = token.indexOf('_');
+      const second = token.indexOf('_', first + 1);
+      const prefix = token.slice(0, first);
+      const keyId = token.slice(first + 1, second);
+      const secret = token.slice(second + 1);
+      expect(prefix).toBe('ws');
+      expect(keyId).toBe(record.keyId);
+      expect(keyId).toMatch(/^[0-9a-f]+$/);
+
+      // The plaintext secret must never be persisted — only its digest.
+      const stored = rows.get(keyId)!;
+      expect(stored.tokenHash).toBe(sha256(secret));
+      expect(JSON.stringify(stored)).not.toContain(secret);
+    });
+
+    it('applies a default expiry rather than creating an immortal key', async () => {
+      const { svc } = makeService();
+      const { record } = await svc.mint({ userId: 'u-1', name: 'k', createdBy: 'u-1' });
+      const days = Math.round(
+        ((record.expiresAt as Date).getTime() - Date.now()) / 86_400_000,
+      );
+      expect(days).toBe(DEFAULT_EXPIRY_DAYS);
+    });
+
+    it('honours an explicit null expiry as a deliberate opt-out', async () => {
+      const { svc } = makeService();
+      const { record } = await svc.mint({
+        userId: 'u-1',
+        name: 'k',
+        createdBy: 'u-1',
+        expiresInDays: null,
+      });
+      expect(record.expiresAt).toBeNull();
+    });
+
+    it('issues a distinct keyId and secret every time', async () => {
+      const { svc } = makeService();
+      const a = await svc.mint({ userId: 'u-1', name: 'a', createdBy: 'u-1' });
+      const b = await svc.mint({ userId: 'u-1', name: 'b', createdBy: 'u-1' });
+      expect(a.record.keyId).not.toBe(b.record.keyId);
+      expect(a.token).not.toBe(b.token);
+    });
+  });
+
+  describe('verify', () => {
+    it('accepts a freshly minted token', async () => {
+      const { svc } = makeService();
+      const { token, record } = await svc.mint({
+        userId: 'u-1',
+        name: 'k',
+        createdBy: 'u-1',
+      });
+      await expect(svc.verify(token)).resolves.toMatchObject({ id: record.id });
+    });
+
+    it('rejects a token whose secret has been altered', async () => {
+      const { svc } = makeService();
+      const { token, record } = await svc.mint({ userId: 'u-1', name: 'k', createdBy: 'u-1' });
+      const k = token.slice(token.indexOf('_') + 1, token.lastIndexOf('_', token.indexOf('_', token.indexOf('_') + 1)));
+      const forged = `ws_${record.keyId}_${randomBytes(32).toString('base64url')}`;
+      void k;
+      await expect(svc.verify(forged)).resolves.toBeNull();
+    });
+
+    it('rejects revoked and expired keys', async () => {
+      const { svc, rows } = makeService();
+      const revoked = await svc.mint({ userId: 'u-1', name: 'r', createdBy: 'u-1' });
+      rows.get(revoked.record.keyId)!.revokedAt = new Date();
+      await expect(svc.verify(revoked.token)).resolves.toBeNull();
+
+      const expired = await svc.mint({ userId: 'u-1', name: 'e', createdBy: 'u-1' });
+      rows.get(expired.record.keyId)!.expiresAt = new Date(Date.now() - 1000);
+      await expect(svc.verify(expired.token)).resolves.toBeNull();
+    });
+
+    it('rejects malformed input without hitting the database', async () => {
+      const { svc } = makeService();
+      for (const bad of ['', 'nonsense', 'ws_only-two', 'xx_a_b', 'ws__b', 'ws_a_']) {
+        await expect(svc.verify(bad)).resolves.toBeNull();
+      }
+      // parse() must short-circuit so attacker-shaped input is never a lookup key.
+      expect(
+        (svc as unknown as { prisma: { apiKey: { findUnique: jest.Mock } } }).prisma
+          .apiKey.findUnique,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('is not an existence oracle: unknown and wrong-secret are indistinguishable', async () => {
+      const { svc } = makeService();
+      const { token, record } = await svc.mint({ userId: 'u-1', name: 'k', createdBy: 'u-1' });
+      void token;
+      const wrongSecret = await svc.verify(`ws_${record.keyId}_${'A'.repeat(43)}`);
+      const unknownKey = await svc.verify(`ws_${'b'.repeat(18)}_${'C'.repeat(43)}`);
+      expect(wrongSecret).toBeNull();
+      expect(unknownKey).toBeNull();
+    });
+  });
+
+  describe('revoke', () => {
+    it('revokes the acting user’s own key and audits by id, never by value', async () => {
+      const { svc, audit } = makeService();
+      const { record, token } = await svc.mint({
+        userId: 'u-1',
+        name: 'k',
+        createdBy: 'u-1',
+      });
+      await svc.revoke(ACTOR, record.id, META);
+      await expect(svc.verify(token)).resolves.toBeNull();
+
+      const entry = audit.log.mock.calls[0][0];
+      expect(entry).toMatchObject({
+        action: 'auth.api_key.revoke',
+        entityId: record.id,
+      });
+      expect(JSON.stringify(entry)).not.toContain(secretOf(token));
+    });
+
+    it("refuses another user's key, so an id guess cannot escalate (IDOR)", async () => {
+      const { svc } = makeService();
+      const victim = await svc.mint({
+        userId: 'victim',
+        name: 'theirs',
+        createdBy: 'victim',
+      });
+      await expect(svc.revoke(ACTOR, victim.record.id, META)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      // Still live for its real owner.
+      await expect(svc.verify(victim.token)).resolves.not.toBeNull();
+    });
+  });
+
+  describe('create', () => {
+    it('audits the mint by reference and never logs the secret', async () => {
+      const { svc, audit } = makeService();
+      const out = await svc.create(ACTOR, { name: 'mcp' }, META);
+      const entry = audit.log.mock.calls[0][0];
+      expect(entry).toMatchObject({
+        action: 'auth.api_key.create',
+        entityType: 'api_key',
+        entityId: out.id,
+      });
+      expect(JSON.stringify(entry)).not.toContain(secretOf(out.token));
+      expect(JSON.stringify(entry)).not.toContain(out.token);
+    });
+  });
+});

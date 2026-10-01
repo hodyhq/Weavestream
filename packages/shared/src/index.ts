@@ -1,3 +1,4 @@
+export * from './schemas/api-key.js';
 /**
  * Client-safe barrel for `@weavestream/shared`.
  *

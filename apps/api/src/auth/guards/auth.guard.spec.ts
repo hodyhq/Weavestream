@@ -39,7 +39,17 @@ function makeGuard(rotateResult: unknown) {
       }),
     },
   } as never;
-  const guard = new AuthGuard(reflector, tokens, auth as never, prisma, ENV);
+  // API-key verification is not exercised by these cookie-path specs; the
+  // stub returns null so the guard always falls through to the cookie branch.
+  const apiKeys = { verify: jest.fn().mockResolvedValue(null), touch: jest.fn() };
+  const guard = new AuthGuard(
+    reflector,
+    tokens,
+    auth as never,
+    prisma,
+    ENV,
+    apiKeys as never,
+  );
   return { guard, auth };
 }
 

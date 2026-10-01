@@ -1,0 +1,231 @@
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { AuditLogService } from '../audit/audit.service.js';
+import type { ApiKey } from '@prisma/client';
+import type { CreateApiKeyInput } from '@weavestream/shared';
+import type { AuthedUser } from '../common/current-user.decorator.js';
+import type { RequestMeta } from '../common/request-meta.js';
+
+/**
+ * Presented-token format: `ws_<keyId>_<secret>`.
+ *
+ * `keyId` is public and indexed — it selects exactly one row, so verification
+ * never scans the table and never uses the secret as a lookup value. `secret`
+ * is 32 bytes of CSPRNG output, base64url encoded, and is compared against a
+ * stored SHA-256 digest in constant time.
+ *
+ * On the choice of SHA-256 over Argon2id (CLAUDE.md §2): the rule exists
+ * because passwords are low-entropy and must survive offline cracking. This
+ * secret is 256 bits of `randomBytes` with no structure to guess, so a fast
+ * digest is preimage-safe, and it is verified on every single request where a
+ * deliberately-slow KDF would add ~100ms of CPU per call. The slow-KDF rule
+ * still applies to anything a human chooses.
+ */
+const PREFIX = 'ws';
+const SECRET_BYTES = 32;
+const KEY_ID_BYTES = 9;
+
+/**
+ * `keyId` is hex, not base64url, precisely because the token separator is `_`
+ * and the base64url alphabet *contains* `_`. A base64url keyId would make the
+ * token ambiguous to split. The secret stays base64url (denser, and it is only
+ * ever taken as "everything after the second separator", so its alphabet is
+ * irrelevant).
+ */
+
+/** Default lifetime when the caller does not specify one. Never "forever". */
+export const DEFAULT_EXPIRY_DAYS = 365;
+
+export interface MintedApiKey {
+  record: ApiKey;
+  /**
+   * The full token, returned exactly once at creation and never recoverable.
+   * Permitted under the one-time-delivery carve-out in CLAUDE.md §2: it is
+   * server-generated for this authorized request, never reflected from the
+   * request body, never logged, and the mint itself is audited by id.
+   */
+  token: string;
+}
+
+function sha256(value: string): Buffer {
+  return createHash('sha256').update(value, 'utf8').digest();
+}
+
+@Injectable()
+export class ApiKeyService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditLogService,
+  ) {}
+
+  /**
+   * Split a presented token into its public and secret halves. Returns null
+   * for anything that is not well-formed, so callers never attempt a lookup
+   * with attacker-shaped input.
+   */
+  parse(presented: string): { keyId: string; secret: string } | null {
+    // Split on the first two separators only. The secret is base64url, whose
+    // alphabet includes `_`, so a naive three-way split would reject roughly
+    // half of all legitimately-minted tokens.
+    const first = presented.indexOf('_');
+    if (first < 0) return null;
+    const second = presented.indexOf('_', first + 1);
+    if (second < 0) return null;
+
+    const prefix = presented.slice(0, first);
+    const keyId = presented.slice(first + 1, second);
+    const secret = presented.slice(second + 1);
+    if (prefix !== PREFIX || !keyId || !secret) return null;
+    // keyId is always hex; reject anything else before it reaches a query.
+    if (!/^[0-9a-f]+$/.test(keyId)) return null;
+    return { keyId, secret };
+  }
+
+  async mint(params: {
+    userId: string;
+    name: string;
+    scopes?: string[];
+    expiresInDays?: number | null;
+    createdBy: string;
+  }): Promise<MintedApiKey> {
+    const keyId = randomBytes(KEY_ID_BYTES).toString('hex');
+    const secret = randomBytes(SECRET_BYTES).toString('base64url');
+    const days =
+      params.expiresInDays === null
+        ? null
+        : (params.expiresInDays ?? DEFAULT_EXPIRY_DAYS);
+    const record = await this.prisma.apiKey.create({
+      data: {
+        userId: params.userId,
+        keyId,
+        tokenHash: sha256(secret).toString('hex'),
+        name: params.name,
+        scopes: params.scopes ?? [],
+        expiresAt:
+          days === null ? null : new Date(Date.now() + days * 86_400_000),
+        createdBy: params.createdBy,
+      },
+    });
+    return { record, token: `${PREFIX}_${keyId}_${secret}` };
+  }
+
+  /**
+   * Resolve a presented token to its live key row, or null.
+   *
+   * Returns null — never throws, never distinguishes — for unknown, revoked,
+   * expired, and wrong-secret alike, so the caller cannot be used as an
+   * oracle for which keyIds exist.
+   */
+  async verify(presented: string): Promise<ApiKey | null> {
+    const parsed = this.parse(presented);
+    if (!parsed) return null;
+
+    const key = await this.prisma.apiKey.findUnique({
+      where: { keyId: parsed.keyId },
+    });
+    if (!key) return null;
+    if (key.revokedAt) return null;
+    if (key.expiresAt && key.expiresAt < new Date()) return null;
+
+    const expected = Buffer.from(key.tokenHash, 'hex');
+    const actual = sha256(parsed.secret);
+    // Lengths are both 32 here by construction, but timingSafeEqual throws on
+    // a mismatch rather than returning false, so guard before comparing.
+    if (expected.length !== actual.length) return null;
+    if (!timingSafeEqual(expected, actual)) return null;
+
+    return key;
+  }
+
+  /**
+   * Record usage. Deliberately fire-and-forget at the call site: a failed
+   * bookkeeping write must never fail an otherwise-authenticated request.
+   */
+  async touch(id: string): Promise<void> {
+    await this.prisma.apiKey.update({
+      where: { id },
+      data: { lastUsedAt: new Date() },
+    });
+  }
+
+  list(userId: string) {
+    return this.prisma.apiKey.findMany({
+      where: { userId, revokedAt: null },
+      orderBy: { createdAt: 'desc' },
+      // tokenHash is never selected — it has no caller outside verify().
+      select: {
+        id: true,
+        keyId: true,
+        name: true,
+        scopes: true,
+        lastUsedAt: true,
+        expiresAt: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  /**
+   * Audited mint. The audit row records the key's id, name and scopes — never
+   * the secret (CLAUDE.md §2: audit the transition by reference, not value).
+   */
+  async create(actor: AuthedUser, dto: CreateApiKeyInput, meta: RequestMeta) {
+    const { record, token } = await this.mint({
+      userId: actor.id,
+      name: dto.name,
+      scopes: dto.scopes,
+      expiresInDays: dto.expiresInDays,
+      createdBy: actor.id,
+    });
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'auth.api_key.create',
+      entityType: 'api_key',
+      entityId: record.id,
+      after: {
+        name: record.name,
+        scopes: record.scopes,
+        expiresAt: record.expiresAt,
+        sessionId: actor.sessionId,
+      },
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+    });
+
+    return {
+      id: record.id,
+      keyId: record.keyId,
+      name: record.name,
+      scopes: record.scopes,
+      lastUsedAt: record.lastUsedAt,
+      expiresAt: record.expiresAt,
+      createdAt: record.createdAt,
+      token,
+    };
+  }
+
+  /**
+   * Audited revoke, scoped to the acting user. A guessed id belonging to
+   * someone else matches nothing and is indistinguishable from absent, so this
+   * cannot be used to probe for other users' keys (CLAUDE.md §1).
+   */
+  async revoke(actor: AuthedUser, id: string, meta: RequestMeta): Promise<void> {
+    const { count } = await this.prisma.apiKey.updateMany({
+      where: { id, userId: actor.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    if (count === 0) throw new NotFoundException();
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'auth.api_key.revoke',
+      entityType: 'api_key',
+      entityId: id,
+      after: { sessionId: actor.sessionId },
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+    });
+  }
+}

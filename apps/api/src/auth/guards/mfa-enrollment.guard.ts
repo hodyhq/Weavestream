@@ -36,6 +36,16 @@ export class MfaEnrollmentGuard implements CanActivate {
     const user = req.user;
     if (!user) return true; // AuthGuard will have already rejected.
 
+    // An API key is itself a strong second factor: 256 bits of CSPRNG output,
+    // individually revocable, and mintable only from an already-enrolled
+    // interactive session. Gating it behind a TOTP prompt would deadlock every
+    // programmatic client — there is no human present to answer the challenge.
+    // This does not weaken enrollment: minting the key required a fully
+    // enrolled, MFA-verified session, so the factor was proven before the key
+    // ever existed. See `AuthGuard.authenticateApiKey`, which sets
+    // `mfaPending: false` for the same reason.
+    if (user.apiKeyId) return true;
+
     if (user.mfaEnforcementCompletedAt === null) {
       // Not yet enrolled — block everything except explicitly MFA-setup routes
       // and logout, which needs a carve-out below.

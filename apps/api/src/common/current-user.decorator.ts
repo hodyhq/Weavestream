@@ -17,6 +17,15 @@ export interface AuthedUser {
   sessionId: string;
   mfaEnforcementCompletedAt: Date | null;
   mfaPending: boolean;
+  /**
+   * Set when the principal authenticated with an API key rather than a
+   * browser session. Presence — not absence — is the signal: guards that
+   * must treat programmatic callers differently check this, so a new cookie
+   * field can never accidentally opt a token into an interactive-only path.
+   */
+  apiKeyId?: string;
+  /** Narrowing scopes carried by that key. Empty = inherit the user's rights. */
+  apiKeyScopes?: string[];
 }
 
 export const CurrentUser = createParamDecorator(
