@@ -2,6 +2,7 @@ import { requireMe, serverApiFetch } from '../../lib/server-api';
 import { PageBody, PageHeader } from '../../components/shell/page-header';
 import { Panel } from '../../components/ui';
 import { MeTabs } from './me-tabs';
+import type { ApiKeySummary } from '@weavestream/shared';
 
 type Session = {
   id: string;
@@ -12,7 +13,14 @@ type Session = {
   current: boolean;
 };
 
-const VALID_TABS = ['profile', 'memberships', 'appearance', 'security', 'sessions'] as const;
+const VALID_TABS = [
+  'profile',
+  'memberships',
+  'appearance',
+  'security',
+  'sessions',
+  'api-keys',
+] as const;
 type TabId = (typeof VALID_TABS)[number];
 
 export default async function MePage({
@@ -24,6 +32,8 @@ export default async function MePage({
   const me = await requireMe();
   const sessionsRes = await serverApiFetch<Session[]>('/me/sessions');
   const sessions = sessionsRes.data ?? [];
+  const apiKeysRes = await serverApiFetch<ApiKeySummary[]>('/me/api-keys');
+  const apiKeys = apiKeysRes.ok ? (apiKeysRes.data ?? []) : [];
 
   const initialTab: TabId = VALID_TABS.includes(sp.tab as TabId)
     ? (sp.tab as TabId)
@@ -34,11 +44,11 @@ export default async function MePage({
       <PageHeader
         crumbs={[{ label: 'Account', href: '/me' }, { label: 'Profile' }]}
         title="Your profile"
-        description="Manage your profile, memberships, security, and active sessions."
+        description="Manage your profile, memberships, security, sessions, and API keys."
       />
       <PageBody>
         <Panel noPad>
-          <MeTabs initialTab={initialTab} me={me} sessions={sessions} />
+          <MeTabs initialTab={initialTab} me={me} sessions={sessions} apiKeys={apiKeys} apiKeysLoadFailed={!apiKeysRes.ok} />
         </Panel>
       </PageBody>
     </>
