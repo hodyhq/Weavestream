@@ -1370,7 +1370,7 @@ export class AssetsService {
     targetCompanyId: string,
     opts: { archiveOriginal: boolean },
     meta: AuditMeta,
-  ): Promise<SerializedAsset & { originalArchived: boolean }> {
+  ): Promise<SerializedAsset & { originalArchived: boolean; attachmentsIncomplete: boolean }> {
     const crossCompany = sourceCompanyId !== targetCompanyId;
     if (opts.archiveOriginal && !crossCompany) {
       throw new BadRequestException('Moving an asset requires a different target company.');
@@ -1486,7 +1486,12 @@ export class AssetsService {
         try {
           newId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, u.id, targetCompanyId, meta);
           if (!newId) continue;
-          await this.prisma.upload.update({ where: { id: newId }, data: { attachedToId: created.id } });
+          // Tenant-scoped write: companyId must be in the filter.
+          const { count } = await this.prisma.upload.updateMany({
+            where: { id: newId, companyId: targetCompanyId, attachedToId: null },
+            data: { attachedToId: created.id },
+          });
+          if (count !== 1) throw new Error(`copied upload ${newId} could not be attached`);
           copiedUploads.push(newId);
         } catch (err) {
           attachmentsIncomplete = true;
@@ -1555,7 +1560,7 @@ export class AssetsService {
           `asset.clone audit row failed for copy ${created.id} of ${id}: ${err instanceof Error ? err.message : String(err)}`,
         );
       });
-    return { ...created, originalArchived };
+    return { ...created, originalArchived, attachmentsIncomplete };
   }
 
   /**
@@ -1578,7 +1583,8 @@ export class AssetsService {
       );
     }
     const [synced, passwords] = await Promise.all([
-      this.prisma.integrationSyncRecord.count({ where: { assetId: asset.id } }),
+      // companyId is required by the tenant-scope guard (and is the asset's).
+      this.prisma.integrationSyncRecord.count({ where: { companyId, assetId: asset.id } }),
       this.prisma.password.count({ where: { companyId, assetId: asset.id, archivedAt: null } }),
     ]);
     if (synced > 0) {
@@ -1628,11 +1634,20 @@ export class AssetsService {
     const result = await this.runBulk(ids, async (id) => {
       const copy = await this.clone(actor, sourceCompanyId, id, targetCompanyId, opts, meta);
       if (opts.archiveOriginal && !copy.originalArchived) {
-        kept.push({
-          id,
-          code: 'original_not_archived',
-          reason: 'Copied, but the original could not be archived. Archive it by hand.',
-        });
+        kept.push(
+          copy.attachmentsIncomplete
+            ? {
+                id,
+                code: 'original_not_archived',
+                reason:
+                  'Copied, but some attachments did not copy, so the original was kept. Copy those files over before archiving it.',
+              }
+            : {
+                id,
+                code: 'original_not_archived',
+                reason: 'Copied, but the original could not be archived. Archive it by hand.',
+              },
+        );
       }
     });
     return { ok: result.ok, failed: [...result.failed, ...kept] };

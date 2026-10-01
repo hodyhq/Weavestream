@@ -67,10 +67,13 @@ export function CopyAssetsDialog({
           toast.push(p?.message ?? p?.detail ?? p?.title ?? 'Could not copy the asset.', 'danger');
           return;
         }
-        const kept = move && !(res.data as { originalArchived?: boolean }).originalArchived;
+        const d = res.data as { originalArchived?: boolean; attachmentsIncomplete?: boolean };
+        const kept = move && !d.originalArchived;
         toast.push(
           kept
-            ? `Copied to ${target.name}, but the original could not be archived.`
+            ? d.attachmentsIncomplete
+              ? `Copied to ${target.name}, but some attachments did not copy, so the original was kept.`
+              : `Copied to ${target.name}, but the original could not be archived.`
             : move
               ? `Moved to ${target.name}.`
               : `Copied to ${target.name}.`,

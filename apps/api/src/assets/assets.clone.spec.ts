@@ -176,7 +176,11 @@ describe('AssetsService.clone', () => {
     const { svc, uploads, prisma } = harness();
     await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: false }, META);
     expect(uploads.copyToCompany).toHaveBeenCalledWith(ACTOR, SRC, 'a-1', 'up-panel', DST, META);
-    expect(prisma.upload.update).toHaveBeenCalledWith({ where: { id: 'up-new-2' }, data: { attachedToId: 'a-new' } });
+    // Tenant-scoped attach: companyId in the filter.
+    expect(prisma.upload.updateMany).toHaveBeenCalledWith({
+      where: { id: 'up-new-2', companyId: DST, attachedToId: null },
+      data: { attachedToId: 'a-new' },
+    });
   });
 
   it('drops a file that is gone or not the asset\'s instead of failing the copy', async () => {
@@ -211,15 +215,21 @@ describe('AssetsService.clone', () => {
 
   it('keeps the original when an attachment fails to copy during a move', async () => {
     const { svc, prisma, archive } = harness();
-    prisma.upload.update.mockRejectedValueOnce(new Error('db blip'));
+    prisma.upload.updateMany.mockRejectedValueOnce(new Error('db blip'));
     const res = await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: true }, META);
-    expect(res.originalArchived).toBe(false);
+    expect(res).toMatchObject({ originalArchived: false, attachmentsIncomplete: true });
     expect(archive).not.toHaveBeenCalled();
     // The unattached copy is retired.
     expect(prisma.upload.updateMany).toHaveBeenCalledWith({
       where: { id: 'up-new-2', companyId: DST, attachedToId: null },
       data: { deletedAt: expect.any(Date) },
     });
+  });
+
+  it('scopes the move checks to the company (the tenant guard rejects unscoped reads)', async () => {
+    const { svc, prisma } = harness();
+    await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: true }, META);
+    expect(prisma.integrationSyncRecord.count).toHaveBeenCalledWith({ where: { companyId: SRC, assetId: 'a-1' } });
   });
 });
 
