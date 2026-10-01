@@ -297,7 +297,7 @@ export function MeTabs({
         )}
 
         {tab === 'api-keys' && (
-          <Panel title={`API keys (${apiKeys.length})`} flush noPad>
+          <Panel title={apiKeysLoadFailed ? 'API keys' : `API keys (${apiKeys.length})`} flush noPad>
             <ApiKeysList keys={apiKeys} loadFailed={apiKeysLoadFailed} />
           </Panel>
         )}

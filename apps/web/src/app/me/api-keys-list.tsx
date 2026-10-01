@@ -47,6 +47,7 @@ export function ApiKeysList({
   const [createOpen, setCreateOpen] = useState(false);
   const [created, setCreated] = useState<CreatedApiKey | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<ApiKeySummary | null>(null);
 
   async function revoke(k: ApiKeySummary) {
     setRevoking(k.id);
@@ -104,18 +105,20 @@ export function ApiKeysList({
       mono: true,
       width: 140,
       sortValue: (k) => (k.expiresAt ? new Date(k.expiresAt) : null),
-      render: (k) => (
-        <span style={{ color: 'var(--dim)' }}>
-          {k.expiresAt ? <FormattedRelative value={k.expiresAt} /> : 'never'}
-        </span>
-      ),
+      render: (k) => <ExpiresCell expiresAt={k.expiresAt} />,
     },
     {
       id: 'actions',
       header: '',
       width: 110,
       render: (k) => (
-        <Btn kind="outline" size="sm" loading={revoking === k.id} onClick={() => revoke(k)}>
+        <Btn
+          kind="outline"
+          size="sm"
+          loading={revoking === k.id}
+          aria-label={`Revoke ${k.name}`}
+          onClick={() => setConfirming(k)}
+        >
           Revoke
         </Btn>
       ),
@@ -154,6 +157,7 @@ export function ApiKeysList({
           </ErrorBanner>
         </div>
       )}
+      {!loadFailed && (
       <DataTable
         columns={columns}
         rows={keys}
@@ -166,14 +170,50 @@ export function ApiKeysList({
               {k.lastUsedAt ? <FormattedRelative value={k.lastUsedAt} /> : 'never'}
             </MobileCardRow>
             <MobileCardRow label="Expires" mono>
-              {k.expiresAt ? <FormattedRelative value={k.expiresAt} /> : 'never'}
+              <ExpiresCell expiresAt={k.expiresAt} />
             </MobileCardRow>
-            <Btn kind="outline" size="sm" loading={revoking === k.id} onClick={() => revoke(k)}>
+            <Btn
+              kind="outline"
+              size="sm"
+              loading={revoking === k.id}
+              aria-label={`Revoke ${k.name}`}
+              onClick={() => setConfirming(k)}
+            >
               Revoke
             </Btn>
           </div>
         )}
       />
+      )}
+
+      <Dialog
+        open={confirming !== null}
+        onClose={() => setConfirming(null)}
+        title="Revoke API key"
+        width={440}
+        footer={
+          <>
+            <Btn kind="outline" onClick={() => setConfirming(null)}>
+              Cancel
+            </Btn>
+            <Btn
+              kind="danger"
+              onClick={() => {
+                const k = confirming;
+                setConfirming(null);
+                if (k) void revoke(k);
+              }}
+            >
+              Revoke
+            </Btn>
+          </>
+        }
+      >
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          Revoke <strong>{confirming?.name}</strong>? Anything using it stops working
+          immediately. This cannot be undone.
+        </p>
+      </Dialog>
 
       <CreateKeyDialog
         open={createOpen}
@@ -186,6 +226,17 @@ export function ApiKeysList({
       />
       <TokenOnceDialog created={created} onClose={() => setCreated(null)} />
     </div>
+  );
+}
+
+/** The list includes expired keys (the server only drops revoked ones). */
+function ExpiresCell({ expiresAt }: { expiresAt: string | null }) {
+  if (!expiresAt) return <span style={{ color: 'var(--dim)' }}>never</span>;
+  if (new Date(expiresAt).getTime() <= Date.now()) return <Tag tone="danger">expired</Tag>;
+  return (
+    <span style={{ color: 'var(--dim)' }}>
+      <FormattedRelative value={expiresAt} />
+    </span>
   );
 }
 
@@ -322,14 +373,16 @@ function TokenOnceDialog({
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      toast.push('Clipboard unavailable — select the key and copy it manually.', 'warn');
+      toast.push('Clipboard unavailable. Select the key and copy it manually.', 'warn');
     }
   }
 
   return (
     <Dialog
       open={created !== null}
-      onClose={onClose}
+      // Escape and backdrop clicks do nothing here: the token is shown once,
+      // so only an explicit Done may discard it.
+      onClose={() => undefined}
       title="Copy your API key"
       width={520}
       footer={
