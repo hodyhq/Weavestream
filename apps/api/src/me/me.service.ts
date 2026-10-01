@@ -309,29 +309,34 @@ export class MeService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { apiKeysRevoked },
+      after: { sessionKept: actor.sessionId, apiKeysRevoked },
     });
 
-    return { ok: true };
+    return { ok: true, apiKeysRevoked };
   }
 
   async revokeOtherSessions(
     actor: AuthedUser,
     meta: { ip: string; userAgent: string },
   ) {
-    const result = await this.prisma.session.updateMany({
-      where: {
-        userId: actor.id,
-        revokedAt: null,
-        id: { not: actor.sessionId },
-      },
-      data: { revokedAt: new Date() },
+    // One transaction so a failure part-way cannot leave sessions revoked but
+    // keys live — the same partial state `changePassword` guards against.
+    const { result, keysRevoked } = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.session.updateMany({
+        where: {
+          userId: actor.id,
+          revokedAt: null,
+          id: { not: actor.sessionId },
+        },
+        data: { revokedAt: new Date() },
+      });
+      // "Sign out everywhere" has to mean everywhere. An API key is a live
+      // credential that never appears in the session list, so leaving keys
+      // alive here would let an attacker survive the exact action a user takes
+      // on suspecting compromise — while the UI reports success.
+      const keysRevoked = await this.apiKeys.revokeAllForUser(actor.id, tx);
+      return { result, keysRevoked };
     });
-    // "Sign out everywhere" has to mean everywhere. An API key is a live
-    // credential that never appears in the session list, so leaving keys
-    // alive here would let an attacker survive the exact action a user takes
-    // on suspecting compromise — while the UI reports success.
-    const keysRevoked = await this.apiKeys.revokeAllForUser(actor.id);
     await this.audit.log({
       actorId: actor.id,
       action: 'auth.sessions.revoke_others',
@@ -340,9 +345,11 @@ export class MeService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { revoked: result.count, apiKeysRevoked: keysRevoked },
+      after: { revoked: result.count, apiKeysRevoked: keysRevoked, sessionId: actor.sessionId },
     });
-    return { revoked: result.count };
+    // Surfaced, not just audited: signing out everywhere silently kills every
+    // CI/MCP integration the user has, and they need to know to re-issue them.
+    return { revoked: result.count, apiKeysRevoked: keysRevoked };
   }
 
   async regenerateMfaBackupCodes(

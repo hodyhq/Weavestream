@@ -382,7 +382,9 @@ describe('MeService.changePassword', () => {
       META,
     );
 
-    expect(out).toEqual({ ok: true });
+    // Reports how many API keys the change revoked, so the caller can tell the
+    // user their integrations just died rather than discovering it later.
+    expect(out).toEqual({ ok: true, apiKeysRevoked: 0 });
     expect(lockout.clearChangePasswordFailures).toHaveBeenCalledWith(ACTOR.id);
     expect(lockout.recordChangePasswordFailure).not.toHaveBeenCalled();
     expect(audit.log).toHaveBeenCalledWith(

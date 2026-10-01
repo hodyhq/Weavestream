@@ -25,12 +25,17 @@ import { UsersService } from './users.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import {
   ipOf,
   userAgentOf as uaOf,
 } from '../common/request-meta.js';
 
+// Creating users and mailing setup links is identity provisioning: a key that
+// could do it would hand its holder a durable interactive session, which can
+// then mint keys of its own. Whole-controller, so new routes inherit it.
+@InteractiveOnly()
 @Controller({ path: 'users', version: '1' })
 export class UsersController {
   constructor(private readonly users: UsersService) {}

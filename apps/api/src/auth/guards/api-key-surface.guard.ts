@@ -4,8 +4,10 @@ import {
   ForbiddenException,
   Injectable,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
+import { INTERACTIVE_ONLY_KEY } from '../interactive-only.decorator.js';
 
 /**
  * Keeps API-key principals out of the surfaces that exist to manage the
@@ -17,7 +19,13 @@ import type { AuthedUser } from '../../common/current-user.decorator.js';
  * further keys for itself. Each of those turns "someone has a token I can
  * revoke" into "someone owns the account".
  *
- * The containment is deliberately a **prefix denylist on the auth surface**,
+ * Two layers. {@link InteractiveOnly} on the handler is primary and cannot
+ * drift. The prefix denylist below is a backstop for the `/auth` and `/me`
+ * trees — note it is **fail-open** by nature: a new account-management route
+ * outside those trees is admitted unless it carries the decorator, which is
+ * precisely why the decorator exists and should be preferred.
+ *
+ * The denylist is deliberately a **prefix list on the auth surface**,
  * not a scope check, because it must hold for every key regardless of how its
  * scopes were configured — including the default inherit-everything key a
  * SUPER_ADMIN mints for themselves. Business routes are unaffected; this guard
@@ -44,6 +52,9 @@ const DENIED_PREFIXES = [
  */
 const ALLOWED_EXACT = new Set(['/auth/me']);
 
+const DENIED_MESSAGE =
+  'API keys cannot be used on account-management endpoints. Sign in interactively.';
+
 /**
  * Reduce a raw request path to the stable route shape the lists above are
  * written against.
@@ -68,17 +79,25 @@ function normalizePath(raw: string): string {
 
 @Injectable()
 export class ApiKeySurfaceGuard implements CanActivate {
+  constructor(private readonly reflector: Reflector) {}
+
   canActivate(ctx: ExecutionContext): boolean {
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthedUser }>();
     if (!req.user?.apiKeyId) return true;
+
+    // Primary check: the route declares its own requirement, so it cannot
+    // drift away from a list maintained elsewhere.
+    const interactiveOnly = this.reflector.getAllAndOverride<boolean>(
+      INTERACTIVE_ONLY_KEY,
+      [ctx.getHandler(), ctx.getClass()],
+    );
+    if (interactiveOnly) throw new ForbiddenException(DENIED_MESSAGE);
 
     const path = normalizePath(req.path);
     if (ALLOWED_EXACT.has(path)) return true;
 
     if (DENIED_PREFIXES.some((prefix) => path.startsWith(prefix))) {
-      throw new ForbiddenException(
-        'API keys cannot be used on account-management endpoints. Sign in interactively.',
-      );
+      throw new ForbiddenException(DENIED_MESSAGE);
     }
     return true;
   }

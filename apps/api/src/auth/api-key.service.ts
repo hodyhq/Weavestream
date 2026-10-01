@@ -37,6 +37,9 @@ const KEY_ID_BYTES = 9;
 /** Default lifetime when the caller does not specify one. Never "forever". */
 export const DEFAULT_EXPIRY_DAYS = 365;
 
+/** Coarsest useful resolution for `lastUsedAt`; keeps writes off the hot path. */
+const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+
 export interface MintedApiKey {
   record: ApiKey;
   /**
@@ -155,13 +158,25 @@ export class ApiKeyService {
   }
 
   /**
-   * Record usage. Deliberately fire-and-forget at the call site: a failed
-   * bookkeeping write must never fail an otherwise-authenticated request.
+   * Record usage, but only when the stored value is already stale.
+   *
+   * An unconditional write would turn every read by a polling client into an
+   * UPDATE plus a row lock on one hot row, serialising that key's concurrent
+   * requests behind each other. `lastUsedAt` is advisory — "roughly when was
+   * this last used" — so a coarse resolution costs nothing and removes the
+   * write from the hot path entirely.
+   *
+   * Deliberately fire-and-forget at the call site: a failed bookkeeping write
+   * must never fail an otherwise-authenticated request.
    */
-  async touch(id: string): Promise<void> {
+  async touch(key: Pick<ApiKey, 'id' | 'lastUsedAt'>): Promise<void> {
+    const now = Date.now();
+    if (key.lastUsedAt && now - key.lastUsedAt.getTime() < TOUCH_INTERVAL_MS) {
+      return;
+    }
     await this.prisma.apiKey.update({
-      where: { id },
-      data: { lastUsedAt: new Date() },
+      where: { id: key.id },
+      data: { lastUsedAt: new Date(now) },
     });
   }
 

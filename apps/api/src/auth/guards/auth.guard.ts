@@ -149,7 +149,7 @@ export class AuthGuard implements CanActivate {
     // Bookkeeping only — a failed write must not fail an authenticated
     // request, so this is intentionally not awaited and swallows its own
     // rejection (CLAUDE.md §6: the empty catch is explained, not silent).
-    void this.apiKeys.touch(key.id).catch(() => {
+    void this.apiKeys.touch(key).catch(() => {
       /* lastUsedAt is advisory; losing one update is not worth a 500. */
     });
 

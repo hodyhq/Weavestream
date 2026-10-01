@@ -1,15 +1,32 @@
 import { ForbiddenException } from '@nestjs/common';
 import { ApiKeySurfaceGuard } from './api-key-surface.guard.js';
 
-function ctxFor(path: string, apiKeyId?: string) {
+function ctxFor(path: string, apiKeyId?: string, interactiveOnly = false) {
   const req = { path, user: apiKeyId ? { id: 'u-1', apiKeyId } : { id: 'u-1' } };
   return {
     switchToHttp: () => ({ getRequest: () => req }),
+    getHandler: () => undefined,
+    getClass: () => undefined,
+    __interactiveOnly: interactiveOnly,
   } as never;
 }
 
+/** Reflector stub: reports whatever the context was built with. */
+function makeGuard() {
+  const reflector = {
+    getAllAndOverride: jest.fn(
+      (_key: string, _targets: unknown[]) => currentInteractiveOnly,
+    ),
+  };
+  return new ApiKeySurfaceGuard(reflector as never);
+}
+let currentInteractiveOnly = false;
+
 describe('ApiKeySurfaceGuard', () => {
-  const guard = new ApiKeySurfaceGuard();
+  const guard = makeGuard();
+  beforeEach(() => {
+    currentInteractiveOnly = false;
+  });
 
   describe('cookie sessions', () => {
     it('never interferes with an interactive principal', () => {
@@ -58,6 +75,18 @@ describe('ApiKeySurfaceGuard', () => {
       expect(() => guard.canActivate(ctxFor('/api/v1/auth', 'k-1'))).toThrow(
         ForbiddenException,
       );
+    });
+
+    it('denies any route marked @InteractiveOnly, whatever its path', () => {
+      // The decorator is the primary control; the path denylist is a backstop
+      // that cannot cover routes outside the /auth and /me trees.
+      currentInteractiveOnly = true;
+      expect(() => guard.canActivate(ctxFor('/api/v1/users', 'k-1'))).toThrow(
+        ForbiddenException,
+      );
+      expect(() =>
+        guard.canActivate(ctxFor('/api/v1/users/u-9/invite', 'k-1')),
+      ).toThrow(ForbiddenException);
     });
 
     it('allows read-only self-introspection at /auth/me', () => {
