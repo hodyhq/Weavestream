@@ -1422,7 +1422,20 @@ export class AssetsService {
     }
 
     const copiedUploads: string[] = [];
+    // Every FILE field's uploads, including fields hidden from this actor:
+    // the attachments-panel copy below must never pick those up (that would
+    // hand a client user files from fields they cannot see).
     const fieldUploadIds = new Set<string>();
+    const fileFieldIds = new Set(
+      layout.fields.filter((f) => f.fieldType === 'FILE').map((f) => f.id),
+    );
+    for (const v of asset.fieldValues) {
+      if (!fileFieldIds.has(v.assetFieldId) || !Array.isArray(v.value)) continue;
+      for (const e of v.value as unknown[]) {
+        const uploadId = (e as { uploadId?: unknown } | null)?.uploadId;
+        if (typeof uploadId === 'string') fieldUploadIds.add(uploadId);
+      }
+    }
     let created: SerializedAsset;
     try {
       for (const field of layout.fields) {
@@ -1431,7 +1444,6 @@ export class AssetsService {
         const entries: FileFieldEntry[] = [];
         for (const entry of values[field.slug] as FileFieldEntry[]) {
           if (!entry?.uploadId) continue;
-          fieldUploadIds.add(entry.uploadId);
           const uploadId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, entry.uploadId, targetCompanyId, meta);
           if (!uploadId) continue; // deleted, or not this asset's file: dropped
           copiedUploads.push(uploadId);

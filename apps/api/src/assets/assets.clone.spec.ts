@@ -231,6 +231,19 @@ describe('AssetsService.clone', () => {
     await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: true }, META);
     expect(prisma.integrationSyncRecord.count).toHaveBeenCalledWith({ where: { companyId: SRC, assetId: 'a-1' } });
   });
+
+  it('never copies, via the attachments panel, a file that sits in a field hidden from the actor', async () => {
+    const h = harness();
+    // The asset has a hidden FILE field holding up-hidden; serialize() hides it.
+    (h.svc as unknown as { prisma: { asset: { findFirst: jest.Mock } } }).prisma.asset.findFirst.mockResolvedValueOnce({
+      id: 'a-1', companyId: SRC, name: 'FW13', archivedAt: null,
+      assetLayout: { ...LAYOUT, fields: [...LAYOUT.fields, { id: 'f-hfile', slug: 'hidden_file', name: 'Hidden', fieldType: 'FILE', archivedAt: null, isRequired: false }] },
+      fieldValues: [{ assetFieldId: 'f-hfile', value: [{ uploadId: 'up-hidden' }] }],
+    });
+    await h.svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: false }, META);
+    const panelWhere = h.prisma.upload.findMany.mock.calls[0]![0].where;
+    expect(panelWhere.id.notIn).toEqual(expect.arrayContaining(['up-hidden']));
+  });
 });
 
 describe('AssetsController clone authorisation', () => {

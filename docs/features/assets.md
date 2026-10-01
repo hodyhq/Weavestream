@@ -78,7 +78,7 @@ Each **Asset** is a single instance of a layout within a tenant. Assets support:
 
 Copy an asset into another company (or duplicate it in the same one) from the asset's **⋯ → Copy to company…** menu, or select several in the asset table and use **Copy to…**. Tick **Move** to archive the originals after copying: they are archived, not deleted, so they can be restored.
 
-Asset layouts are global, so a copy keeps its layout and every field value you can see, with three exceptions:
+Asset layouts are global, so a copy keeps its layout and every field value you can see, handled as follows:
 
 | What | In the copy |
 |---|---|
