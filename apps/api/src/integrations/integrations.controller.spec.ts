@@ -382,16 +382,48 @@ describe('IntegrationsController Cloudflare domains company binding', () => {
     await controller.update(
       ACTOR,
       '00000000-0000-4000-8000-000000000001',
-      { config: { accountId: 'b', domainsCompanySlug: 'client' } } as never,
+      { config: { accountId: 'a', domainsCompanySlug: 'client', note: 'x' } } as never,
       req,
     );
     expect(can).not.toHaveBeenCalled();
     expect(findUnique).not.toHaveBeenCalled();
     expect(update.mock.calls[0]![2].config).toEqual({
-      accountId: 'b',
+      note: 'x',
+      accountId: 'a',
       domainsCompanySlug: 'client',
       domainsCompanyId: COMPANY.id,
     });
+  });
+
+  it('re-checks when the Cloudflare account changes, even with the same slug', async () => {
+    // Otherwise someone with integration.manage could point an authorised
+    // binding at their own account and write into a company they can't manage.
+    const can = jest.fn().mockResolvedValue({ allowed: false });
+    const controller = new IntegrationsController(
+      {
+        update: jest.fn(),
+        get: jest.fn().mockResolvedValue({
+          driver: 'cloudflare',
+          config: { accountId: 'a', domainsCompanySlug: 'client', domainsCompanyId: COMPANY.id },
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { company: { findUnique: jest.fn().mockResolvedValue(COMPANY) } } as never,
+      { can } as never,
+    );
+    await expect(
+      controller.update(
+        ACTOR,
+        '00000000-0000-4000-8000-000000000001',
+        { config: { accountId: 'attacker', domainsCompanySlug: 'client' } } as never,
+        req,
+      ),
+    ).rejects.toThrow(/cannot manage domains/);
+    expect(can).toHaveBeenCalled();
   });
 
   it('discards a client-supplied company id', async () => {

@@ -182,13 +182,16 @@ export class IntegrationsController {
     const { domainsCompanyId: _ignored, ...rest } = config;
     const slug = typeof rest.domainsCompanySlug === 'string' ? rest.domainsCompanySlug.trim() : '';
     if (!slug) return rest;
-    // Unchanged target: keep the id bound when it was authorised. Re-resolving
-    // the slug here would block unrelated edits for someone without access to
-    // that company, and after a slug rename could silently retarget the sync.
+    // Unchanged binding: keep the id when it was authorised. Re-resolving the
+    // slug would block unrelated edits for someone without access to that
+    // company, and after a slug rename could silently retarget the sync. The
+    // authorisation covered (Cloudflare account → company): a different
+    // account is a new binding and is re-checked.
     if (
       stored &&
       typeof stored.domainsCompanyId === 'string' &&
-      stored.domainsCompanySlug === slug
+      stored.domainsCompanySlug === slug &&
+      stored.accountId === rest.accountId
     ) {
       return { ...rest, domainsCompanySlug: slug, domainsCompanyId: stored.domainsCompanyId };
     }
