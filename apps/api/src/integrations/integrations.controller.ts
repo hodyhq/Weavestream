@@ -136,7 +136,7 @@ export class IntegrationsController {
     @Body(new ZodBody(createIntegrationSchema)) dto: CreateIntegrationInput,
     @Req() req: Request,
   ) {
-    const config = await this.bindDomainsCompany(user, dto.driver, dto.config);
+    const config = await this.bindDomainsCompany(user, dto.driver, dto.config, undefined);
     return this.integrations.create(user, { ...dto, config: config ?? dto.config }, meta(req));
   }
 
@@ -157,7 +157,10 @@ export class IntegrationsController {
   ) {
     if (dto.config) {
       const existing = await this.integrations.get(id);
-      dto = { ...dto, config: await this.bindDomainsCompany(user, existing.driver, dto.config) };
+      dto = {
+        ...dto,
+        config: await this.bindDomainsCompany(user, existing.driver, dto.config, existing.config),
+      };
     }
     return this.integrations.update(user, id, dto, meta(req));
   }
@@ -173,11 +176,22 @@ export class IntegrationsController {
     user: AuthedUser,
     driver: string,
     config: Record<string, unknown> | undefined,
+    stored: Record<string, unknown> | undefined,
   ): Promise<Record<string, unknown> | undefined> {
     if (driver !== 'cloudflare' || !config) return config;
     const { domainsCompanyId: _ignored, ...rest } = config;
     const slug = typeof rest.domainsCompanySlug === 'string' ? rest.domainsCompanySlug.trim() : '';
     if (!slug) return rest;
+    // Unchanged target: keep the id bound when it was authorised. Re-resolving
+    // the slug here would block unrelated edits for someone without access to
+    // that company, and after a slug rename could silently retarget the sync.
+    if (
+      stored &&
+      typeof stored.domainsCompanyId === 'string' &&
+      stored.domainsCompanySlug === slug
+    ) {
+      return { ...rest, domainsCompanySlug: slug, domainsCompanyId: stored.domainsCompanyId };
+    }
     const company = await this.prisma.company.findUnique({
       where: { slug },
       select: { id: true, archivedAt: true },

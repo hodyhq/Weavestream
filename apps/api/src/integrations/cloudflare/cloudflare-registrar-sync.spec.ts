@@ -45,7 +45,12 @@ function harness(opts: {
     Object.entries(w).every(([k, v]) => (r as never)[k] === v);
   const prisma = {
     integration: {
-      findUnique: jest.fn(async () => ({ id: INT, driver: 'cloudflare', status: 'ACTIVE' })),
+      findUnique: jest.fn(async () => ({
+        id: INT,
+        driver: 'cloudflare',
+        status: 'ACTIVE',
+        config: { accountId: 'acct', domainsCompanyId: HODY },
+      })),
     },
     company: { findUnique: jest.fn(async () => ({ id: HODY, archivedAt: null })) },
     monitoredDomain: {
@@ -98,6 +103,7 @@ function harness(opts: {
         return 'OK';
       }),
       // Mirrors the compare-and-delete Lua script.
+      exists: jest.fn(async (k: string) => (kv.has(k) ? 1 : 0)),
       // Mirrors the two Lua scripts: compare-and-renew, compare-and-delete.
       eval: jest.fn(async (script: string, _n: number, k: string, token: string) => {
         if (kv.get(k) !== token) return 0;
@@ -106,6 +112,8 @@ function harness(opts: {
       }),
     },
   };
+  const add = jest.fn().mockResolvedValue(undefined);
+  const queues = { get: jest.fn(() => ({ add })) };
   const svc = new CloudflareRegistrarSyncService(
     prisma as never,
     integrations as never,
@@ -113,9 +121,9 @@ function harness(opts: {
     audit as never,
     env as never,
     redis as never,
-    { get: jest.fn() } as never,
+    queues as never,
   );
-  return { svc, rows, audit, driver, kv };
+  return { svc, rows, audit, driver, kv, add };
 }
 
 describe('matchRow', () => {
@@ -136,6 +144,14 @@ describe('matchRow', () => {
     expect(m([orphan])).toEqual({ kind: 'update', row: orphan });
     const otherAccount = row({ source: 'CLOUDFLARE', integrationId: null, cloudflareAccountId: 'acct-2' });
     expect(m([otherAccount]).kind).toBe('skip');
+    // Same account, but another company: not this config's to take.
+    const otherCompany = row({
+      source: 'CLOUDFLARE',
+      integrationId: null,
+      cloudflareAccountId: 'acct',
+      companyId: 'co-client',
+    });
+    expect(m([otherCompany]).kind).toBe('skip');
   });
 
   it('adopts manual rows only in the configured company', () => {
@@ -255,5 +271,25 @@ describe('CloudflareRegistrarSyncService.sync', () => {
     });
     await expect(svc.sync(INT, null)).rejects.toThrow(/lost its lock/);
     expect(rows).toHaveLength(0);
+  });
+
+});
+
+describe('CloudflareRegistrarSyncService.enqueue', () => {
+  it('queues a manual job carrying who asked', async () => {
+    const { svc, add } = harness({ rows: [], cfDomains: [] });
+    await expect(svc.enqueue(INT, 'u-1')).resolves.toEqual({ queued: true });
+    expect(add).toHaveBeenCalledWith(
+      'manual',
+      { integrationId: INT, triggeredBy: 'u-1' },
+      expect.objectContaining({ jobId: `manual-domains-${INT}`, removeOnFail: true }),
+    );
+  });
+
+  it('refuses up front while a sync holds the lock, instead of queueing a job that fails unseen', async () => {
+    const { svc, add, kv } = harness({ rows: [], cfDomains: [] });
+    kv.set(`lock:cf-registrar-sync:${INT}`, 'running');
+    await expect(svc.enqueue(INT, 'u-1')).rejects.toThrow(/already running/);
+    expect(add).not.toHaveBeenCalled();
   });
 });

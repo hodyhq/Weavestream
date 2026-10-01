@@ -357,6 +357,43 @@ describe('IntegrationsController Cloudflare domains company binding', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('keeps the bound id without re-checking when the slug is unchanged', async () => {
+    // Re-resolving would 403 an editor without access to that company and,
+    // after a slug rename, could silently point the sync at another company.
+    const update = jest.fn(async (_u: unknown, _id: string, dto: { config: unknown }) => dto);
+    const can = jest.fn();
+    const findUnique = jest.fn();
+    const controller = new IntegrationsController(
+      {
+        update,
+        get: jest.fn().mockResolvedValue({
+          driver: 'cloudflare',
+          config: { accountId: 'a', domainsCompanySlug: 'client', domainsCompanyId: COMPANY.id },
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { company: { findUnique } } as never,
+      { can } as never,
+    );
+    await controller.update(
+      ACTOR,
+      '00000000-0000-4000-8000-000000000001',
+      { config: { accountId: 'b', domainsCompanySlug: 'client' } } as never,
+      req,
+    );
+    expect(can).not.toHaveBeenCalled();
+    expect(findUnique).not.toHaveBeenCalled();
+    expect(update.mock.calls[0]![2].config).toEqual({
+      accountId: 'b',
+      domainsCompanySlug: 'client',
+      domainsCompanyId: COMPANY.id,
+    });
+  });
+
   it('discards a client-supplied company id', async () => {
     const { controller, create } = make(true);
     await controller.create(

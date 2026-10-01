@@ -34,6 +34,8 @@ const RELEASE_IF_OWNER =
 const RENEW_IF_OWNER =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end";
 
+const lockKey = (integrationId: string) => `lock:cf-registrar-sync:${integrationId}`;
+
 export interface RegistrarSyncResult {
   /** False when no domains company is configured (sync off). */
   enabled: boolean;
@@ -99,6 +101,12 @@ export class CloudflareRegistrarSyncService {
         'Set "Sync domains into company" under Credentials before syncing domains.',
       );
     }
+    // A queued job that then hits the lock would fail with nobody watching.
+    // Say so now instead. (A sweep could still start in between; that run
+    // does the same work, so the click is not lost in substance.)
+    if (await this.redis.client.exists(lockKey(integrationId))) {
+      throw new ConflictException('A domain sync for this integration is already running.');
+    }
     await this.queues.get(QueueNames.cloudflareDriftSweep).add(
       CloudflareDriftSweepJobNames.manual,
       { integrationId, triggeredBy: actorId },
@@ -114,9 +122,9 @@ export class CloudflareRegistrarSyncService {
   ): Promise<RegistrarSyncResult> {
     // One run per integration at a time: a manual sync overlapping the
     // scheduled sweep would otherwise race on the find-then-create below.
-    const lockKey = `lock:cf-registrar-sync:${integrationId}`;
+    const key = lockKey(integrationId);
     const token = randomUUID();
-    const got = await this.redis.client.set(lockKey, token, 'EX', LISTING_LEASE_SEC, 'NX');
+    const got = await this.redis.client.set(key, token, 'EX', LISTING_LEASE_SEC, 'NX');
     if (got !== 'OK') {
       throw new ConflictException('A domain sync for this integration is already running.');
     }
@@ -126,7 +134,7 @@ export class CloudflareRegistrarSyncService {
       const renewed = await this.redis.client.eval(
         RENEW_IF_OWNER,
         1,
-        lockKey,
+        key,
         token,
         String(WRITE_LEASE_SEC),
       );
@@ -142,7 +150,7 @@ export class CloudflareRegistrarSyncService {
       // lock. A failure here must not mask the run's result; the lease
       // expires on its own.
       await this.redis.client
-        .eval(RELEASE_IF_OWNER, 1, lockKey, token)
+        .eval(RELEASE_IF_OWNER, 1, key, token)
         .catch((err: unknown) =>
           this.logger.warn(
             `Could not release registrar sync lock (integration=${integrationId}): ${err instanceof Error ? err.message : String(err)}`,
@@ -339,7 +347,7 @@ export type RowMatch =
  *  - This integration's row → update it, wherever a human moved it. If it is
  *    archived, leave it: the operator stopped tracking it.
  *  - A synced row orphaned by a deleted integration (integrationId null) for
- *    the *same Cloudflare account* → reclaim it.
+ *    the *same Cloudflare account*, in the configured company → reclaim it.
  *  - An active MANUAL row in the configured company → adopt it. Manual rows
  *    in other companies are never touched: the config was only authorised
  *    for the configured company.
@@ -356,11 +364,14 @@ export function matchRow(
   if (owned) {
     return owned.archivedAt ? { kind: 'skip', reason: 'archived' } : { kind: 'update', row: owned };
   }
+  // Orphans are reclaimed only inside the authorised company: an orphan in
+  // another company belongs to whoever bound the deleted integration there.
   const orphan = rows.find(
     (r) =>
       r.source === 'CLOUDFLARE' &&
       r.integrationId === null &&
       r.cloudflareAccountId === accountId &&
+      r.companyId === companyId &&
       !r.archivedAt,
   );
   if (orphan) return { kind: 'update', row: orphan };
