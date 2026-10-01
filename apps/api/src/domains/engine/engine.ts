@@ -308,7 +308,7 @@ export async function runDomainCheck(
   // DNS's MX answer before we can dispatch the email check (auto-skip
   // depends on it), and we need WHOIS's `secureDns` before the
   // DNSSEC fallback knows whether RDAP gave us authoritative data.
-  const [whois, dns, tls] = await Promise.all([
+  const [whois, dns, tlsRaw] = await Promise.all([
     opts.checkWhois
       ? runWhoisWithFallback(ports, opts.hostname, opts.timeoutMs, rdapCacheMs)
       : Promise.resolve(SKIP_WHOIS),
@@ -322,6 +322,12 @@ export async function runDomainCheck(
         })
       : Promise.resolve(SKIP_TLS),
   ]);
+
+  // A parked domain: DNS answered, but the name has no web address. The
+  // TLS/HTTP probes have nothing to talk to, so their failures are not
+  // findings. Report them as skipped and let the status say "no site".
+  const noSite = isNoSite(opts.checkDns, dns);
+  const tls: SubCheckResult<TlsSubResult> = noSite ? SKIP_TLS : tlsRaw;
 
   // Phase 2: the v2 sub-checks. Each is wrapped in a per-call timeout
   // so a slow TXT lookup can't drag the whole fan-out down.
@@ -364,7 +370,7 @@ export async function runDomainCheck(
         error: null,
       });
 
-  const httpPromise: Promise<SubCheckResult<HttpEngineSubResult>> = opts.checkTls
+  const httpPromise: Promise<SubCheckResult<HttpEngineSubResult>> = opts.checkTls && !noSite
     ? withTimeout(
         () => runEngineHttpCheck(opts.hostname, { timeoutMs: subTimeout }),
         subTimeout,
@@ -410,7 +416,7 @@ export async function runDomainCheck(
     },
   };
   const details = buildDetails(buildInput);
-  const score = computeScore(details, checkedAt);
+  const score = computeScore(details, checkedAt, { noSite });
   if (score) {
     details.score = score;
   }
@@ -427,7 +433,18 @@ export async function runDomainCheck(
     details,
     aggregateError: aggregateError(buildInput),
     score: score?.percent ?? null,
+    noSite,
   };
+}
+
+/**
+ * True when DNS resolved the zone but the name itself has no A/AAAA record
+ * (CNAMEs are followed by the resolver, so a CNAME to a host counts as an
+ * address). A DNS failure is not "no site": that is a real problem.
+ */
+export function isNoSite(checkDns: boolean, dns: SubCheckResult<DnsSubResult>): boolean {
+  if (!checkDns || dns.status === 'FAIL' || dns.status === 'SKIP' || !dns.data) return false;
+  return dns.data.a.length === 0 && dns.data.aaaa.length === 0;
 }
 
 /**
@@ -438,7 +455,7 @@ export async function runDomainCheck(
 export function deriveDomainStatus(
   result: DomainCheckResult,
   alertThresholdDays: number,
-): 'OK' | 'EXPIRING' | 'EXPIRED' | 'FAIL' | 'UNKNOWN' {
+): 'OK' | 'EXPIRING' | 'EXPIRED' | 'FAIL' | 'NO_SITE' | 'UNKNOWN' {
   const now = result.checkedAt.getTime();
   const thresholdMs = alertThresholdDays * 24 * 60 * 60 * 1000;
 
@@ -464,6 +481,10 @@ export function deriveDomainStatus(
     result.dns.status === 'FAIL' ||
     result.tls.status === 'FAIL';
   if (anyFail) return 'FAIL';
+
+  // Registration is fine (not expired/expiring/failing) but nothing is
+  // served on the name: grey "no site" rather than green OK or red FAIL.
+  if (result.noSite) return 'NO_SITE';
 
   const anyOk =
     result.whois.status === 'OK' ||

@@ -1,5 +1,6 @@
 import {
   deriveDomainStatus,
+  isNoSite,
   runDomainCheck,
 } from './engine.js';
 import { __resetRdapCacheForTests } from './rdap.js';
@@ -289,6 +290,7 @@ describe('deriveDomainStatus', () => {
     nsMatch: { status: 'SKIP' as const, data: null, error: null },
     http: { status: 'SKIP' as const, data: null, error: null },
     score: null,
+    noSite: false,
   };
 
   it('returns EXPIRED when whois expiry is in the past', () => {
@@ -400,3 +402,91 @@ describe('deriveDomainStatus', () => {
     expect(status).toBe('OK');
   });
 });
+
+describe('no site (parked domain)', () => {
+  const dnsWith = (a: string[], aaaa: string[] = []) =>
+    ({
+      status: 'WARN' as const,
+      data: { a, aaaa, mx: [], ns: ['a.ns.cloudflare.com'], txt: [], caa: [] } as never,
+      error: null,
+    });
+
+  it('is no site when DNS answers but the name has no A/AAAA', () => {
+    expect(isNoSite(true, dnsWith([]))).toBe(true);
+    expect(isNoSite(true, dnsWith(['192.0.2.1']))).toBe(false);
+    expect(isNoSite(true, dnsWith([], ['2001:db8::1']))).toBe(false);
+  });
+
+  it('is not no site when DNS failed or was not checked: that is a real problem', () => {
+    expect(isNoSite(true, { status: 'FAIL', data: null, error: 'SERVFAIL' })).toBe(false);
+    expect(isNoSite(false, dnsWith([]))).toBe(false);
+  });
+
+  const base = (overrides: Record<string, unknown>) =>
+    ({
+      checkedAt: new Date('2026-06-01T00:00:00Z'),
+      whois: {
+        status: 'OK',
+        data: {
+          registrar: null,
+          registeredAt: null,
+          expiresAt: new Date('2028-01-01T00:00:00Z'),
+          source: 'rdap',
+          statusCodes: [],
+          locked: false,
+          hold: false,
+          whoisNs: [],
+          secureDns: null,
+        },
+        error: null,
+      },
+      dns: { status: 'OK', data: null, error: null },
+      tls: { status: 'SKIP', data: null, error: null },
+      email: { status: 'SKIP', data: null, error: null },
+      dnssec: { status: 'SKIP', data: null, error: null },
+      nsMatch: { status: 'SKIP', data: null, error: null },
+      http: { status: 'SKIP', data: null, error: null },
+      details: {},
+      aggregateError: null,
+      score: null,
+      noSite: true,
+      ...overrides,
+    }) as never;
+
+  it('a healthy parked domain is NO_SITE, not FAIL or OK', () => {
+    expect(deriveDomainStatus(base({}), 30)).toBe('NO_SITE');
+  });
+
+  it('registration problems still win over no site', () => {
+    expect(
+      deriveDomainStatus(
+        base({
+          whois: {
+            status: 'OK',
+            data: { expiresAt: new Date('2026-06-10T00:00:00Z'), hold: false },
+            error: null,
+          },
+        }),
+        30,
+      ),
+    ).toBe('EXPIRING');
+  });
+});
+
+describe('no-site scoring', () => {
+  it('drops web-only items from the score, keeps DNS hygiene items', async () => {
+    const { computeScore } = await import('./score.js');
+    const details = {
+      dns: { a: [], aaaa: [], mx: [], ns: ['a.ns.cloudflare.com'], caa: [] },
+      whois: { expiresAt: '2028-01-01T00:00:00Z', locked: true },
+    } as never;
+    const parked = computeScore(details, new Date('2026-06-01T00:00:00Z'), { noSite: true })!;
+    const naive = computeScore(details, new Date('2026-06-01T00:00:00Z'))!;
+    const skipped = parked.breakdown.filter((i) => i.status === 'skip').map((i) => i.id);
+    expect(skipped).toEqual(expect.arrayContaining(['tls_validity', 'tls_crypto', 'http_redirect', 'hsts', 'addr']));
+    expect(parked.breakdown.find((i) => i.id === 'caa')?.status).not.toBe('skip');
+    // Not penalised for a website it does not have.
+    expect(parked.percent).toBeGreaterThan(naive.percent);
+  });
+});
+

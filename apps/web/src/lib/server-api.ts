@@ -1374,7 +1374,7 @@ export type UploadSummary = {
 // Phase 8: monitored domains
 // ---------------------------------------------------------------------
 
-type DomainStatus = 'OK' | 'EXPIRING' | 'EXPIRED' | 'FAIL' | 'UNKNOWN';
+type DomainStatus = 'OK' | 'EXPIRING' | 'EXPIRED' | 'FAIL' | 'NO_SITE' | 'UNKNOWN';
 
 export type MonitoredDomain = {
   id: string;
