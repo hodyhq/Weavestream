@@ -55,6 +55,8 @@ export interface ApiKeySummary {
   keyId: string;
   name: string;
   scopes: string[];
+  /** Whether this key may decrypt stored credentials. The thing to audit. */
+  allowPasswordReveal: boolean;
   lastUsedAt: string | null;
   expiresAt: string | null;
   createdAt: string;

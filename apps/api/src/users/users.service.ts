@@ -15,6 +15,7 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { MembershipCacheService } from '../cache/membership-cache.service.js';
 import { SetupTokenService } from './setup-token.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { revokeApiKeysForUser } from '../auth/revoke-api-keys.js';
 
 export interface UserListOptions {
   q?: string;
@@ -331,7 +332,8 @@ export class UsersService {
     // When deactivating, the profile write and both revocations are one unit:
     // a failure between them would leave the account flagged inactive with its
     // sessions or keys still live, or revoked against a profile write that
-    // rolled back. Non-deactivating edits keep the plain single-statement path.
+    // rolled back. Every edit runs in the transaction for simplicity; for a
+    // non-deactivating edit it wraps a single statement.
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.user.update({
         where: { id },
@@ -368,10 +370,7 @@ export class UsersService {
         // on `!isActive`, so without this a reactivation a week later silently
         // resurrects every key an attacker minted beforehand, and none of them
         // appear in the sessions UI to warn anyone.
-        await tx.apiKey.updateMany({
-          where: { userId: id, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
+        await revokeApiKeysForUser(tx, id);
       }
 
       return row;
@@ -460,6 +459,10 @@ export class UsersService {
     if (!user.isActive) throw new ForbiddenException('User is deactivated');
 
     const invite = await this.setupTokens.issue(id, actor.id);
+    // A re-invite answers a lost password or a suspected compromise. Kill the
+    // user's API keys now rather than at acceptance: the link may sit unused
+    // for days, or never be used, and the keys would stay live throughout.
+    const apiKeysRevoked = await revokeApiKeysForUser(this.prisma, id);
 
     await this.audit.log({
       actorId: actor.id,
@@ -469,7 +472,7 @@ export class UsersService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { expiresAt: invite.expiresAt.toISOString() },
+      after: { expiresAt: invite.expiresAt.toISOString(), apiKeysRevoked },
     });
 
     return { setupUrl: invite.url, expiresAt: invite.expiresAt };
@@ -504,14 +507,11 @@ export class UsersService {
         where: { userId: id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
-      // And every API key. This route exists to answer a suspected compromise;
-      // a key skips the enrollment gate by design (it was minted from an
-      // already-enrolled session), so one left alive would keep full access
-      // precisely when an admin believes they have just cut it off.
-      await tx.apiKey.updateMany({
-        where: { userId: id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
+      // And every API key. This route exists to answer a suspected compromise.
+      // MfaEnrollmentGuard would refuse a key while enrollment is incomplete,
+      // but only until the user re-enrolls — at which point every surviving
+      // key silently resumes full access, invisible on the sessions page.
+      await revokeApiKeysForUser(tx, id);
     });
 
     await this.audit.log({

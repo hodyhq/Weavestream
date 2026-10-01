@@ -39,9 +39,10 @@ export class AuthGuard implements CanActivate {
 
     // Programmatic callers present `Authorization: Bearer ws_<keyId>_<secret>`
     // instead of the cookie pair. Checked before the cookie path so a browser
-    // session is never silently refreshed on an API-key request. A malformed
-    // or dead key fails closed here rather than falling through to cookies —
-    // falling through would let an attacker probe for a logged-in session.
+    // session is never silently refreshed on an API-key request. A dead or
+    // malformed `ws_` token fails closed rather than falling through to
+    // cookies. A Bearer that is not ours (an SSO proxy's JWT in front of the
+    // app) is ignored entirely, so it cannot log every browser out.
     const bearer = this.bearerOf(req);
     if (bearer) return this.authenticateApiKey(req, bearer);
 
@@ -96,7 +97,7 @@ export class AuthGuard implements CanActivate {
     const [scheme, ...rest] = header.split(' ');
     if (scheme?.toLowerCase() !== 'bearer') return undefined;
     const value = rest.join(' ').trim();
-    return value || undefined;
+    return value.startsWith('ws_') ? value : undefined;
   }
 
   /**
@@ -114,9 +115,10 @@ export class AuthGuard implements CanActivate {
    *  - `sessionId` is set to the key's id. It is an opaque correlation handle
    *    (see the CLAUDE.md §2 clarification — a Session row id is not a
    *    credential), so audit rows stay attributable. Nothing ever writes a
-   *    step-up marker under it, which is exactly why `StepUpGuard` keeps
-   *    refusing credential reveals to a token: it fails closed by default
-   *    rather than by a check someone could forget to add.
+   *    step-up marker under it, so `StepUpGuard` refuses every
+   *    `@RequireStepUp()` route to a token. Password reveal is NOT one of
+   *    those routes: it is gated by `@VaultReveal()` + the key's
+   *    `allowPasswordReveal` flag in `ApiKeySurfaceGuard`, and nothing else.
    */
   private async authenticateApiKey(
     req: Request & { user?: AuthedUser },
@@ -143,7 +145,6 @@ export class AuthGuard implements CanActivate {
       // deadlock every token behind an interactive TOTP prompt.
       mfaPending: false,
       apiKeyId: key.id,
-      apiKeyScopes: key.scopes,
       apiKeyAllowPasswordReveal: key.allowPasswordReveal,
     };
 

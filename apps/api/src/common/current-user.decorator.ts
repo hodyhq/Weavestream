@@ -24,12 +24,10 @@ export interface AuthedUser {
    * field can never accidentally opt a token into an interactive-only path.
    */
   apiKeyId?: string;
-  /** Narrowing scopes carried by that key. Empty = inherit the user's rights. */
-  apiKeyScopes?: string[];
   /**
    * Whether this key may decrypt stored credentials. Default false; opting in
    * is a deliberate act at mint time. Absent for interactive principals, who
-   * are governed by `password.reveal` and step-up as before.
+   * are governed by the `password.reveal` permission as before.
    */
   apiKeyAllowPasswordReveal?: boolean;
 }

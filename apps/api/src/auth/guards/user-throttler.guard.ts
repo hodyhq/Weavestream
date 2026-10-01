@@ -76,11 +76,12 @@ export class UserThrottlerGuard extends ThrottlerGuard {
     req: Record<string, unknown>,
   ): Promise<string> {
     const expressReq = req as unknown as Request & { user?: AuthedUser };
-    // Programmatic traffic gets its own budget. Sharing the owner's bucket
-    // means a nightly export can 429 the human out of the UI with their own
-    // automation, and a runaway script becomes a self-inflicted DoS on the
-    // person who has to go and stop it.
-    if (expressReq.user?.apiKeyId) return `apikey:${expressReq.user.apiKeyId}`;
+    // Programmatic traffic gets its own budget, separate from the human's
+    // session so a runaway script cannot 429 its owner out of the UI. It is
+    // keyed by *user*, not by key: a per-key bucket would let anyone who can
+    // mint keys multiply every per-route cap (password reveals included) by
+    // the number of keys they hold.
+    if (expressReq.user?.apiKeyId) return `apikey-user:${expressReq.user.id}`;
     if (expressReq.user?.id) return `user:${expressReq.user.id}`;
 
     // Prefer the forwarded chain's leftmost entry. Express already

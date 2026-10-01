@@ -42,9 +42,14 @@ function makeService() {
       update: jest.fn(async () => ({})),
       findMany: jest.fn(async () => []),
     },
-  } as never;
-  const audit = { log: jest.fn().mockResolvedValue(undefined) };
-  return { svc: new ApiKeyService(prisma, audit as never), rows, audit };
+    // Interactive transaction: run the callback against the same stub.
+    $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
+  } as Record<string, unknown>;
+  const audit = {
+    log: jest.fn().mockResolvedValue(undefined),
+    logWithClient: jest.fn().mockResolvedValue(undefined),
+  };
+  return { svc: new ApiKeyService(prisma as never, audit as never), rows, audit, prisma };
 }
 
 const META = { ip: '198.51.100.7', userAgent: 'jest' };
@@ -207,7 +212,7 @@ describe('ApiKeyService', () => {
     it('audits the mint by reference and never logs the secret', async () => {
       const { svc, audit } = makeService();
       const out = await svc.create(ACTOR, { name: 'mcp' }, META);
-      const entry = audit.log.mock.calls[0][0];
+      const entry = audit.logWithClient.mock.calls[0][1];
       expect(entry).toMatchObject({
         action: 'auth.api_key.create',
         entityType: 'api_key',
@@ -215,6 +220,16 @@ describe('ApiKeyService', () => {
       });
       expect(JSON.stringify(entry)).not.toContain(secretOf(out.token));
       expect(JSON.stringify(entry)).not.toContain(out.token);
+    });
+    it('creates no key when the audit write fails', async () => {
+      // Key and audit row commit together: an unaudited key must never exist,
+      // and the caller must never be left without the token for a live key.
+      const { svc, audit, rows } = makeService();
+      audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+      // The stub has no rollback, so assert on what create() surfaces: the
+      // error, not a token. Real rollback is Prisma's $transaction contract.
+      await expect(svc.create(ACTOR, { name: 'mcp' }, META)).rejects.toThrow('audit down');
+      expect(rows.size).toBe(1);
     });
   });
   describe('revokeAllForUser', () => {

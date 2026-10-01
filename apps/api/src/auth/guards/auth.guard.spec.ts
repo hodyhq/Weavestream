@@ -50,7 +50,7 @@ function makeGuard(rotateResult: unknown) {
     ENV,
     apiKeys as never,
   );
-  return { guard, auth };
+  return { guard, auth, apiKeys };
 }
 
 function makeCtx() {
@@ -109,5 +109,34 @@ describe('AuthGuard silent refresh rotation', () => {
     const { ctx } = makeCtx();
 
     await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+});
+
+describe('AuthGuard bearer handling', () => {
+  const ROTATED = {
+    accessToken: 'new-jwt',
+    refreshToken: 'new-refresh-token',
+    payload: { sub: 'u-1', sid: 's-1', role: 'OPERATOR' },
+  };
+
+  it('ignores a Bearer that is not a Weavestream key and authenticates the cookie', async () => {
+    // An SSO proxy (oauth2-proxy, Cloudflare Access) in front of the app may
+    // add its own JWT as Bearer on every request. Treating that as a failed
+    // API key would log every browser out.
+    const { guard, apiKeys } = makeGuard(ROTATED);
+    const { ctx, req } = makeCtx();
+    req.headers.authorization = 'Bearer eyJhbGciOiJSUzI1NiJ9.e30.sig';
+
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(apiKeys.verify).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a dead ws_ key instead of falling back to cookies', async () => {
+    const { guard, apiKeys } = makeGuard(ROTATED);
+    const { ctx, req } = makeCtx();
+    req.headers.authorization = 'Bearer ws_deadbeef_secret';
+
+    await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(apiKeys.verify).toHaveBeenCalled();
   });
 });

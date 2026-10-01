@@ -1,11 +1,12 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import type { ApiKey, Prisma } from '@prisma/client';
 import type { CreateApiKeyInput } from '@weavestream/shared';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
+import { revokeApiKeysForUser } from './revoke-api-keys.js';
 
 /**
  * Presented-token format: `ws_<keyId>_<secret>`.
@@ -57,7 +58,6 @@ function sha256(value: string): Buffer {
 
 @Injectable()
 export class ApiKeyService {
-  private readonly logger = new Logger(ApiKeyService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -98,7 +98,7 @@ export class ApiKeyService {
     expiresInDays?: number | null;
     allowPasswordReveal?: boolean;
     createdBy: string;
-  }): Promise<MintedApiKey> {
+  }, client: Prisma.TransactionClient | PrismaService = this.prisma): Promise<MintedApiKey> {
     // The `scopes` column exists so a later change can narrow a key below its
     // owner's authority without a migration — but nothing consumes it yet.
     // Accepting a scope list we do not enforce would hand the caller a control
@@ -117,7 +117,7 @@ export class ApiKeyService {
       params.expiresInDays === null
         ? null
         : (params.expiresInDays ?? DEFAULT_EXPIRY_DAYS);
-    const record = await this.prisma.apiKey.create({
+    const record = await client.apiKey.create({
       data: {
         userId: params.userId,
         keyId,
@@ -217,12 +217,7 @@ export class ApiKeyService {
     userId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<number> {
-    const client = tx ?? this.prisma;
-    const { count } = await client.apiKey.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-    return count;
+    return revokeApiKeysForUser(tx ?? this.prisma, userId);
   }
 
   /**
@@ -230,46 +225,45 @@ export class ApiKeyService {
    * the secret (CLAUDE.md §2: audit the transition by reference, not value).
    */
   async create(actor: AuthedUser, dto: CreateApiKeyInput, meta: RequestMeta) {
-    const { record, token } = await this.mint({
-      userId: actor.id,
-      name: dto.name,
-      scopes: dto.scopes,
-      expiresInDays: dto.expiresInDays,
-      allowPasswordReveal: dto.allowPasswordReveal,
-      createdBy: actor.id,
-    });
-
-    // Non-fatal: the key row is already committed, so throwing here would
-    // leave a live credential the caller never received and the audit log
-    // never explains. Losing the row is the lesser harm, and it is logged.
-    await this.audit
-      .log({
+    // Key row and audit row commit together. If the audit write fails the key
+    // never exists: no unaudited credential (CLAUDE.md §2) and no live key the
+    // caller never received.
+    const { record, token } = await this.prisma.$transaction(async (tx) => {
+      const minted = await this.mint(
+        {
+          userId: actor.id,
+          name: dto.name,
+          scopes: dto.scopes,
+          expiresInDays: dto.expiresInDays,
+          allowPasswordReveal: dto.allowPasswordReveal,
+          createdBy: actor.id,
+        },
+        tx,
+      );
+      await this.audit.logWithClient(tx, {
         actorId: actor.id,
         action: 'auth.api_key.create',
         entityType: 'api_key',
-        entityId: record.id,
+        entityId: minted.record.id,
         after: {
-          name: record.name,
-          scopes: record.scopes,
-          expiresAt: record.expiresAt,
-          allowPasswordReveal: record.allowPasswordReveal,
+          name: minted.record.name,
+          scopes: minted.record.scopes,
+          expiresAt: minted.record.expiresAt,
+          allowPasswordReveal: minted.record.allowPasswordReveal,
           sessionId: actor.sessionId,
         },
         ip: meta.ip,
         userAgent: meta.userAgent,
-      })
-      .catch((err: unknown) => {
-        this.logger.error(
-          { err, apiKeyId: record.id, userId: actor.id },
-          'api key minted but audit write failed',
-        );
       });
+      return minted;
+    });
 
     return {
       id: record.id,
       keyId: record.keyId,
       name: record.name,
       scopes: record.scopes,
+      allowPasswordReveal: record.allowPasswordReveal,
       lastUsedAt: record.lastUsedAt,
       expiresAt: record.expiresAt,
       createdAt: record.createdAt,

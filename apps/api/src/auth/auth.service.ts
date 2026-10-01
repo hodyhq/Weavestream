@@ -21,6 +21,7 @@ import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { SetupTokenService } from '../users/setup-token.service.js';
 import { themeFromDb, accentFromDb } from './ui-preferences.mapping.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { revokeApiKeysForUser } from './revoke-api-keys.js';
 
 /**
  * A refresh token that was just rotated away is remembered for one
@@ -414,14 +415,9 @@ export class AuthService {
       });
       await tx.userMfaBackupCode.deleteMany({ where: { userId: user.id } });
       // Same invariant as changePassword and resetMfa: keys die with the
-      // password. Re-inviting a user is a compromise response, and a key that
-      // survives it goes inert only until the human finishes MFA re-enrollment
-      // — at which point it silently resumes full access, with nothing in the
-      // sessions UI to reveal it.
-      await tx.apiKey.updateMany({
-        where: { userId: user.id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
+      // password. reissueInvite already revoked keys when the link was issued;
+      // this catches any minted between issue and acceptance.
+      await revokeApiKeysForUser(tx, user.id);
     });
 
     // Mint session immediately so the user bounces into /mfa/setup.
