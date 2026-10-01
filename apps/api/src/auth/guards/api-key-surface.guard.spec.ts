@@ -16,6 +16,7 @@ describe('ApiKeySurfaceGuard', () => {
       for (const p of [
         '/api/v1/me/api-keys',
         '/api/v1/auth/logout',
+        '/api/v1/me/change-password',
         '/api/v1/me/mfa/backup-codes/regenerate',
       ]) {
         expect(guard.canActivate(ctxFor(p))).toBe(true);
@@ -35,7 +36,7 @@ describe('ApiKeySurfaceGuard', () => {
       '/api/v1/me/sessions',
       '/api/v1/me/sessions/revoke-others',
       '/api/v1/me/mfa/backup-codes/regenerate',
-      '/api/v1/me/password',
+      '/api/v1/me/change-password',
       '/api/v1/auth/logout',
       '/api/v1/auth/mfa/enroll',
       '/api/v1/auth/step-up/verify',
@@ -47,9 +48,16 @@ describe('ApiKeySurfaceGuard', () => {
       '/API/V1/ME/API-KEYS',
       '/api//v1//me//sessions',
       '/api/v1/me/api-keys/',
-      '/api/v2/me/password',
+      '/api/v2/me/change-password',
     ])('denies %s despite casing, doubled slashes, trailing slash or version drift', (path) => {
       expect(() => guard.canActivate(ctxFor(path, 'k-1'))).toThrow(ForbiddenException);
+    });
+
+    it('denies the bare /auth path, which normalisation would otherwise strip past', () => {
+      // '/auth/' with a trailing slash would miss this: normalizePath strips it.
+      expect(() => guard.canActivate(ctxFor('/api/v1/auth', 'k-1'))).toThrow(
+        ForbiddenException,
+      );
     });
 
     it('allows read-only self-introspection at /auth/me', () => {

@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
-import type { ApiKey } from '@prisma/client';
+import type { ApiKey, Prisma } from '@prisma/client';
 import type { CreateApiKeyInput } from '@weavestream/shared';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
@@ -78,6 +78,10 @@ export class ApiKeyService {
     const secret = presented.slice(second + 1);
     if (prefix !== PREFIX || !keyId || !secret) return null;
     // keyId is always hex; reject anything else before it reaches a query.
+    // Exact length, not just charset: this value reaches an unauthenticated
+    // indexed lookup, and an unbounded hex string would let a caller push
+    // arbitrary bytes into that query.
+    if (keyId.length !== KEY_ID_BYTES * 2) return null;
     if (!/^[0-9a-f]+$/.test(keyId)) return null;
     return { keyId, secret };
   }
@@ -176,6 +180,29 @@ export class ApiKeyService {
         createdAt: true,
       },
     });
+  }
+
+  /**
+   * Revoke every live key a user holds.
+   *
+   * Called from the paths a user reaches for when they suspect compromise —
+   * changing their password, signing out everywhere — and from an admin MFA
+   * reset. Without this, those actions kill every browser session while
+   * leaving an attacker's key working, and the key is invisible on the
+   * sessions page, so the user has no way to know it survived.
+   *
+   * Returns the number revoked so callers can report it.
+   */
+  async revokeAllForUser(
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<number> {
+    const client = tx ?? this.prisma;
+    const { count } = await client.apiKey.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return count;
   }
 
   /**

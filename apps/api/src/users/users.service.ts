@@ -483,6 +483,14 @@ export class UsersService {
         where: { userId: id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      // And every API key. This route exists to answer a suspected compromise;
+      // a key skips the enrollment gate by design (it was minted from an
+      // already-enrolled session), so one left alive would keep full access
+      // precisely when an admin believes they have just cut it off.
+      await tx.apiKey.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
     });
 
     await this.audit.log({

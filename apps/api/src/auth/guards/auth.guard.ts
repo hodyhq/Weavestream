@@ -108,7 +108,7 @@ export class AuthGuard implements CanActivate {
    * off `req.user` and must not learn about a second principal kind.
    *
    * Two fields carry the difference:
-   *  - `apiKeyId` marks the principal as programmatic. `AuthManagementGuard`
+   *  - `apiKeyId` marks the principal as programmatic. `ApiKeySurfaceGuard`
    *    uses it to keep tokens out of session/MFA/password surfaces, and
    *    `CsrfGuard` uses it to skip a check that only defends cookie auth.
    *  - `sessionId` is set to the key's id. It is an opaque correlation handle

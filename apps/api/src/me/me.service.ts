@@ -20,6 +20,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { PasswordService } from '../auth/password.service.js';
 import { MfaBackupCodeService } from '../auth/mfa-backup-code.service.js';
 import { LockoutService } from '../auth/lockout.service.js';
+import { ApiKeyService } from '../auth/api-key.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import {
@@ -38,6 +39,7 @@ export class MeService {
     private readonly backupCodes: MfaBackupCodeService,
     private readonly lockout: LockoutService,
     private readonly audit: AuditLogService,
+    private readonly apiKeys: ApiKeyService,
   ) {}
 
   async profile(userId: string) {
@@ -279,6 +281,7 @@ export class MeService {
 
     const passwordHash = await this.passwords.hash(input.newPassword);
 
+    let apiKeysRevoked = 0;
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: user.id }, data: { passwordHash } });
       // Keep the current session live; revoke every other session.
@@ -290,6 +293,12 @@ export class MeService {
         },
         data: { revokedAt: new Date() },
       });
+      // API keys die with the password for the same reason other sessions do:
+      // a password change is the canonical "I think I was compromised" action,
+      // and a key that outlives it hands the attacker persistence the user
+      // believes they just severed. In the same transaction so a partial
+      // failure cannot leave the password rotated but the keys live.
+      apiKeysRevoked = await this.apiKeys.revokeAllForUser(user.id, tx);
     });
 
     await this.audit.log({
@@ -300,7 +309,7 @@ export class MeService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { sessionKept: actor.sessionId },
+      after: { apiKeysRevoked },
     });
 
     return { ok: true };
@@ -318,6 +327,11 @@ export class MeService {
       },
       data: { revokedAt: new Date() },
     });
+    // "Sign out everywhere" has to mean everywhere. An API key is a live
+    // credential that never appears in the session list, so leaving keys
+    // alive here would let an attacker survive the exact action a user takes
+    // on suspecting compromise — while the UI reports success.
+    const keysRevoked = await this.apiKeys.revokeAllForUser(actor.id);
     await this.audit.log({
       actorId: actor.id,
       action: 'auth.sessions.revoke_others',
@@ -326,7 +340,7 @@ export class MeService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { revoked: result.count },
+      after: { revoked: result.count, apiKeysRevoked: keysRevoked },
     });
     return { revoked: result.count };
   }

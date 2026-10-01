@@ -16,6 +16,8 @@ import { ApiKeyService } from './api-key.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
+import { Throttle } from '@nestjs/throttler';
+import { RequireStepUp } from './step-up/require-step-up.decorator.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
 
 /**
@@ -33,7 +35,7 @@ import { requestMetaOf as meta } from '../common/request-meta.js';
  * leaked key cannot mint itself successors or revoke the owner's other keys.
  * Only an interactive session reaches these handlers.
  */
-@Controller('me/api-keys')
+@Controller({ path: 'me/api-keys', version: '1' })
 export class ApiKeysController {
   constructor(private readonly apiKeys: ApiKeyService) {}
 
@@ -50,6 +52,14 @@ export class ApiKeysController {
   @Post()
   @AuthedOnly()
   @HttpCode(HttpStatus.CREATED)
+  // A key is a durable persistence credential — optionally non-expiring and
+  // carrying the owner's full authority — so it needs a valid recent step-up,
+  // matching backup-code regeneration (`me.controller.ts`). Without it a
+  // stolen live session could mint a permanent key and then discard the
+  // cookie, surviving the victim's password change and sign-out-everywhere.
+  // Edge-level cap matches the other sensitive POSTs on this surface.
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  @RequireStepUp()
   async create(
     @CurrentUser() actor: AuthedUser,
     @Body(new ZodBody(createApiKeySchema)) dto: CreateApiKeyInput,

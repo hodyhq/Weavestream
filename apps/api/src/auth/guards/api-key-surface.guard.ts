@@ -27,11 +27,14 @@ import type { AuthedUser } from '../../common/current-user.decorator.js';
  * server-derived principal, never off a client-supplied header (CLAUDE.md §1).
  */
 const DENIED_PREFIXES = [
-  '/auth/',          // login, logout, refresh, MFA enroll/verify, step-up
-  '/me/sessions',    // list and revoke the owner's browser sessions
-  '/me/mfa',         // backup-code regeneration
-  '/me/password',    // password change
-  '/me/api-keys',    // a key must not mint or revoke keys — only a human may
+  // No trailing slash: `normalizePath` strips one, so '/auth/' would miss a
+  // request to the bare '/auth' path and silently admit any handler later
+  // mounted there.
+  '/auth',                // login, logout, refresh, MFA enroll/verify, step-up
+  '/me/sessions',         // list and revoke the owner's browser sessions
+  '/me/mfa',              // backup-code regeneration
+  '/me/change-password',  // the real route — MeController has no '/me/password'
+  '/me/api-keys',         // a key must not mint or revoke keys; only a human may
 ] as const;
 
 /**

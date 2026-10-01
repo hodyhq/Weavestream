@@ -28,14 +28,15 @@ function makeService() {
           rows.get(where.keyId) ?? null,
       ),
       updateMany: jest.fn(
-        async ({ where }: { where: { id: string; userId: string } }) => {
+        async ({ where }: { where: { id?: string; userId: string } }) => {
+          let count = 0;
           for (const row of rows.values()) {
-            if (row.id === where.id && row.userId === where.userId && !row.revokedAt) {
-              row.revokedAt = new Date();
-              return { count: 1 };
-            }
+            if (row.userId !== where.userId || row.revokedAt) continue;
+            if (where.id !== undefined && row.id !== where.id) continue;
+            row.revokedAt = new Date();
+            count += 1;
           }
-          return { count: 0 };
+          return { count };
         },
       ),
       update: jest.fn(async () => ({})),
@@ -217,6 +218,36 @@ describe('ApiKeyService', () => {
       });
       expect(JSON.stringify(entry)).not.toContain(secretOf(out.token));
       expect(JSON.stringify(entry)).not.toContain(out.token);
+    });
+  });
+  describe('revokeAllForUser', () => {
+    it('kills every live key for the user and leaves other users alone', async () => {
+      const { svc } = makeService();
+      const a = await svc.mint({ userId: 'u-1', name: 'a', createdBy: 'u-1' });
+      const b = await svc.mint({ userId: 'u-1', name: 'b', createdBy: 'u-1' });
+      const other = await svc.mint({ userId: 'u-2', name: 'c', createdBy: 'u-2' });
+
+      await expect(svc.revokeAllForUser('u-1')).resolves.toBe(2);
+      await expect(svc.verify(a.token)).resolves.toBeNull();
+      await expect(svc.verify(b.token)).resolves.toBeNull();
+      // A compromise response for one user must not sign out another.
+      await expect(svc.verify(other.token)).resolves.not.toBeNull();
+    });
+
+    it('is idempotent', async () => {
+      const { svc } = makeService();
+      await svc.mint({ userId: 'u-1', name: 'a', createdBy: 'u-1' });
+      await expect(svc.revokeAllForUser('u-1')).resolves.toBe(1);
+      await expect(svc.revokeAllForUser('u-1')).resolves.toBe(0);
+    });
+  });
+
+  describe('parse hardening', () => {
+    it('rejects an over-long keyId before it reaches a lookup', async () => {
+      const { svc } = makeService();
+      // Unbounded hex would push arbitrary bytes into an unauthenticated query.
+      const huge = 'a'.repeat(4096);
+      await expect(svc.verify(`ws_${huge}_${'C'.repeat(43)}`)).resolves.toBeNull();
     });
   });
 });

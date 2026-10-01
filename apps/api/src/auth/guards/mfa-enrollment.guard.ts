@@ -44,7 +44,12 @@ export class MfaEnrollmentGuard implements CanActivate {
     // enrolled, MFA-verified session, so the factor was proven before the key
     // ever existed. See `AuthGuard.authenticateApiKey`, which sets
     // `mfaPending: false` for the same reason.
-    if (user.apiKeyId) return true;
+    // Only while the owner's enrollment still stands. `UsersService.resetMfa`
+    // nulls `mfaEnforcementCompletedAt` to force a human back through setup;
+    // bypassing unconditionally would let a key keep full access through
+    // exactly that response. (resetMfa also revokes keys now — this is the
+    // belt to that braces, since the window between the two is real.)
+    if (user.apiKeyId && user.mfaEnforcementCompletedAt !== null) return true;
 
     if (user.mfaEnforcementCompletedAt === null) {
       // Not yet enrolled — block everything except explicitly MFA-setup routes
