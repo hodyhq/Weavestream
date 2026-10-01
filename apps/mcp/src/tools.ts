@@ -98,7 +98,7 @@ export function registerTools(server: McpServer, api: WeavestreamClient, opts: T
 
   tool(
     'create_asset',
-    'Create an asset. Use get_layout first for field ids.',
+    'Create an asset. Use get_layout first for field slugs.',
     { companyId, assetLayoutId: id, name: z.string().min(1).max(200).optional(), fieldValues },
     write,
     ({ companyId: c, ...body }) => api.request('POST', `/companies/${c}/assets`, { body }),
