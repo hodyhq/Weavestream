@@ -132,9 +132,7 @@ describe('ApiKeyService', () => {
     it('rejects a token whose secret has been altered', async () => {
       const { svc } = makeService();
       const { token, record } = await svc.mint({ userId: 'u-1', name: 'k', createdBy: 'u-1' });
-      const k = token.slice(token.indexOf('_') + 1, token.lastIndexOf('_', token.indexOf('_', token.indexOf('_') + 1)));
       const forged = `ws_${record.keyId}_${randomBytes(32).toString('base64url')}`;
-      void k;
       await expect(svc.verify(forged)).resolves.toBeNull();
     });
 
@@ -163,8 +161,7 @@ describe('ApiKeyService', () => {
 
     it('is not an existence oracle: unknown and wrong-secret are indistinguishable', async () => {
       const { svc } = makeService();
-      const { token, record } = await svc.mint({ userId: 'u-1', name: 'k', createdBy: 'u-1' });
-      void token;
+      const { record } = await svc.mint({ userId: 'u-1', name: 'k', createdBy: 'u-1' });
       const wrongSecret = await svc.verify(`ws_${record.keyId}_${'A'.repeat(43)}`);
       const unknownKey = await svc.verify(`ws_${'b'.repeat(18)}_${'C'.repeat(43)}`);
       expect(wrongSecret).toBeNull();

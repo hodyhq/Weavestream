@@ -76,6 +76,11 @@ export class UserThrottlerGuard extends ThrottlerGuard {
     req: Record<string, unknown>,
   ): Promise<string> {
     const expressReq = req as unknown as Request & { user?: AuthedUser };
+    // Programmatic traffic gets its own budget. Sharing the owner's bucket
+    // means a nightly export can 429 the human out of the UI with their own
+    // automation, and a runaway script becomes a self-inflicted DoS on the
+    // person who has to go and stop it.
+    if (expressReq.user?.apiKeyId) return `apikey:${expressReq.user.apiKeyId}`;
     if (expressReq.user?.id) return `user:${expressReq.user.id}`;
 
     // Prefer the forwarded chain's leftmost entry. Express already

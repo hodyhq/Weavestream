@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import type { ApiKey, Prisma } from '@prisma/client';
@@ -57,6 +57,8 @@ function sha256(value: string): Buffer {
 
 @Injectable()
 export class ApiKeyService {
+  private readonly logger = new Logger(ApiKeyService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
@@ -94,6 +96,7 @@ export class ApiKeyService {
     name: string;
     scopes?: string[];
     expiresInDays?: number | null;
+    allowPasswordReveal?: boolean;
     createdBy: string;
   }): Promise<MintedApiKey> {
     // The `scopes` column exists so a later change can narrow a key below its
@@ -121,6 +124,7 @@ export class ApiKeyService {
         tokenHash: sha256(secret).toString('hex'),
         name: params.name,
         scopes: params.scopes ?? [],
+        allowPasswordReveal: params.allowPasswordReveal ?? false,
         expiresAt:
           days === null ? null : new Date(Date.now() + days * 86_400_000),
         createdBy: params.createdBy,
@@ -190,6 +194,7 @@ export class ApiKeyService {
         keyId: true,
         name: true,
         scopes: true,
+        allowPasswordReveal: true,
         lastUsedAt: true,
         expiresAt: true,
         createdAt: true,
@@ -230,23 +235,35 @@ export class ApiKeyService {
       name: dto.name,
       scopes: dto.scopes,
       expiresInDays: dto.expiresInDays,
+      allowPasswordReveal: dto.allowPasswordReveal,
       createdBy: actor.id,
     });
 
-    await this.audit.log({
-      actorId: actor.id,
-      action: 'auth.api_key.create',
-      entityType: 'api_key',
-      entityId: record.id,
-      after: {
-        name: record.name,
-        scopes: record.scopes,
-        expiresAt: record.expiresAt,
-        sessionId: actor.sessionId,
-      },
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-    });
+    // Non-fatal: the key row is already committed, so throwing here would
+    // leave a live credential the caller never received and the audit log
+    // never explains. Losing the row is the lesser harm, and it is logged.
+    await this.audit
+      .log({
+        actorId: actor.id,
+        action: 'auth.api_key.create',
+        entityType: 'api_key',
+        entityId: record.id,
+        after: {
+          name: record.name,
+          scopes: record.scopes,
+          expiresAt: record.expiresAt,
+          allowPasswordReveal: record.allowPasswordReveal,
+          sessionId: actor.sessionId,
+        },
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      })
+      .catch((err: unknown) => {
+        this.logger.error(
+          { err, apiKeyId: record.id, userId: actor.id },
+          'api key minted but audit write failed',
+        );
+      });
 
     return {
       id: record.id,

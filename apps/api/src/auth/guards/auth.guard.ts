@@ -144,6 +144,7 @@ export class AuthGuard implements CanActivate {
       mfaPending: false,
       apiKeyId: key.id,
       apiKeyScopes: key.scopes,
+      apiKeyAllowPasswordReveal: key.allowPasswordReveal,
     };
 
     // Bookkeeping only — a failed write must not fail an authenticated

@@ -35,6 +35,12 @@ export const createApiKeySchema = z.object({
    * non-expiring key (deliberate opt-out, not a default).
    */
   expiresInDays: z.number().int().min(1).max(MAX_API_KEY_DAYS).nullable().optional(),
+  /**
+   * Permit this key to decrypt stored credentials. Defaults to false and must
+   * be set deliberately: a key that can drain the vault is a different class
+   * of credential from one that can read asset documentation.
+   */
+  allowPasswordReveal: z.boolean().optional(),
 });
 
 export type CreateApiKeyInput = z.infer<typeof createApiKeySchema>;

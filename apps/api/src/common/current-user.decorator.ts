@@ -26,6 +26,12 @@ export interface AuthedUser {
   apiKeyId?: string;
   /** Narrowing scopes carried by that key. Empty = inherit the user's rights. */
   apiKeyScopes?: string[];
+  /**
+   * Whether this key may decrypt stored credentials. Default false; opting in
+   * is a deliberate act at mint time. Absent for interactive principals, who
+   * are governed by `password.reveal` and step-up as before.
+   */
+  apiKeyAllowPasswordReveal?: boolean;
 }
 
 export const CurrentUser = createParamDecorator(

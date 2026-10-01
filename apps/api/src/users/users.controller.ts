@@ -32,10 +32,6 @@ import {
   userAgentOf as uaOf,
 } from '../common/request-meta.js';
 
-// Creating users and mailing setup links is identity provisioning: a key that
-// could do it would hand its holder a durable interactive session, which can
-// then mint keys of its own. Whole-controller, so new routes inherit it.
-@InteractiveOnly()
 @Controller({ path: 'users', version: '1' })
 export class UsersController {
   constructor(private readonly users: UsersService) {}
@@ -67,6 +63,7 @@ export class UsersController {
   }
 
   @Post()
+  @InteractiveOnly()
   @RequirePermission('user.manage')
   // Step-up when creating a privileged account (admin/operator, any
   // platform capability, or non-NONE global access). Raw body — guards
@@ -99,6 +96,7 @@ export class UsersController {
   }
 
   @Patch(':id')
+  @InteractiveOnly()
   @RequirePermission('user.manage')
   // Step-up only on a privilege change — a plain name/timezone edit
   // does not challenge. Raw body (guards run before the Zod pipe).
@@ -123,6 +121,7 @@ export class UsersController {
   }
 
   @Delete(':id')
+  @InteractiveOnly()
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
   @RequireStepUp()
@@ -135,6 +134,7 @@ export class UsersController {
   }
 
   @Post(':id/invite')
+  @InteractiveOnly()
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
   async reissueInvite(
@@ -146,6 +146,7 @@ export class UsersController {
   }
 
   @Post(':id/reset-mfa')
+  @InteractiveOnly()
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
   @RequireStepUp()

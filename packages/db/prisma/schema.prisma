@@ -472,6 +472,10 @@ model ApiKey {
   /// Optional narrowing of the creating user's authority. Empty = inherit
   /// the user's permissions unchanged. Never widens.
   scopes     String[]  @default([])
+  /// Opt-in, default denied. Credential reveal is the single most dangerous
+  /// thing a key could do in a product whose job is holding client secrets, so
+  /// it is off unless the operator deliberately turns it on for this key.
+  allowPasswordReveal Boolean @default(false) @map("allow_password_reveal")
   lastUsedAt DateTime? @map("last_used_at")
   /// Null = no expiry. Set by default at creation; see ApiKeyService.
   expiresAt  DateTime? @map("expires_at")

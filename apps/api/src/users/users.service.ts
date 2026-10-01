@@ -359,6 +359,14 @@ export class UsersService {
         where: { userId: id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      // Revoke keys too, rather than leaving them merely inert. AuthGuard
+      // rejects on `!isActive`, so without this a reactivation a week later
+      // silently resurrects every key an attacker minted beforehand — and
+      // none of them show up in the sessions UI to warn anyone.
+      await this.prisma.apiKey.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
       await this.cache.invalidate(id);
     }
     if (isActivation) {

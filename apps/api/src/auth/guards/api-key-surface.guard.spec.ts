@@ -1,8 +1,18 @@
 import { ForbiddenException } from '@nestjs/common';
 import { ApiKeySurfaceGuard } from './api-key-surface.guard.js';
 
-function ctxFor(path: string, apiKeyId?: string, interactiveOnly = false) {
-  const req = { path, user: apiKeyId ? { id: 'u-1', apiKeyId } : { id: 'u-1' } };
+function ctxFor(
+  path: string,
+  apiKeyId?: string,
+  interactiveOnly = false,
+  allowPasswordReveal = false,
+) {
+  const req = {
+    path,
+    user: apiKeyId
+      ? { id: 'u-1', apiKeyId, apiKeyAllowPasswordReveal: allowPasswordReveal }
+      : { id: 'u-1' },
+  };
   return {
     switchToHttp: () => ({ getRequest: () => req }),
     getHandler: () => undefined,
@@ -14,18 +24,20 @@ function ctxFor(path: string, apiKeyId?: string, interactiveOnly = false) {
 /** Reflector stub: reports whatever the context was built with. */
 function makeGuard() {
   const reflector = {
-    getAllAndOverride: jest.fn(
-      (_key: string, _targets: unknown[]) => currentInteractiveOnly,
+    getAllAndOverride: jest.fn((key: string) =>
+      key === 'vaultReveal' ? currentVaultReveal : currentInteractiveOnly,
     ),
   };
   return new ApiKeySurfaceGuard(reflector as never);
 }
 let currentInteractiveOnly = false;
+let currentVaultReveal = false;
 
 describe('ApiKeySurfaceGuard', () => {
   const guard = makeGuard();
   beforeEach(() => {
     currentInteractiveOnly = false;
+    currentVaultReveal = false;
   });
 
   describe('cookie sessions', () => {
@@ -102,12 +114,35 @@ describe('ApiKeySurfaceGuard', () => {
       expect(guard.canActivate(ctxFor(path, 'k-1'))).toBe(true);
     });
 
-    it('does not deny an unrelated route that merely contains a denied word', () => {
-      // `/companies/.../passwords` is the credential vault, which a key may
-      // list; it is StepUpGuard, not this guard, that blocks the reveal.
+    it('lets a key list the vault but not decrypt from it', () => {
+      // Listing is metadata. Reveal decrypts, and nothing else stops it:
+      // the password reveal routes carry no @RequireStepUp(), so this guard
+      // is the only thing standing between a leaked key and every stored
+      // client credential.
       expect(guard.canActivate(ctxFor('/api/v1/companies/c-1/passwords', 'k-1'))).toBe(
         true,
       );
+
+      currentVaultReveal = true;
+      expect(() =>
+        guard.canActivate(ctxFor('/api/v1/companies/c-1/passwords/p-1/reveal', 'k-1')),
+      ).toThrow(ForbiddenException);
+    });
+
+    it('permits reveal only for a key minted with allowPasswordReveal', () => {
+      currentVaultReveal = true;
+      expect(
+        guard.canActivate(
+          ctxFor('/api/v1/companies/c-1/passwords/p-1/reveal', 'k-1', false, true),
+        ),
+      ).toBe(true);
+    });
+
+    it('never blocks an interactive session from the vault', () => {
+      currentVaultReveal = true;
+      expect(
+        guard.canActivate(ctxFor('/api/v1/companies/c-1/passwords/p-1/reveal')),
+      ).toBe(true);
     });
   });
 });

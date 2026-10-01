@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
 import { INTERACTIVE_ONLY_KEY } from '../interactive-only.decorator.js';
+import { VAULT_REVEAL_KEY } from '../vault-reveal.decorator.js';
 
 /**
  * Keeps API-key principals out of the surfaces that exist to manage the
@@ -92,6 +93,19 @@ export class ApiKeySurfaceGuard implements CanActivate {
       [ctx.getHandler(), ctx.getClass()],
     );
     if (interactiveOnly) throw new ForbiddenException(DENIED_MESSAGE);
+
+    // Credential reveal: denied unless this specific key opted in at mint.
+    // Default-deny because a key leaked from CI or a stray .env would
+    // otherwise drain the vault this product exists to protect.
+    const vaultReveal = this.reflector.getAllAndOverride<boolean>(
+      VAULT_REVEAL_KEY,
+      [ctx.getHandler(), ctx.getClass()],
+    );
+    if (vaultReveal && !req.user.apiKeyAllowPasswordReveal) {
+      throw new ForbiddenException(
+        'This API key is not permitted to reveal stored credentials.',
+      );
+    }
 
     const path = normalizePath(req.path);
     if (ALLOWED_EXACT.has(path)) return true;

@@ -203,6 +203,13 @@ async function resetPassword(
     where: { userId: user.id, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+  // Keys die with sessions on every break-glass path, same invariant the HTTP
+  // handlers hold. An operator who runs this sees "sessions revoked" and must
+  // not be left with the attacker's key still carrying full authority.
+  await prisma.apiKey.updateMany({
+    where: { userId: user.id, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
   await audit.log({
     actorId: null,
     action: 'admin.reset-password',
@@ -246,6 +253,13 @@ async function resetMfa(
       where: { userId: user.id, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    // Keys die with sessions on every break-glass path, same invariant the
+    // HTTP handlers hold. An operator who runs this sees "sessions revoked"
+    // and must not be left with the attacker's key still carrying authority.
+    await tx.apiKey.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   });
 
   await audit.log({
@@ -283,6 +297,13 @@ async function listUsers(prisma: PrismaService): Promise<void> {
 
 async function rotateSessions(prisma: PrismaService, audit: AuditLogService): Promise<void> {
   const res = await prisma.session.updateMany({
+    where: { revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  // This command signs *everyone* out, so it revokes every key in the system
+  // too. A key that outlived it would be the one credential the operator's
+  // blast-radius reset did not reach.
+  await prisma.apiKey.updateMany({
     where: { revokedAt: null },
     data: { revokedAt: new Date() },
   });

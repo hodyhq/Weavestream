@@ -36,7 +36,6 @@ export class MfaEnrollmentGuard implements CanActivate {
     const user = req.user;
     if (!user) return true; // AuthGuard will have already rejected.
 
-
     if (user.mfaEnforcementCompletedAt === null) {
       // Not yet enrolled — block everything except explicitly MFA-setup routes
       // and logout, which needs a carve-out below.
