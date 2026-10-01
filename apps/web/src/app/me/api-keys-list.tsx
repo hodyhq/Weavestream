@@ -242,6 +242,9 @@ function CreateKeyDialog({
   }
 
   function close() {
+    // While the POST is in flight the dialog must stay open: closing it would
+    // drop the one-time token when the response lands.
+    if (pending) return;
     reset();
     onClose();
   }
@@ -254,7 +257,7 @@ function CreateKeyDialog({
       width={480}
       footer={
         <>
-          <Btn kind="outline" onClick={close}>
+          <Btn kind="outline" onClick={close} disabled={pending}>
             Cancel
           </Btn>
           <Btn
