@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import type { Job } from 'bullmq';
 import {
+  CloudflareDriftSweepJobNames,
   cloudflareDriftSweepJobSchema,
   QueueNames,
 } from '@weavestream/shared';
@@ -62,7 +63,16 @@ export class CloudflareDriftSweepWorker implements OnModuleDestroy {
         `invalid cloudflare-drift-sweep payload: ${parsed.error.message}`,
       );
     }
-    const { integrationId } = parsed.data;
+    const { integrationId, triggeredBy } = parsed.data;
+
+    // "Sync domains now" only wants the registrar sync; let its failure fail
+    // the job so it shows up as failed rather than as a quiet no-op.
+    if (job.name === CloudflareDriftSweepJobNames.manual) {
+      const registrar = await this.registrar.sync(integrationId, triggeredBy ?? null);
+      this.logger.log(`Manual registrar sync done (integration=${integrationId})`);
+      return { integrationId, registrar };
+    }
+
     const startedAt = Date.now();
     const result = await this.lists.runDriftSweep(integrationId);
     this.logger.log(

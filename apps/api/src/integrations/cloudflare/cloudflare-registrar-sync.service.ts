@@ -13,18 +13,29 @@ import { AuditLogService } from '../../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../audit/audit-actions.js';
 import { EnvService } from '../../config/env.service.js';
 import { RedisService } from '../../redis/redis.service.js';
+import { QueuesService } from '../../queues/queues.service.js';
+import { CloudflareDriftSweepJobNames, QueueNames } from '@weavestream/shared';
 import { IntegrationsService } from '../integrations.service.js';
 import { IntegrationDriverRegistry } from '../drivers/integration-driver.registry.js';
 import { cloudflareConfigSchema } from '../drivers/cloudflare/cloudflare.driver.js';
 
-const LOCK_LEASE_SEC = 900;
-const RUN_DEADLINE_MS = 600_000;
+/**
+ * Lease covers the listing phase (~one Cloudflare request per domain, which
+ * may wait out 429 Retry-After). After listing the lease is renewed to
+ * WRITE_LEASE_SEC and writes must finish within WRITE_DEADLINE_MS of that.
+ */
+const LISTING_LEASE_SEC = 3600;
+const WRITE_LEASE_SEC = 900;
+const WRITE_DEADLINE_MS = 600_000;
 /** Delete KEYS[1] only if it still holds ARGV[1] (our token). */
 const RELEASE_IF_OWNER =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+/** Re-arm KEYS[1]'s TTL to ARGV[2] only if it still holds ARGV[1]. */
+const RENEW_IF_OWNER =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end";
 
 export interface RegistrarSyncResult {
-  /** False when the integration has no `domainsCompanySlug` (sync off). */
+  /** False when no domains company is configured (sync off). */
   enabled: boolean;
   created: number;
   updated: number;
@@ -59,7 +70,41 @@ export class CloudflareRegistrarSyncService {
     private readonly audit: AuditLogService,
     private readonly env: EnvService,
     private readonly redis: RedisService,
+    private readonly queues: QueuesService,
   ) {}
+
+  /**
+   * "Sync domains now". Runs in the worker as a system job, like the
+   * scheduled sweep, rather than inline in the request: the sync touches
+   * domains across companies, which the request's tenant scope (correctly)
+   * would refuse for anyone short of full global access. The fixed job id
+   * collapses repeat clicks while one is queued or running.
+   */
+  async enqueue(integrationId: string, actorId: string): Promise<{ queued: true }> {
+    const integration = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+      select: { driver: true, status: true, config: true },
+    });
+    if (!integration) throw new NotFoundException(`Integration ${integrationId} not found`);
+    if (integration.driver !== 'cloudflare') {
+      throw new BadRequestException(`Integration ${integrationId} is not a Cloudflare integration.`);
+    }
+    if (integration.status !== 'ACTIVE') {
+      throw new BadRequestException('Activate the integration before syncing domains.');
+    }
+    const config = cloudflareConfigSchema.safeParse(integration.config);
+    if (!config.success || !config.data.domainsCompanyId) {
+      throw new BadRequestException(
+        'Set "Sync domains into company" under Credentials before syncing domains.',
+      );
+    }
+    await this.queues.get(QueueNames.cloudflareDriftSweep).add(
+      CloudflareDriftSweepJobNames.manual,
+      { integrationId, triggeredBy: actorId },
+      { jobId: `manual-domains-${integrationId}`, removeOnComplete: true, removeOnFail: 50 },
+    );
+    return { queued: true };
+  }
 
   async sync(
     integrationId: string,
@@ -68,16 +113,29 @@ export class CloudflareRegistrarSyncService {
   ): Promise<RegistrarSyncResult> {
     // One run per integration at a time: a manual sync overlapping the
     // scheduled sweep would otherwise race on the find-then-create below.
-    // The lease bounds a crashed run; run() stops writing at RUN_DEADLINE_MS,
-    // well inside it, so it never writes after the lock could have expired.
     const lockKey = `lock:cf-registrar-sync:${integrationId}`;
     const token = randomUUID();
-    const got = await this.redis.client.set(lockKey, token, 'EX', LOCK_LEASE_SEC, 'NX');
+    const got = await this.redis.client.set(lockKey, token, 'EX', LISTING_LEASE_SEC, 'NX');
     if (got !== 'OK') {
       throw new ConflictException('A domain sync for this integration is already running.');
     }
+    // Called once listing is done: re-arm the lease for the write phase and
+    // return the write deadline, or throw if the lease was lost meanwhile.
+    const startWrites = async (): Promise<number> => {
+      const renewed = await this.redis.client.eval(
+        RENEW_IF_OWNER,
+        1,
+        lockKey,
+        token,
+        String(WRITE_LEASE_SEC),
+      );
+      if (renewed !== 1) {
+        throw new Error(`Registrar sync lost its lock while listing (integration=${integrationId})`);
+      }
+      return Date.now() + WRITE_DEADLINE_MS;
+    };
     try {
-      return await this.run(integrationId, actorId, meta, Date.now() + RUN_DEADLINE_MS);
+      return await this.run(integrationId, actorId, meta, startWrites);
     } finally {
       // Compare-and-delete in one step so we can only ever release our own
       // lock. A failure here must not mask the run's result; the lease
@@ -96,7 +154,7 @@ export class CloudflareRegistrarSyncService {
     integrationId: string,
     actorId: string | null,
     meta: { ip: string; userAgent: string },
-    deadline: number,
+    startWrites: () => Promise<number>,
   ): Promise<RegistrarSyncResult> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
@@ -118,16 +176,19 @@ export class CloudflareRegistrarSyncService {
       adopted: 0,
       missing: 0,
     };
-    if (!config.domainsCompanySlug) return result;
+    // The id was resolved and permission-checked when the config was saved
+    // (IntegrationsController). A slug without an id predates that check and
+    // is ignored rather than trusted.
+    if (!config.domainsCompanyId) return result;
     result.enabled = true;
 
     const company = await this.prisma.company.findUnique({
-      where: { slug: config.domainsCompanySlug },
+      where: { id: config.domainsCompanyId },
       select: { id: true, archivedAt: true },
     });
     if (!company || company.archivedAt) {
       throw new BadRequestException(
-        `Domain sync company "${config.domainsCompanySlug}" does not exist or is archived.`,
+        'The company configured for domain sync no longer exists or is archived.',
       );
     }
 
@@ -142,11 +203,13 @@ export class CloudflareRegistrarSyncService {
       },
       randomUUID(),
     );
+    const deadline = await startWrites();
 
     const now = new Date();
     const seen = new Set<string>();
     const createdNames: string[] = [];
     const adoptedNames: string[] = [];
+    const skipped: Record<string, string> = {};
 
     // Checked immediately before every write: past the deadline the lock may
     // lapse, so stop rather than race a new run. Rows not reached are left
@@ -182,27 +245,25 @@ export class CloudflareRegistrarSyncService {
         registrarMissingSince: null,
       } satisfies Prisma.MonitoredDomainUncheckedUpdateInput;
 
-      const candidates = await this.prisma.monitoredDomain.findMany({
-        where: { hostname, archivedAt: null },
-      });
-      const row = pickRow(candidates, integrationId, company.id);
+      // Archived rows included: an archive is an operator's decision and
+      // must not be undone by recreating the domain next to it.
+      const candidates = await this.prisma.monitoredDomain.findMany({ where: { hostname } });
+      const match = matchRow(candidates, integrationId, config.accountId, company.id);
 
-      if (row) {
-        const adopting = row.source === 'MANUAL';
+      if (match.kind === 'update' || match.kind === 'adopt') {
         assertBudget();
-        await this.prisma.monitoredDomain.update({ where: { id: row.id }, data: registrarData });
-        if (adopting) {
+        await this.prisma.monitoredDomain.update({
+          where: { id: match.row.id },
+          data: registrarData,
+        });
+        if (match.kind === 'adopt') {
           result.adopted += 1;
           adoptedNames.push(hostname);
         } else {
           result.updated += 1;
         }
-      } else if (candidates.length > 0) {
-        // Every match belongs to another Cloudflare integration. Creating a
-        // second row would show the domain twice under two owners.
-        this.logger.warn(
-          `Skipping ${hostname}: already synced by another Cloudflare integration (integration=${integrationId})`,
-        );
+      } else if (match.kind === 'skip') {
+        skipped[hostname] = match.reason;
       } else {
         try {
           assertBudget();
@@ -218,7 +279,7 @@ export class CloudflareRegistrarSyncService {
           createdNames.push(hostname);
         } catch (err) {
           // Someone added the same hostname by hand mid-run. Leave it; the
-          // next sweep adopts it through pickRow.
+          // next sweep adopts it through matchRow.
           if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) {
             throw err;
           }
@@ -254,6 +315,7 @@ export class CloudflareRegistrarSyncService {
       after: {
         ...result,
         seen: seen.size,
+        skipped,
         createdHostnames: createdNames,
         adoptedHostnames: adoptedNames,
         missingHostnames: gone.map((r) => r.hostname),
@@ -264,21 +326,55 @@ export class CloudflareRegistrarSyncService {
   }
 }
 
+export type RowMatch =
+  | { kind: 'update' | 'adopt'; row: MonitoredDomain }
+  | { kind: 'skip'; reason: string }
+  | { kind: 'create' };
+
 /**
- * Which existing active row a Cloudflare domain maps to. Hostnames are only
- * unique per company, so there can be several. Preference: the row this
- * integration already owns, then one in the default company, then any MANUAL
- * row (adopted). A row owned by a *different* Cloudflare integration is left
- * alone — two accounts claiming one name is for a human to sort out.
+ * What to do with one Cloudflare domain, given every existing row with that
+ * hostname (hostnames are unique per company only, archived rows included).
+ *
+ *  - This integration's row → update it, wherever a human moved it. If it is
+ *    archived, leave it: the operator stopped tracking it.
+ *  - A synced row orphaned by a deleted integration (integrationId null) for
+ *    the *same Cloudflare account* → reclaim it.
+ *  - An active MANUAL row in the configured company → adopt it. Manual rows
+ *    in other companies are never touched: the config was only authorised
+ *    for the configured company.
+ *  - Any other existing row (another integration's, an archived one, one in
+ *    a different company) → skip rather than create a duplicate beside it.
  */
-export function pickRow(
+export function matchRow(
   rows: MonitoredDomain[],
   integrationId: string,
-  defaultCompanyId: string,
-): MonitoredDomain | undefined {
-  return (
-    rows.find((r) => r.integrationId === integrationId) ??
-    rows.find((r) => r.source === 'MANUAL' && r.companyId === defaultCompanyId) ??
-    rows.find((r) => r.source === 'MANUAL')
+  accountId: string,
+  companyId: string,
+): RowMatch {
+  const owned = rows.find((r) => r.integrationId === integrationId);
+  if (owned) {
+    return owned.archivedAt ? { kind: 'skip', reason: 'archived' } : { kind: 'update', row: owned };
+  }
+  const orphan = rows.find(
+    (r) =>
+      r.source === 'CLOUDFLARE' &&
+      r.integrationId === null &&
+      r.cloudflareAccountId === accountId &&
+      !r.archivedAt,
   );
+  if (orphan) return { kind: 'update', row: orphan };
+  const manual = rows.find(
+    (r) => r.source === 'MANUAL' && r.companyId === companyId && !r.archivedAt,
+  );
+  if (manual) return { kind: 'adopt', row: manual };
+  if (rows.length === 0) return { kind: 'create' };
+  const r = rows[0]!;
+  return {
+    kind: 'skip',
+    reason: r.archivedAt
+      ? 'archived'
+      : r.source === 'CLOUDFLARE'
+        ? 'owned by another Cloudflare integration'
+        : 'exists in another company',
+  };
 }

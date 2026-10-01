@@ -76,19 +76,21 @@ Weavestream owns everything else on the row: the company it belongs to, the moni
 ### Turning it on
 
 1. Add these permissions to the integration's API token: **Account » Registrar: Domains » Read** and **Zone » Zone » Read**.
-2. Under **Credentials & schedule**, set **Sync domains into company (slug)** to the company new domains should be filed under.
-3. Make sure the integration has a schedule. The registrar sync runs on every drift sweep; the **Domains** tab has a **Sync domains now** button for an immediate run.
+2. Under **Credentials & schedule**, set **Sync domains into company (slug)** to the company new domains should be filed under. Saving checks that **you** can manage domains in that company; the company is then stored by id, so renaming its slug later does not break the sync.
+3. Make sure the integration has a schedule. The registrar sync runs on every drift sweep; the **Domains** tab has a **Sync domains now** button that queues an immediate run in the background.
 
 ### Behaviour
 
 - **New domains** (e.g. a domain you just bought) are created in the configured company.
 - **Moved domains**: if you move a synced domain to a client company, it stays there; later syncs update it in place.
-- **Existing manual entries** with the same hostname are taken over (they turn into synced rows) rather than duplicated.
+- **Existing manual entries** with the same hostname **in the configured company** are taken over (they turn into synced rows). Manual entries in other companies are left alone and the domain is skipped rather than duplicated.
 - **Nothing is deleted.** A domain that leaves the account (transferred out, expired, moved to another Cloudflare account) is flagged *not on account since …* and keeps its history; archive it yourself when you are done with it.
+- **Archiving is respected.** An archived synced domain is not updated or recreated, even while it is still on the Cloudflare account.
+- **Recreating the integration** for the same Cloudflare account reclaims the domains the old one synced.
 - A synced domain's hostname cannot be edited, because the sync matches on it.
 - If two Cloudflare integrations report the same hostname, the second one skips it instead of creating a duplicate.
 
-Each run writes one `integration.cloudflare.registrar_sync` audit row listing the created, taken-over and missing hostnames.
+Each run writes one `integration.cloudflare.registrar_sync` audit row listing the created, taken-over, skipped and missing hostnames.
 
 !!!info Why every domain is fetched individually
 Cloudflare's registrar list endpoint can report more domains than it returns. Weavestream unions the zone list with the registrar list and then reads each domain's registrar record on its own, which is authoritative.

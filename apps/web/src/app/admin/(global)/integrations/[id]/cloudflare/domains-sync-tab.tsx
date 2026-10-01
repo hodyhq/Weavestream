@@ -5,14 +5,6 @@ import type { IntegrationDto } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../lib/api';
 import { Btn, Tag, useToast } from '../../../../../../components/ui';
 
-type SyncResult = {
-  enabled: boolean;
-  created: number;
-  updated: number;
-  adopted: number;
-  missing: number;
-};
-
 /**
  * Domains tab for a Cloudflare integration. The registrar sync runs on the
  * integration's schedule; this is the "do it now" button plus the setting it
@@ -21,14 +13,16 @@ type SyncResult = {
 export function DomainsSyncTab({ integration }: { integration: IntegrationDto }) {
   const toast = useToast();
   const [pending, setPending] = useState(false);
-  const [last, setLast] = useState<SyncResult | null>(null);
-  const slug = (integration.config as { domainsCompanySlug?: string } | null)?.domainsCompanySlug;
+  const [queued, setQueued] = useState(false);
+  const config = integration.config as { domainsCompanySlug?: string; domainsCompanyId?: string } | null;
+  // Only a server-resolved company id turns the sync on.
+  const slug = config?.domainsCompanyId ? config.domainsCompanySlug : undefined;
 
   async function sync(): Promise<void> {
     setPending(true);
-    let res: Awaited<ReturnType<typeof apiFetch<SyncResult>>>;
+    let res: Awaited<ReturnType<typeof apiFetch<{ queued: true }>>>;
     try {
-      res = await apiFetch<SyncResult>(
+      res = await apiFetch<{ queued: true }>(
         `/admin/integrations/${integration.id}/cloudflare/domains/sync`,
         { method: 'POST' },
       );
@@ -40,8 +34,8 @@ export function DomainsSyncTab({ integration }: { integration: IntegrationDto })
       toast.push(problem?.detail ?? problem?.title ?? 'Domain sync failed.', 'danger');
       return;
     }
-    setLast(res.data);
-    if (res.data.enabled) toast.push('Domains synced from Cloudflare.', 'ok');
+    setQueued(true);
+    toast.push('Domain sync started.', 'ok');
   }
 
   return (
@@ -67,13 +61,11 @@ export function DomainsSyncTab({ integration }: { integration: IntegrationDto })
           Off. Set “Sync domains into company” under Credentials to turn it on.
         </Tag>
       )}
-      {last?.enabled && (
-        <div style={{ fontSize: 13, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <span>{last.created} new</span>
-          <span>{last.updated} updated</span>
-          <span>{last.adopted} taken over from manual entries</span>
-          <span>{last.missing} no longer on the account</span>
-        </div>
+      {queued && (
+        <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+          Running in the background. Domains appear as it finishes, usually within a minute
+          or two; the audit log records what changed.
+        </span>
       )}
     </div>
   );

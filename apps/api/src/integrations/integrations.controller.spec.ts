@@ -52,6 +52,8 @@ describe('IntegrationsController security contract', () => {
       { get: jest.fn().mockReturnValue({ listSourceOrgs: jest.fn().mockResolvedValue(orgs) }) } as never,
       { values: { INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
       {} as never,
+      {} as never,
+      {} as never,
     );
 
     await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs });
@@ -63,6 +65,8 @@ describe('IntegrationsController security contract', () => {
       {} as never,
       {} as never,
       { triggerManual } as never,
+      {} as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -93,6 +97,8 @@ describe('IntegrationsController security contract', () => {
     };
     const controller = new IntegrationsController(
       integrations as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never,
+      {} as never,
     );
     const query = {
       mappingId: '00000000-0000-4000-8000-000000000002',
@@ -300,5 +306,68 @@ describe('IntegrationsService resource seeding', () => {
       ['devices', true],
       ['device-relationships', false],
     ]);
+  });
+});
+
+describe('IntegrationsController Cloudflare domains company binding', () => {
+  const ACTOR = { id: 'u-1', role: 'OPERATOR' } as never;
+  const COMPANY = { id: '00000000-0000-4000-8000-0000000000c1', archivedAt: null };
+
+  function make(allowed: boolean) {
+    const create = jest.fn(async (_u: unknown, dto: { config: unknown }) => dto);
+    const can = jest.fn().mockResolvedValue({ allowed });
+    const controller = new IntegrationsController(
+      { create } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { company: { findUnique: jest.fn().mockResolvedValue(COMPANY) } } as never,
+      { can } as never,
+    );
+    return { controller, create, can };
+  }
+  const req = { headers: {}, ip: '198.51.100.7' } as never;
+
+  it('stores the resolved company id once the saver may manage domains there', async () => {
+    const { controller, create, can } = make(true);
+    await controller.create(
+      ACTOR,
+      { driver: 'cloudflare', name: 'cf', config: { accountId: 'a', domainsCompanySlug: ' client ' } } as never,
+      req,
+    );
+    expect(can).toHaveBeenCalledWith(ACTOR, 'domain.manage', { companyId: COMPANY.id });
+    expect(create.mock.calls[0]![1].config).toEqual({
+      accountId: 'a',
+      domainsCompanySlug: 'client',
+      domainsCompanyId: COMPANY.id,
+    });
+  });
+
+  it('refuses a company the saver cannot manage domains in', async () => {
+    const { controller, create } = make(false);
+    await expect(
+      controller.create(
+        ACTOR,
+        { driver: 'cloudflare', name: 'cf', config: { accountId: 'a', domainsCompanySlug: 'other' } } as never,
+        req,
+      ),
+    ).rejects.toThrow(/cannot manage domains/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('discards a client-supplied company id', async () => {
+    const { controller, create } = make(true);
+    await controller.create(
+      ACTOR,
+      {
+        driver: 'cloudflare',
+        name: 'cf',
+        config: { accountId: 'a', domainsCompanyId: '00000000-0000-4000-8000-0000000000ff' },
+      } as never,
+      req,
+    );
+    expect(create.mock.calls[0]![1].config).toEqual({ accountId: 'a' });
   });
 });

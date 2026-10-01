@@ -53,20 +53,15 @@ export class CloudflareListsController {
   ) {}
 
   /**
-   * Pull every domain on the Cloudflare account into Domains now, instead of
-   * waiting for the next scheduled sweep. No-op (`enabled: false`) when the
-   * integration has no domains company configured.
+   * Queue a registrar sync now instead of waiting for the next scheduled
+   * sweep. The worker runs it; the summary audit row names this user.
    */
   @Post('domains/sync')
-  @HttpCode(200)
+  @HttpCode(202)
   @RequirePermission('integration.manage')
   @Throttle({ global: { limit: 3, ttl: 60_000 } })
-  syncDomains(
-    @CurrentUser() user: AuthedUser,
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Req() req: Request,
-  ) {
-    return this.registrar.sync(id, user.id, meta(req));
+  syncDomains(@CurrentUser() user: AuthedUser, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.registrar.enqueue(id, user.id);
   }
 
   /** Browse Cloudflare-side IP lists so the operator can pick which to register. */

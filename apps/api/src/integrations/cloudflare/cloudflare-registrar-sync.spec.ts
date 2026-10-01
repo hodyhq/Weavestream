@@ -1,9 +1,9 @@
 import type { MonitoredDomain } from '@prisma/client';
 import type { CloudflareRegistrarDomain } from '../drivers/cloudflare/cloudflare-api.client.js';
-import { CloudflareRegistrarSyncService, pickRow } from './cloudflare-registrar-sync.service.js';
+import { CloudflareRegistrarSyncService, matchRow } from './cloudflare-registrar-sync.service.js';
 
 const INT = 'int-1';
-const HODY = 'co-hody';
+const HODY = '00000000-0000-4000-8000-0000000000aa';
 
 function row(p: Partial<MonitoredDomain>): MonitoredDomain {
   return {
@@ -37,7 +37,8 @@ function cf(name: string, p: Partial<CloudflareRegistrarDomain> = {}): Cloudflar
 function harness(opts: {
   rows: MonitoredDomain[];
   cfDomains: CloudflareRegistrarDomain[];
-  slug?: string;
+  /** Resolved company id in config; '' = sync not configured. */
+  companyId?: string;
 }) {
   const rows = opts.rows;
   const matches = (r: MonitoredDomain, w: Record<string, unknown>) =>
@@ -71,7 +72,10 @@ function harness(opts: {
   };
   const integrations = {
     loadDriverContext: jest.fn(async () => ({
-      config: { accountId: 'acct', domainsCompanySlug: opts.slug ?? 'hody' },
+      config: {
+        accountId: 'acct',
+        ...(opts.companyId === '' ? {} : { domainsCompanyId: opts.companyId ?? HODY }),
+      },
       secret: { apiToken: 't' },
     })),
   };
@@ -94,9 +98,12 @@ function harness(opts: {
         return 'OK';
       }),
       // Mirrors the compare-and-delete Lua script.
-      eval: jest.fn(async (_script: string, _n: number, k: string, token: string) =>
-        kv.get(k) === token ? (kv.delete(k), 1) : 0,
-      ),
+      // Mirrors the two Lua scripts: compare-and-renew, compare-and-delete.
+      eval: jest.fn(async (script: string, _n: number, k: string, token: string) => {
+        if (kv.get(k) !== token) return 0;
+        if (!script.includes('expire')) kv.delete(k);
+        return 1;
+      }),
     },
   };
   const svc = new CloudflareRegistrarSyncService(
@@ -106,29 +113,49 @@ function harness(opts: {
     audit as never,
     env as never,
     redis as never,
+    { get: jest.fn() } as never,
   );
   return { svc, rows, audit, driver, kv };
 }
 
-describe('pickRow', () => {
-  it('prefers the row this integration owns, then default-company MANUAL, then any MANUAL', () => {
+describe('matchRow', () => {
+  const m = (rows: MonitoredDomain[]) => matchRow(rows, INT, 'acct', HODY);
+
+  it('updates the row this integration owns, wherever it was moved', () => {
     const owned = row({ id: 'owned', source: 'CLOUDFLARE', integrationId: INT, companyId: 'co-client' });
-    const manualHody = row({ id: 'mh' });
-    const manualClient = row({ id: 'mc', companyId: 'co-client' });
-    expect(pickRow([manualClient, manualHody, owned], INT, HODY)?.id).toBe('owned');
-    expect(pickRow([manualClient, manualHody], INT, HODY)?.id).toBe('mh');
-    expect(pickRow([manualClient], INT, HODY)?.id).toBe('mc');
+    expect(m([row({ id: 'mh' }), owned])).toEqual({ kind: 'update', row: owned });
   });
 
-  it('never takes a row another Cloudflare integration owns', () => {
-    const other = row({ source: 'CLOUDFLARE', integrationId: 'int-2' });
-    expect(pickRow([other], INT, HODY)).toBeUndefined();
+  it('leaves an archived owned row alone instead of recreating the domain', () => {
+    const archived = row({ source: 'CLOUDFLARE', integrationId: INT, archivedAt: new Date() });
+    expect(m([archived])).toEqual({ kind: 'skip', reason: 'archived' });
+  });
+
+  it('reclaims a row orphaned by a deleted integration for the same account only', () => {
+    const orphan = row({ id: 'o', source: 'CLOUDFLARE', integrationId: null, cloudflareAccountId: 'acct' });
+    expect(m([orphan])).toEqual({ kind: 'update', row: orphan });
+    const otherAccount = row({ source: 'CLOUDFLARE', integrationId: null, cloudflareAccountId: 'acct-2' });
+    expect(m([otherAccount]).kind).toBe('skip');
+  });
+
+  it('adopts manual rows only in the configured company', () => {
+    const mine = row({ id: 'mine' });
+    expect(m([mine])).toEqual({ kind: 'adopt', row: mine });
+    expect(m([row({ companyId: 'co-client' })])).toEqual({
+      kind: 'skip',
+      reason: 'exists in another company',
+    });
+  });
+
+  it('never takes another integration\'s row, and creates only when nothing exists', () => {
+    expect(m([row({ source: 'CLOUDFLARE', integrationId: 'int-2' })]).kind).toBe('skip');
+    expect(m([])).toEqual({ kind: 'create' });
   });
 });
 
 describe('CloudflareRegistrarSyncService.sync', () => {
   it('is a no-op when no domains company is configured', async () => {
-    const { svc, driver } = harness({ rows: [], cfDomains: [], slug: '' });
+    const { svc, driver } = harness({ rows: [], cfDomains: [], companyId: '' });
     await expect(svc.sync(INT, null)).resolves.toMatchObject({ enabled: false });
     expect(driver.listRegistrarDomains).not.toHaveBeenCalled();
   });
@@ -211,5 +238,22 @@ describe('CloudflareRegistrarSyncService.sync', () => {
     kv.clear();
     await svc.sync(INT, null);
     expect(kv.size).toBe(0);
+  });
+
+  it('does not recreate a domain whose synced row was archived', async () => {
+    const archived = row({ hostname: 'old.com', source: 'CLOUDFLARE', integrationId: INT, archivedAt: new Date() });
+    const { svc, rows } = harness({ rows: [archived], cfDomains: [cf('old.com')] });
+    await expect(svc.sync(INT, null)).resolves.toMatchObject({ created: 0, updated: 0 });
+    expect(rows).toHaveLength(1);
+  });
+
+  it('writes nothing if the lock was lost during the listing phase', async () => {
+    const { svc, rows, kv, driver } = harness({ rows: [], cfDomains: [cf('a.com')] });
+    driver.listRegistrarDomains.mockImplementationOnce(async () => {
+      kv.set(`lock:cf-registrar-sync:${INT}`, 'stolen');
+      return [cf('a.com')];
+    });
+    await expect(svc.sync(INT, null)).rejects.toThrow(/lost its lock/);
+    expect(rows).toHaveLength(0);
   });
 });

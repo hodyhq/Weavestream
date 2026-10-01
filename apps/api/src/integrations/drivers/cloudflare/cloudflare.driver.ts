@@ -20,6 +20,13 @@ export const cloudflareConfigSchema = z.object({
     .trim()
     .optional()
     .transform((v) => (v ? v : undefined)),
+  /**
+   * Resolved from `domainsCompanySlug` by the integrations controller when the
+   * config is saved, after checking the saver may manage domains there. The
+   * sync uses this id, never the slug: slugs are editable, and a client
+   * cannot supply it (the controller always overwrites or strips it).
+   */
+  domainsCompanyId: z.string().uuid().optional(),
 });
 export type CloudflareConfig = z.infer<typeof cloudflareConfigSchema>;
 
