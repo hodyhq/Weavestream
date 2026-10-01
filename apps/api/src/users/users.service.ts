@@ -458,11 +458,13 @@ export class UsersService {
     if (!user) throw new NotFoundException();
     if (!user.isActive) throw new ForbiddenException('User is deactivated');
 
-    const invite = await this.setupTokens.issue(id, actor.id);
     // A re-invite answers a lost password or a suspected compromise. Kill the
     // user's API keys now rather than at acceptance: the link may sit unused
     // for days, or never be used, and the keys would stay live throughout.
+    // Revoke *before* issuing so a failure in between can only leave the
+    // account more locked down, never with a fresh link and live keys.
     const apiKeysRevoked = await revokeApiKeysForUser(this.prisma, id);
+    const invite = await this.setupTokens.issue(id, actor.id);
 
     await this.audit.log({
       actorId: actor.id,

@@ -500,6 +500,25 @@ describe('PasswordsService — detail', () => {
     );
   });
 
+  it('withholds notes from an API key not minted with allowPasswordReveal', async () => {
+    // Notes are vault-encrypted (recovery codes, PINs). Returning them to a
+    // default key would make the reveal gate a GET away from bypassed.
+    const rows = () => [
+      passwordRow({ id: 'pwd-a', notesCiphertext: 'ENC({"type":"doc","text":"hi"})' }),
+    ];
+    const plain = makeStubs({ passwords: rows() });
+    const keyed = { ...OPERATOR, apiKeyId: 'k-1', apiKeyAllowPasswordReveal: false };
+    expect((await plain.svc.getDetail(keyed, 'co-1', 'pwd-a')).notes).toBeNull();
+    expect(plain.crypto.decrypt).not.toHaveBeenCalled();
+
+    const opted = makeStubs({ passwords: rows() });
+    const revealKey = { ...OPERATOR, apiKeyId: 'k-2', apiKeyAllowPasswordReveal: true };
+    expect((await opted.svc.getDetail(revealKey, 'co-1', 'pwd-a')).notes).toEqual({
+      type: 'doc',
+      text: 'hi',
+    });
+  });
+
   it('denies internal detail reads outside the allow-list', async () => {
     const { svc } = makeStubs({
       passwords: [

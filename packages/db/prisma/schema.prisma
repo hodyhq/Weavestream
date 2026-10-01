@@ -536,6 +536,9 @@ model AuditLog {
   userAgent  String?  @map("user_agent")
   before     Json?
   after      Json?
+  /// API key that performed the action, when it was not an interactive session.
+  /// No FK: the audit row must outlive the key.
+  apiKeyId   String?  @map("api_key_id") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at")
 
   actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
