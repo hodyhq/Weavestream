@@ -85,14 +85,27 @@ function harness(opts: {
       INTEGRATION_HTTP_BACKOFF_MS: 0,
     },
   };
+  const kv = new Map<string, string>();
+  const redis = {
+    client: {
+      set: jest.fn(async (k: string, v: string, ..._rest: unknown[]) => {
+        if (kv.has(k)) return null;
+        kv.set(k, v);
+        return 'OK';
+      }),
+      get: jest.fn(async (k: string) => kv.get(k) ?? null),
+      del: jest.fn(async (k: string) => (kv.delete(k) ? 1 : 0)),
+    },
+  };
   const svc = new CloudflareRegistrarSyncService(
     prisma as never,
     integrations as never,
     drivers as never,
     audit as never,
     env as never,
+    redis as never,
   );
-  return { svc, rows, audit, driver };
+  return { svc, rows, audit, driver, kv };
 }
 
 describe('pickRow', () => {
@@ -126,10 +139,10 @@ describe('CloudflareRegistrarSyncService.sync', () => {
       source: 'CLOUDFLARE',
       integrationId: INT,
     });
-    const manual = row({ id: 'manual', hostname: 'hody.dev' });
+    const manual = row({ id: 'manual', hostname: 'acme.dev' });
     const { svc, rows } = harness({
       rows: [moved, manual],
-      cfDomains: [cf('client.com'), cf('hody.dev'), cf('New.Example.ORG')],
+      cfDomains: [cf('client.com'), cf('acme.dev'), cf('New.Example.ORG')],
     });
 
     const res = await svc.sync(INT, 'u-1');
@@ -184,5 +197,17 @@ describe('CloudflareRegistrarSyncService.sync', () => {
       after: expect.objectContaining({ createdHostnames: ['a.com'] }),
     });
     expect(JSON.stringify(entry)).not.toContain('apiToken');
+  });
+
+  it('refuses to run twice at once for one integration, and releases the lock after', async () => {
+    const { svc, kv } = harness({ rows: [], cfDomains: [cf('a.com')] });
+    kv.set(`lock:cf-registrar-sync:${INT}`, 'someone-else');
+    await expect(svc.sync(INT, null)).rejects.toThrow(/already running/);
+    // The other run's lock is untouched.
+    expect(kv.get(`lock:cf-registrar-sync:${INT}`)).toBe('someone-else');
+
+    kv.clear();
+    await svc.sync(INT, null);
+    expect(kv.size).toBe(0);
   });
 });

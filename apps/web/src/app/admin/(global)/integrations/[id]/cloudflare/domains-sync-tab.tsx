@@ -26,11 +26,15 @@ export function DomainsSyncTab({ integration }: { integration: IntegrationDto })
 
   async function sync(): Promise<void> {
     setPending(true);
-    const res = await apiFetch<SyncResult>(
-      `/admin/integrations/${integration.id}/cloudflare/domains/sync`,
-      { method: 'POST' },
-    );
-    setPending(false);
+    let res: Awaited<ReturnType<typeof apiFetch<SyncResult>>>;
+    try {
+      res = await apiFetch<SyncResult>(
+        `/admin/integrations/${integration.id}/cloudflare/domains/sync`,
+        { method: 'POST' },
+      );
+    } finally {
+      setPending(false);
+    }
     if (!res.ok || !res.data) {
       const problem = res.problem as { detail?: string; title?: string } | undefined;
       toast.push(problem?.detail ?? problem?.title ?? 'Domain sync failed.', 'danger');

@@ -64,12 +64,12 @@ describe('CloudflareApiClient registrar', () => {
   it('maps a registered domain', async () => {
     stubFetch([
       [
-        'registrar/domains/hody.dev',
+        'registrar/domains/acme.dev',
         () =>
           respond(
             200,
             ok({
-              name: 'hody.dev',
+              name: 'acme.dev',
               cloudflare_registration: true,
               current_registrar: 'Cloudflare',
               auto_renew: true,
@@ -83,7 +83,7 @@ describe('CloudflareApiClient registrar', () => {
     ]);
     const d = await api.getRegistrarDomain(
       'acct',
-      'hody.dev',
+      'acme.dev',
       { hasZone: true, zoneNameservers: ['X.NS.CLOUDFLARE.COM'] },
       CTX,
     );

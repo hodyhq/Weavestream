@@ -1,11 +1,18 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { MonitoredDomain, Prisma } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, type MonitoredDomain } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { domainHostnameSchema } from '@weavestream/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditLogService } from '../../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../audit/audit-actions.js';
 import { EnvService } from '../../config/env.service.js';
+import { RedisService } from '../../redis/redis.service.js';
 import { IntegrationsService } from '../integrations.service.js';
 import { IntegrationDriverRegistry } from '../drivers/integration-driver.registry.js';
 import { cloudflareConfigSchema } from '../drivers/cloudflare/cloudflare.driver.js';
@@ -45,12 +52,38 @@ export class CloudflareRegistrarSyncService {
     private readonly drivers: IntegrationDriverRegistry,
     private readonly audit: AuditLogService,
     private readonly env: EnvService,
+    private readonly redis: RedisService,
   ) {}
 
   async sync(
     integrationId: string,
     actorId: string | null,
     meta: { ip: string; userAgent: string } = { ip: 'worker', userAgent: 'worker' },
+  ): Promise<RegistrarSyncResult> {
+    // One run per integration at a time: a manual sync overlapping the
+    // scheduled sweep would otherwise race on the find-then-create below.
+    // TTL bounds a crashed run; a slow account (~1 request per domain) fits.
+    const lockKey = `lock:cf-registrar-sync:${integrationId}`;
+    const token = randomUUID();
+    const got = await this.redis.client.set(lockKey, token, 'EX', 900, 'NX');
+    if (got !== 'OK') {
+      throw new ConflictException('A domain sync for this integration is already running.');
+    }
+    try {
+      return await this.run(integrationId, actorId, meta);
+    } finally {
+      // Release only our own lock (a run that outlived the TTL must not
+      // delete the next run's).
+      if ((await this.redis.client.get(lockKey)) === token) {
+        await this.redis.client.del(lockKey);
+      }
+    }
+  }
+
+  private async run(
+    integrationId: string,
+    actorId: string | null,
+    meta: { ip: string; userAgent: string },
   ): Promise<RegistrarSyncResult> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
@@ -147,16 +180,25 @@ export class CloudflareRegistrarSyncService {
           `Skipping ${hostname}: already synced by another Cloudflare integration (integration=${integrationId})`,
         );
       } else {
-        await this.prisma.monitoredDomain.create({
-          data: {
-            ...registrarData,
-            companyId: company.id,
-            hostname,
-            createdBy: actorId,
-          },
-        });
-        result.created += 1;
-        createdNames.push(hostname);
+        try {
+          await this.prisma.monitoredDomain.create({
+            data: {
+              ...registrarData,
+              companyId: company.id,
+              hostname,
+              createdBy: actorId,
+            },
+          });
+          result.created += 1;
+          createdNames.push(hostname);
+        } catch (err) {
+          // Someone added the same hostname by hand mid-run. Leave it; the
+          // next sweep adopts it through pickRow.
+          if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) {
+            throw err;
+          }
+          this.logger.warn(`Skipping ${hostname}: created concurrently (integration=${integrationId})`);
+        }
       }
     }
 

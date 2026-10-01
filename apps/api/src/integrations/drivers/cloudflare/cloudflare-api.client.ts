@@ -126,6 +126,9 @@ interface CloudflareRegistrarRaw {
 const REGISTRAR_AUTH_HINT =
   'Registrar sync needs the API token to carry Account » Registrar: Domains » Read and Zone » Zone » Read, in addition to the Zero Trust permission the IP-list feature uses.';
 
+/** Pagination ceiling (50/page → 10,000 domains); hitting it is an error, not a truncation. */
+const MAX_PAGES = 200;
+
 /** Zone states that still represent a domain the account controls. */
 const LIVE_ZONE_STATUSES = new Set(['active', 'pending', 'initializing']);
 
@@ -267,7 +270,7 @@ export class CloudflareApiClient {
   ): Promise<Map<string, { hasZone: boolean; zoneNameservers: string[] }>> {
     const out = new Map<string, { hasZone: boolean; zoneNameservers: string[] }>();
 
-    for (let page = 1; page <= 200; page += 1) {
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
       const url = new URL(`${CLOUDFLARE_API_BASE}/zones`);
       url.searchParams.set('account.id', accountId);
       url.searchParams.set('per_page', '50');
@@ -283,11 +286,12 @@ export class CloudflareApiClient {
       }
       const totalPages = env.result_info?.total_pages ?? 1;
       if (zones.length === 0 || page >= totalPages) break;
+      if (page === MAX_PAGES) throw new Error(`Cloudflare zone list exceeded ${MAX_PAGES} pages`);
     }
 
     // Registrar list: paginate until an empty page rather than trusting
     // total_pages, and union in anything the zone list did not have.
-    for (let page = 1; page <= 200; page += 1) {
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
       const url = new URL(
         `${CLOUDFLARE_API_BASE}/accounts/${encodeURIComponent(accountId)}/registrar/domains`,
       );
@@ -302,6 +306,8 @@ export class CloudflareApiClient {
         const name = (r.name ?? '').toLowerCase();
         if (name && !out.has(name)) out.set(name, { hasZone: false, zoneNameservers: [] });
       }
+      // A partial list would stamp the unlisted remainder as missing.
+      if (page === MAX_PAGES) throw new Error(`Cloudflare registrar list exceeded ${MAX_PAGES} pages`);
     }
     return out;
   }
