@@ -166,6 +166,9 @@ export class UserThrottlerGuard extends ThrottlerGuard {
         }
         await this.audit.log({
           actorId,
+          // Guards run before TenantContextInterceptor, so the context
+          // fallback in AuditLogService is empty here; pass it explicitly.
+          apiKeyId: req.user?.apiKeyId ?? null,
           action: AUDIT_ACTIONS.security.ratelimitBlocked,
           entityType: 'RateLimit',
           entityId: null,
