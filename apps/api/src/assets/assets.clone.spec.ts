@@ -208,6 +208,19 @@ describe('AssetsService.clone', () => {
     await expect(h.svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: true }, META)).rejects.toThrow(msg);
     expect(h.create).not.toHaveBeenCalled();
   });
+
+  it('keeps the original when an attachment fails to copy during a move', async () => {
+    const { svc, prisma, archive } = harness();
+    prisma.upload.update.mockRejectedValueOnce(new Error('db blip'));
+    const res = await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: true }, META);
+    expect(res.originalArchived).toBe(false);
+    expect(archive).not.toHaveBeenCalled();
+    // The unattached copy is retired.
+    expect(prisma.upload.updateMany).toHaveBeenCalledWith({
+      where: { id: 'up-new-2', companyId: DST, attachedToId: null },
+      data: { deletedAt: expect.any(Date) },
+    });
+  });
 });
 
 describe('AssetsController clone authorisation', () => {

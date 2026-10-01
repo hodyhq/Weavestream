@@ -1467,8 +1467,9 @@ export class AssetsService {
     }
 
     // Files on the asset's attachments panel (not in a FILE field) come too.
-    // Best effort: the copy already exists, so a failure here is logged and
-    // reported as a smaller file count, never as a failed copy.
+    // The copy already exists, so a failure here never fails it; but it does
+    // stop a move from archiving the original, which still holds the file.
+    let attachmentsIncomplete = false;
     try {
       const panel = await this.prisma.upload.findMany({
         where: {
@@ -1481,12 +1482,32 @@ export class AssetsService {
         select: { id: true },
       });
       for (const u of panel) {
-        const newId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, u.id, targetCompanyId, meta);
-        if (!newId) continue;
-        await this.prisma.upload.update({ where: { id: newId }, data: { attachedToId: created.id } });
-        copiedUploads.push(newId);
+        let newId: string | null = null;
+        try {
+          newId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, u.id, targetCompanyId, meta);
+          if (!newId) continue;
+          await this.prisma.upload.update({ where: { id: newId }, data: { attachedToId: created.id } });
+          copiedUploads.push(newId);
+        } catch (err) {
+          attachmentsIncomplete = true;
+          if (newId) {
+            // Copied but not attached: retire it so the reaper removes it.
+            await this.prisma.upload
+              .updateMany({
+                where: { id: newId, companyId: targetCompanyId, attachedToId: null },
+                data: { deletedAt: new Date() },
+              })
+              .catch((e: unknown) =>
+                this.logger.error(`Could not retire unattached copy ${newId}: ${e instanceof Error ? e.message : String(e)}`),
+              );
+          }
+          this.logger.warn(
+            `Copy ${created.id} of ${id}: attachment ${u.id} not copied: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
     } catch (err) {
+      attachmentsIncomplete = true;
       this.logger.warn(
         `Copy ${created.id} of ${id}: some attachments were not copied: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -1496,7 +1517,9 @@ export class AssetsService {
     // failed provenance row may report the whole operation as failed: the
     // caller would retry and create a second copy.
     let originalArchived = false;
-    if (opts.archiveOriginal) {
+    if (opts.archiveOriginal && attachmentsIncomplete) {
+      this.logger.warn(`Not archiving ${id}: some attachments did not copy to ${created.id}.`);
+    } else if (opts.archiveOriginal) {
       try {
         await this.archive(actor, sourceCompanyId, id, meta);
         originalArchived = true;
