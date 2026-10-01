@@ -17,6 +17,12 @@ import { IntegrationsService } from '../integrations.service.js';
 import { IntegrationDriverRegistry } from '../drivers/integration-driver.registry.js';
 import { cloudflareConfigSchema } from '../drivers/cloudflare/cloudflare.driver.js';
 
+const LOCK_LEASE_SEC = 900;
+const RUN_DEADLINE_MS = 600_000;
+/** Delete KEYS[1] only if it still holds ARGV[1] (our token). */
+const RELEASE_IF_OWNER =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
 export interface RegistrarSyncResult {
   /** False when the integration has no `domainsCompanySlug` (sync off). */
   enabled: boolean;
@@ -62,21 +68,27 @@ export class CloudflareRegistrarSyncService {
   ): Promise<RegistrarSyncResult> {
     // One run per integration at a time: a manual sync overlapping the
     // scheduled sweep would otherwise race on the find-then-create below.
-    // TTL bounds a crashed run; a slow account (~1 request per domain) fits.
+    // The lease bounds a crashed run; run() stops writing at RUN_DEADLINE_MS,
+    // well inside it, so it never writes after the lock could have expired.
     const lockKey = `lock:cf-registrar-sync:${integrationId}`;
     const token = randomUUID();
-    const got = await this.redis.client.set(lockKey, token, 'EX', 900, 'NX');
+    const got = await this.redis.client.set(lockKey, token, 'EX', LOCK_LEASE_SEC, 'NX');
     if (got !== 'OK') {
       throw new ConflictException('A domain sync for this integration is already running.');
     }
     try {
-      return await this.run(integrationId, actorId, meta);
+      return await this.run(integrationId, actorId, meta, Date.now() + RUN_DEADLINE_MS);
     } finally {
-      // Release only our own lock (a run that outlived the TTL must not
-      // delete the next run's).
-      if ((await this.redis.client.get(lockKey)) === token) {
-        await this.redis.client.del(lockKey);
-      }
+      // Compare-and-delete in one step so we can only ever release our own
+      // lock. A failure here must not mask the run's result; the lease
+      // expires on its own.
+      await this.redis.client
+        .eval(RELEASE_IF_OWNER, 1, lockKey, token)
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `Could not release registrar sync lock (integration=${integrationId}): ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
     }
   }
 
@@ -84,6 +96,7 @@ export class CloudflareRegistrarSyncService {
     integrationId: string,
     actorId: string | null,
     meta: { ip: string; userAgent: string },
+    deadline: number,
   ): Promise<RegistrarSyncResult> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
@@ -136,6 +149,12 @@ export class CloudflareRegistrarSyncService {
     const adoptedNames: string[] = [];
 
     for (const d of domains) {
+      if (Date.now() > deadline) {
+        // Past here the lock may lapse; stop rather than race a new run.
+        // Rows not reached are untouched and picked up next sweep. No
+        // missing-stamping either, since `seen` is incomplete.
+        throw new Error(`Registrar sync exceeded its time budget (integration=${integrationId})`);
+      }
       const parsed = domainHostnameSchema.safeParse(d.name);
       if (!parsed.success) {
         this.logger.warn(`Skipping unparseable Cloudflare domain name (integration=${integrationId})`);

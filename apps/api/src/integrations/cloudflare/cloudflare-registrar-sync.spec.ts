@@ -93,8 +93,10 @@ function harness(opts: {
         kv.set(k, v);
         return 'OK';
       }),
-      get: jest.fn(async (k: string) => kv.get(k) ?? null),
-      del: jest.fn(async (k: string) => (kv.delete(k) ? 1 : 0)),
+      // Mirrors the compare-and-delete Lua script.
+      eval: jest.fn(async (_script: string, _n: number, k: string, token: string) =>
+        kv.get(k) === token ? (kv.delete(k), 1) : 0,
+      ),
     },
   };
   const svc = new CloudflareRegistrarSyncService(
