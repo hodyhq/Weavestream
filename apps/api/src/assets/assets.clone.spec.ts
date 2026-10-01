@@ -11,14 +11,26 @@ const META = { ip: '198.51.100.7', userAgent: 'jest' };
 const LAYOUT = {
   id: 'layout-1',
   fields: [
-    { slug: 'hostname', fieldType: 'TEXT', archivedAt: null },
-    { slug: 'linked', fieldType: 'ASSET_REFERENCE', archivedAt: null },
-    { slug: 'receipt', fieldType: 'FILE', archivedAt: null },
-    { slug: 'old', fieldType: 'TEXT', archivedAt: new Date() },
+    { id: 'f-host', slug: 'hostname', name: 'Hostname', fieldType: 'TEXT', archivedAt: null, isRequired: false },
+    { id: 'f-link', slug: 'linked', name: 'Location', fieldType: 'ASSET_REFERENCE', archivedAt: null, isRequired: false },
+    { id: 'f-file', slug: 'receipt', name: 'Receipt', fieldType: 'FILE', archivedAt: null, isRequired: false },
+    { id: 'f-secret', slug: 'secret_note', name: 'Internal', fieldType: 'TEXT', archivedAt: null, isRequired: false },
+    { id: 'f-old', slug: 'old', name: 'Old', fieldType: 'TEXT', archivedAt: new Date(), isRequired: false },
   ],
 };
 
-function harness(opts: { archived?: boolean; createFails?: boolean; archiveFails?: boolean } = {}) {
+function harness(
+  opts: {
+    archived?: boolean;
+    createFails?: boolean;
+    archiveFails?: boolean;
+    hiddenValue?: boolean;
+    synced?: number;
+    passwords?: number;
+    linkAlive?: boolean;
+    requiredLink?: boolean;
+  } = {},
+) {
   const updateMany = jest.fn().mockResolvedValue({ count: 1 });
   const prisma = {
     asset: {
@@ -29,11 +41,21 @@ function harness(opts: { archived?: boolean; createFails?: boolean; archiveFails
         externalId: 'ext-1',
         externalSource: 'breeze',
         archivedAt: opts.archived ? new Date() : null,
-        assetLayout: LAYOUT,
-        fieldValues: [],
+        assetLayout: opts.requiredLink
+          ? { ...LAYOUT, fields: LAYOUT.fields.map((f) => (f.slug === 'linked' ? { ...f, isRequired: true } : f)) }
+          : LAYOUT,
+        // A value in a field serialize() hid from this actor.
+        fieldValues: opts.hiddenValue ? [{ assetFieldId: 'f-secret', value: 'staff only' }] : [],
       }),
+      findMany: jest.fn().mockResolvedValue(opts.linkAlive === false ? [] : [{ id: 'a-9' }]),
     },
-    upload: { updateMany },
+    upload: {
+      updateMany,
+      findMany: jest.fn().mockResolvedValue([{ id: 'up-panel' }]),
+      update: jest.fn().mockResolvedValue({}),
+    },
+    integrationSyncRecord: { count: jest.fn().mockResolvedValue(opts.synced ?? 0) },
+    password: { count: jest.fn().mockResolvedValue(opts.passwords ?? 0) },
   };
   let n = 0;
   const uploads = { copyToCompany: jest.fn(async () => `up-new-${++n}`) };
@@ -69,7 +91,7 @@ function harness(opts: { archived?: boolean; createFails?: boolean; archiveFails
     .mockImplementation(async () =>
       opts.archiveFails ? Promise.reject(new Error('lock timeout')) : ({} as never),
     );
-  return { svc, uploads, create, archive, updateMany, audit };
+  return { svc, uploads, create, archive, updateMany, audit, prisma };
 }
 
 describe('AssetsService.clone', () => {
@@ -77,7 +99,7 @@ describe('AssetsService.clone', () => {
     const { svc, uploads, create, archive } = harness();
     await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: false }, META);
 
-    expect(uploads.copyToCompany).toHaveBeenCalledWith(ACTOR, SRC, 'up-1', DST, META);
+    expect(uploads.copyToCompany).toHaveBeenCalledWith(ACTOR, SRC, 'a-1', 'up-1', DST, META);
     expect(create).toHaveBeenCalledWith(
       ACTOR,
       DST,
@@ -148,6 +170,43 @@ describe('AssetsService.clone', () => {
     await expect(
       harness({ archived: true }).svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: false }, META),
     ).rejects.toThrow(/Restore the asset/);
+  });
+
+  it('copies attachments-panel files and attaches them to the copy', async () => {
+    const { svc, uploads, prisma } = harness();
+    await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: false }, META);
+    expect(uploads.copyToCompany).toHaveBeenCalledWith(ACTOR, SRC, 'a-1', 'up-panel', DST, META);
+    expect(prisma.upload.update).toHaveBeenCalledWith({ where: { id: 'up-new-2' }, data: { attachedToId: 'a-new' } });
+  });
+
+  it('drops a file that is gone or not the asset\'s instead of failing the copy', async () => {
+    const { svc, uploads, create } = harness();
+    const { NotFoundException } = await import('@nestjs/common');
+    uploads.copyToCompany.mockRejectedValueOnce(new NotFoundException('File not found'));
+    await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: false }, META);
+    expect((create.mock.calls[0]![2] as { fieldValues: Record<string, unknown> }).fieldValues.receipt).toEqual([]);
+  });
+
+  it('drops same-company links whose target no longer exists', async () => {
+    const { svc, create } = harness({ linkAlive: false });
+    await svc.clone(ACTOR, SRC, 'a-1', SRC, { archiveOriginal: false }, META);
+    expect((create.mock.calls[0]![2] as { fieldValues: Record<string, unknown> }).fieldValues.linked).toBeNull();
+  });
+
+  it('says plainly why a required link blocks a cross-company copy', async () => {
+    await expect(
+      harness({ requiredLink: true }).svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: false }, META),
+    ).rejects.toThrow(/"Location" is a required link/);
+  });
+
+  it.each([
+    [{ hiddenValue: true }, /hidden from you/],
+    [{ synced: 1 }, /kept in sync by an integration/],
+    [{ passwords: 2 }, /2 linked passwords/],
+  ])('refuses a move that would lose or undo something (%o)', async (o, msg) => {
+    const h = harness(o);
+    await expect(h.svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: true }, META)).rejects.toThrow(msg);
+    expect(h.create).not.toHaveBeenCalled();
   });
 });
 

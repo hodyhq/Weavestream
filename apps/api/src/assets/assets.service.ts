@@ -1386,33 +1386,62 @@ export class AssetsService {
     if (asset.archivedAt) throw new BadRequestException('Restore the asset before copying it.');
 
     const layout = asset.assetLayout;
-    const values = {
-      ...this.serialize(asset, layout, asset.fieldValues, actor.role).fieldValues,
-    };
+    const visible = this.serialize(asset, layout, asset.fieldValues, actor.role).fieldValues;
+    const values: Record<string, unknown> = { ...visible };
+
+    if (opts.archiveOriginal) await this.assertMovable(asset, layout, visible, sourceCompanyId);
+
+    for (const field of layout.fields) {
+      if (field.archivedAt !== null || field.fieldType !== 'ASSET_REFERENCE') continue;
+      if (!(field.slug in values) || values[field.slug] == null) continue;
+      if (crossCompany) {
+        // Links point at the source company's records and cannot travel.
+        if (field.isRequired) {
+          throw new BadRequestException(
+            `"${field.name}" is a required link to another asset, so this asset cannot be copied to another company.`,
+          );
+        }
+        delete values[field.slug];
+      } else {
+        // Same company: keep only links whose target still exists (a purged
+        // target leaves its id behind in field values, which reads hide but
+        // create() would reject).
+        const raw = values[field.slug];
+        const ids = (Array.isArray(raw) ? raw : [raw]).filter((v): v is string => typeof v === 'string');
+        const alive = new Set(
+          (
+            await this.prisma.asset.findMany({
+              where: { id: { in: ids }, companyId: sourceCompanyId },
+              select: { id: true },
+            })
+          ).map((r) => r.id),
+        );
+        const kept = ids.filter((x) => alive.has(x));
+        values[field.slug] = Array.isArray(raw) ? kept : (kept[0] ?? null);
+      }
+    }
+
     const copiedUploads: string[] = [];
+    const fieldUploadIds = new Set<string>();
     let created: SerializedAsset;
     try {
       for (const field of layout.fields) {
-        if (field.archivedAt !== null || !(field.slug in values)) continue;
-        if (field.fieldType === 'ASSET_REFERENCE' && crossCompany) {
-          delete values[field.slug];
-        } else if (field.fieldType === 'FILE' && Array.isArray(values[field.slug])) {
-          const entries: FileFieldEntry[] = [];
-          for (const entry of values[field.slug] as FileFieldEntry[]) {
-            if (!entry?.uploadId) continue;
-            const uploadId = await this.uploads.copyToCompany(
-              actor,
-              sourceCompanyId,
-              entry.uploadId,
-              targetCompanyId,
-              meta,
-            );
-            copiedUploads.push(uploadId);
-            entries.push({ ...entry, uploadId });
-          }
-          values[field.slug] = entries;
+        if (field.archivedAt !== null || field.fieldType !== 'FILE') continue;
+        if (!Array.isArray(values[field.slug])) continue;
+        const entries: FileFieldEntry[] = [];
+        for (const entry of values[field.slug] as FileFieldEntry[]) {
+          if (!entry?.uploadId) continue;
+          fieldUploadIds.add(entry.uploadId);
+          const uploadId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, entry.uploadId, targetCompanyId, meta);
+          if (!uploadId) continue; // deleted, or not this asset's file: dropped
+          copiedUploads.push(uploadId);
+          entries.push({ ...entry, uploadId });
         }
+        values[field.slug] = entries;
       }
+      // ponytail: create() commits before its own audit row and final read;
+      // if one of those throws, the copy exists but is reported as failed.
+      // Rare (audit/DB blip); a create-with-idempotency-key would close it.
       created = await this.create(
         actor,
         targetCompanyId,
@@ -1428,9 +1457,39 @@ export class AssetsService {
             where: { id: { in: copiedUploads }, companyId: targetCompanyId, attachedToId: null },
             data: { deletedAt: new Date() },
           })
-          .catch(() => undefined);
+          .catch((cleanupErr: unknown) =>
+            this.logger.error(
+              `Could not retire ${copiedUploads.length} copied upload(s) after a failed clone of ${id}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`,
+            ),
+          );
       }
       throw err;
+    }
+
+    // Files on the asset's attachments panel (not in a FILE field) come too.
+    // Best effort: the copy already exists, so a failure here is logged and
+    // reported as a smaller file count, never as a failed copy.
+    try {
+      const panel = await this.prisma.upload.findMany({
+        where: {
+          companyId: sourceCompanyId,
+          attachedToType: 'asset',
+          attachedToId: id,
+          deletedAt: null,
+          id: { notIn: Array.from(fieldUploadIds) },
+        },
+        select: { id: true },
+      });
+      for (const u of panel) {
+        const newId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, u.id, targetCompanyId, meta);
+        if (!newId) continue;
+        await this.prisma.upload.update({ where: { id: newId }, data: { attachedToId: created.id } });
+        copiedUploads.push(newId);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Copy ${created.id} of ${id}: some attachments were not copied: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     // The copy is committed from here on. Neither a failed archive nor a
@@ -1474,6 +1533,58 @@ export class AssetsService {
         );
       });
     return { ...created, originalArchived };
+  }
+
+  /**
+   * A move archives the original, so refuse the cases where that would lose
+   * or undo something rather than report a clean "moved".
+   */
+  private async assertMovable(
+    asset: { id: string; fieldValues: AssetFieldValue[] },
+    layout: LayoutWithFields,
+    visible: Record<string, unknown>,
+    companyId: string,
+  ): Promise<void> {
+    const hidden = asset.fieldValues.some((v) => {
+      const f = layout.fields.find((x) => x.id === v.assetFieldId);
+      return f && f.archivedAt === null && !(f.slug in visible) && v.value !== null;
+    });
+    if (hidden) {
+      throw new ForbiddenException(
+        'Some fields on this asset are hidden from you, so it can only be copied, not moved.',
+      );
+    }
+    const [synced, passwords] = await Promise.all([
+      this.prisma.integrationSyncRecord.count({ where: { assetId: asset.id } }),
+      this.prisma.password.count({ where: { companyId, assetId: asset.id, archivedAt: null } }),
+    ]);
+    if (synced > 0) {
+      throw new BadRequestException(
+        'This asset is kept in sync by an integration, which would restore the original after a move. Copy it instead.',
+      );
+    }
+    if (passwords > 0) {
+      throw new BadRequestException(
+        `This asset has ${passwords} linked password${passwords === 1 ? '' : 's'}, which are not copied and would be archived with the original. Copy it instead, or move the passwords first.`,
+      );
+    }
+  }
+
+  /** Copy one of the source asset's files, or null if it is gone or not the asset's. */
+  private async copyUploadOrSkip(
+    actor: AuthedUser,
+    sourceCompanyId: string,
+    sourceAssetId: string,
+    uploadId: string,
+    targetCompanyId: string,
+    meta: AuditMeta,
+  ): Promise<string | null> {
+    try {
+      return await this.uploads.copyToCompany(actor, sourceCompanyId, sourceAssetId, uploadId, targetCompanyId, meta);
+    } catch (err) {
+      if (err instanceof NotFoundException) return null;
+      throw err;
+    }
   }
 
   /**

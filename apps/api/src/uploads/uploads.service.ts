@@ -184,6 +184,9 @@ const SIGNATURELESS_DECLARED_MIMES: ReadonlySet<string> = new Set([
  */
 const MAX_CONCURRENT_THUMBNAILS = 2;
 
+/** Ceiling for copying a stored thumbnail (generated 300px webp). */
+const THUMB_COPY_MAX_BYTES = 5 * 1024 * 1024;
+
 @Injectable()
 export class UploadsService {
   private readonly logger = new Logger(UploadsService.name);
@@ -840,36 +843,48 @@ export class UploadsService {
   async copyToCompany(
     actor: AuthedUser,
     fromCompanyId: string,
+    sourceAssetId: string,
     uploadId: string,
     toCompanyId: string,
     meta: { ip: string; userAgent: string },
   ): Promise<string> {
+    // Only a file that belongs to the source asset (or an asset-dropzone
+    // upload not yet linked) may be copied. A forged id pointing at a
+    // password attachment or a hidden article image would otherwise be
+    // re-published as a readable asset file (IDOR).
     const src = await this.prisma.upload.findFirst({
-      where: { id: uploadId, companyId: fromCompanyId, deletedAt: null },
+      where: {
+        id: uploadId,
+        companyId: fromCompanyId,
+        deletedAt: null,
+        attachedToType: 'asset',
+        OR: [{ attachedToId: sourceAssetId }, { attachedToId: null }],
+      },
     });
     if (!src) throw new NotFoundException('File not found');
 
     const newId = randomUUID();
     const storageKey = this.storage.uploadKey(toCompanyId, newId, src.filename);
     const written: string[] = [];
-    const copy = async (fromKey: string, toKey: string) => {
+    const copy = async (fromKey: string, toKey: string, maxBytes: number) => {
       const obj = await this.storage.getObjectStream(fromCompanyId, fromKey);
       if (!obj) throw new NotFoundException('File content is missing');
       await this.storage.putObjectStream(toCompanyId, toKey, obj.body, {
         contentType: src.mimeType,
-        // Same bytes as the source; the original size is the ceiling.
-        maxBytes: src.sizeBytes,
+        maxBytes,
       });
       written.push(toKey);
     };
 
     try {
       await this.storage.ensureBucket(toCompanyId);
-      await copy(src.storageKey, storageKey);
+      // Same bytes as the source, so its size is the ceiling.
+      await copy(src.storageKey, storageKey, src.sizeBytes);
       let thumbnailKey: string | null = null;
       if (src.thumbnailKey) {
         thumbnailKey = this.storage.thumbnailKey(toCompanyId, newId);
-        await copy(src.thumbnailKey, thumbnailKey);
+        // A generated webp can be larger than a tiny original; own cap.
+        await copy(src.thumbnailKey, thumbnailKey, THUMB_COPY_MAX_BYTES);
       }
       await this.prisma.upload.create({
         data: {

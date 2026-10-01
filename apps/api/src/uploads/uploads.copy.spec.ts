@@ -18,12 +18,23 @@ function harness(opts: { row?: object | null; createFails?: boolean } = {}) {
     width: 1,
     height: 1,
     thumbnailKey: 'co-src/thumbs/up-1.webp',
+    attachedToType: 'asset',
+    attachedToId: 'a-1',
   };
   const prisma = {
     upload: {
       // Honour the tenant filter the way the DB would.
-      findFirst: jest.fn(async ({ where }: { where: { id: string; companyId: string } }) =>
-        opts.row === null ? null : where.companyId === src.companyId && where.id === src.id ? src : null,
+      // Honour the tenant + ownership filter the way the DB would.
+      findFirst: jest.fn(
+        async ({ where }: { where: { id: string; companyId: string; attachedToType: string; OR: { attachedToId: string | null }[] } }) =>
+          opts.row === null
+            ? null
+            : where.companyId === src.companyId &&
+                where.id === src.id &&
+                where.attachedToType === src.attachedToType &&
+                where.OR.some((o) => o.attachedToId === src.attachedToId)
+              ? src
+              : null,
       ),
       create: jest.fn(async () => {
         if (opts.createFails) throw new Error('db down');
@@ -47,7 +58,7 @@ function harness(opts: { row?: object | null; createFails?: boolean } = {}) {
 describe('UploadsService.copyToCompany', () => {
   it('copies the file and thumbnail into the target company as an unattached upload', async () => {
     const { svc, prisma, storage, audit } = harness();
-    const id = await svc.copyToCompany(ACTOR, 'co-src', 'up-1', 'co-dst', META);
+    const id = await svc.copyToCompany(ACTOR, 'co-src', 'a-1', 'up-1', 'co-dst', META);
 
     expect(storage.putObjectStream).toHaveBeenCalledWith(
       'co-dst',
@@ -55,7 +66,11 @@ describe('UploadsService.copyToCompany', () => {
       expect.anything(),
       { contentType: 'application/pdf', maxBytes: 4 },
     );
-    expect(storage.putObjectStream).toHaveBeenCalledWith('co-dst', `co-dst/thumbs/${id}.webp`, expect.anything(), expect.anything());
+    // The thumbnail gets its own cap: a webp can outweigh a tiny original.
+    expect(storage.putObjectStream).toHaveBeenCalledWith('co-dst', `co-dst/thumbs/${id}.webp`, expect.anything(), {
+      contentType: 'application/pdf',
+      maxBytes: 5 * 1024 * 1024,
+    });
     expect(prisma.upload.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ id, companyId: 'co-dst', attachedToId: null, sha256: 'abc' }),
     });
@@ -65,7 +80,7 @@ describe('UploadsService.copyToCompany', () => {
   it('will not copy an upload that belongs to a different company than claimed', async () => {
     // A forged uploadId in a field value must not pull a file out of a third tenant.
     const { svc, storage } = harness();
-    await expect(svc.copyToCompany(ACTOR, 'co-other', 'up-1', 'co-dst', META)).rejects.toBeInstanceOf(
+    await expect(svc.copyToCompany(ACTOR, 'co-other', 'a-1', 'up-1', 'co-dst', META)).rejects.toBeInstanceOf(
       NotFoundException,
     );
     expect(storage.getObjectStream).not.toHaveBeenCalled();
@@ -73,7 +88,15 @@ describe('UploadsService.copyToCompany', () => {
 
   it('removes the written bytes if the database row cannot be created', async () => {
     const { svc, storage } = harness({ createFails: true });
-    await expect(svc.copyToCompany(ACTOR, 'co-src', 'up-1', 'co-dst', META)).rejects.toThrow('db down');
+    await expect(svc.copyToCompany(ACTOR, 'co-src', 'a-1', 'up-1', 'co-dst', META)).rejects.toThrow('db down');
     expect(storage.deleteObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('will not copy a file that is not this asset\'s (e.g. a password attachment)', async () => {
+    const { svc, storage } = harness();
+    await expect(svc.copyToCompany(ACTOR, 'co-src', 'a-other', 'up-1', 'co-dst', META)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(storage.getObjectStream).not.toHaveBeenCalled();
   });
 });

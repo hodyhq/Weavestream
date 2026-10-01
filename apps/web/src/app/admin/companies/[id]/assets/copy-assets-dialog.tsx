@@ -143,9 +143,10 @@ export function CopyAssetsDialog({
           }
         />
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.5 }}>
-          Fields and files are copied. Links to other assets are dropped when the company
-          changes, because they point at this company&apos;s records. Hidden fields you
-          cannot see are not copied.
+          Fields and files (including attachments) are copied. Links to other assets are
+          dropped when the company changes. Linked passwords and integration sync stay with
+          the original, so assets that have them can be copied but not moved. Fields hidden
+          from you are not copied.
         </p>
       </div>
     </Dialog>
