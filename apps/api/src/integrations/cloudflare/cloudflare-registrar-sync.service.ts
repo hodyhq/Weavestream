@@ -78,7 +78,8 @@ export class CloudflareRegistrarSyncService {
    * scheduled sweep, rather than inline in the request: the sync touches
    * domains across companies, which the request's tenant scope (correctly)
    * would refuse for anyone short of full global access. The fixed job id
-   * collapses repeat clicks while one is queued or running.
+   * collapses repeat clicks while one is queued or running; failed jobs are
+   * removed at once, or BullMQ would silently ignore every later click.
    */
   async enqueue(integrationId: string, actorId: string): Promise<{ queued: true }> {
     const integration = await this.prisma.integration.findUnique({
@@ -101,7 +102,7 @@ export class CloudflareRegistrarSyncService {
     await this.queues.get(QueueNames.cloudflareDriftSweep).add(
       CloudflareDriftSweepJobNames.manual,
       { integrationId, triggeredBy: actorId },
-      { jobId: `manual-domains-${integrationId}`, removeOnComplete: true, removeOnFail: 50 },
+      { jobId: `manual-domains-${integrationId}`, removeOnComplete: true, removeOnFail: true },
     );
     return { queued: true };
   }
