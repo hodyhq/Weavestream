@@ -148,13 +148,17 @@ export class CloudflareRegistrarSyncService {
     const createdNames: string[] = [];
     const adoptedNames: string[] = [];
 
-    for (const d of domains) {
+    // Checked immediately before every write: past the deadline the lock may
+    // lapse, so stop rather than race a new run. Rows not reached are left
+    // untouched for the next sweep, and nothing is stamped missing because
+    // `seen` is incomplete.
+    const assertBudget = () => {
       if (Date.now() > deadline) {
-        // Past here the lock may lapse; stop rather than race a new run.
-        // Rows not reached are untouched and picked up next sweep. No
-        // missing-stamping either, since `seen` is incomplete.
         throw new Error(`Registrar sync exceeded its time budget (integration=${integrationId})`);
       }
+    };
+
+    for (const d of domains) {
       const parsed = domainHostnameSchema.safeParse(d.name);
       if (!parsed.success) {
         this.logger.warn(`Skipping unparseable Cloudflare domain name (integration=${integrationId})`);
@@ -185,6 +189,7 @@ export class CloudflareRegistrarSyncService {
 
       if (row) {
         const adopting = row.source === 'MANUAL';
+        assertBudget();
         await this.prisma.monitoredDomain.update({ where: { id: row.id }, data: registrarData });
         if (adopting) {
           result.adopted += 1;
@@ -200,6 +205,7 @@ export class CloudflareRegistrarSyncService {
         );
       } else {
         try {
+          assertBudget();
           await this.prisma.monitoredDomain.create({
             data: {
               ...registrarData,
@@ -229,6 +235,7 @@ export class CloudflareRegistrarSyncService {
     });
     const gone = owned.filter((r) => !seen.has(r.hostname));
     if (gone.length > 0) {
+      assertBudget();
       await this.prisma.monitoredDomain.updateMany({
         where: { id: { in: gone.map((r) => r.id) } },
         data: { registrarMissingSince: now },
