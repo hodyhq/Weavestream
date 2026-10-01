@@ -26,6 +26,9 @@ export function DomainsSyncTab({ integration }: { integration: IntegrationDto })
         `/admin/integrations/${integration.id}/cloudflare/domains/sync`,
         { method: 'POST' },
       );
+    } catch {
+      toast.push('Could not start the domain sync.', 'danger');
+      return;
     } finally {
       setPending(false);
     }
