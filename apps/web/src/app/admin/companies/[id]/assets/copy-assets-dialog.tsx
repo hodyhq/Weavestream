@@ -69,15 +69,16 @@ export function CopyAssetsDialog({
         }
         const d = res.data as { originalArchived?: boolean; attachmentsIncomplete?: boolean };
         const kept = move && !d.originalArchived;
+        const partial = kept || !!d.attachmentsIncomplete;
         toast.push(
-          kept
-            ? d.attachmentsIncomplete
-              ? `Copied to ${target.name}, but some attachments did not copy, so the original was kept.`
-              : `Copied to ${target.name}, but the original could not be archived.`
-            : move
-              ? `Moved to ${target.name}.`
-              : `Copied to ${target.name}.`,
-          kept ? 'warn' : 'ok',
+          d.attachmentsIncomplete
+            ? `Copied to ${target.name}, but some attachments did not copy${move ? ', so the original was kept' : ''}.`
+            : kept
+              ? `Copied to ${target.name}, but the original could not be archived.`
+              : move
+                ? `Moved to ${target.name}.`
+                : `Copied to ${target.name}.`,
+          partial ? 'warn' : 'ok',
         );
         setPending(false);
         close();
@@ -105,7 +106,11 @@ export function CopyAssetsDialog({
       close();
       // A copy that exists but whose original stayed active must not be
       // offered for retry: that would copy it a second time.
-      onDone?.(failed.filter((f) => f.code !== 'original_not_archived').map((f) => f.id));
+      onDone?.(
+        failed
+          .filter((f) => f.code !== 'original_not_archived' && f.code !== 'attachments_incomplete')
+          .map((f) => f.id),
+      );
       router.refresh();
     } catch {
       toast.push(`Could not copy the ${noun}.`, 'danger');

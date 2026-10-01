@@ -1619,8 +1619,9 @@ export class AssetsService {
   /**
    * Bulk {@link clone}; per-item failures are reported, not thrown. A copy
    * whose original could not be archived counts as copied (it exists) and is
-   * also listed in `failed` with code `original_not_archived`, so the UI can
-   * say so without offering a retry that would copy it again.
+   * also listed in `failed` with code `original_not_archived` (or
+   * `attachments_incomplete` for a plain copy), so the UI can say so without
+   * offering a retry that would copy it again.
    */
   async cloneMany(
     actor: AuthedUser,
@@ -1633,7 +1634,13 @@ export class AssetsService {
     const kept: BulkAssetResult['failed'] = [];
     const result = await this.runBulk(ids, async (id) => {
       const copy = await this.clone(actor, sourceCompanyId, id, targetCompanyId, opts, meta);
-      if (opts.archiveOriginal && !copy.originalArchived) {
+      if (!opts.archiveOriginal && copy.attachmentsIncomplete) {
+        kept.push({
+          id,
+          code: 'attachments_incomplete',
+          reason: 'Copied, but some attachments did not copy.',
+        });
+      } else if (opts.archiveOriginal && !copy.originalArchived) {
         kept.push(
           copy.attachmentsIncomplete
             ? {
