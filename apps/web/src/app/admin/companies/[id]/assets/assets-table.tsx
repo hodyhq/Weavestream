@@ -816,8 +816,9 @@ function BulkActionBar({
         kind="outline"
         size="sm"
         icon={Icon.copy}
-        // Archived assets cannot be copied; restore them first.
-        disabled={activeSelected === 0 || pending}
+        // Archived assets cannot be copied; selections hidden by a filter
+        // may still be active, so let the server report per-item results.
+        disabled={(activeSelected === 0 && unknownSelected === 0) || pending}
         onClick={onCopy}
       >
         Copy to…

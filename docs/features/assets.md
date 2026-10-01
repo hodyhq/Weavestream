@@ -83,7 +83,7 @@ Asset layouts are global, so a copy keeps its layout and every field value you c
 | What | In the copy |
 |---|---|
 | **Files** (fields and the attachments panel) | Copied into the target company's storage as new files; a deleted file is skipped |
-| **Linked assets** | Dropped when the company changes; they point at the source company's records (kept for same-company copies). A *required* link field blocks a cross-company copy |
+| **Linked assets** | Dropped when the company changes; they point at the source company's records. Same-company copies keep links whose target still exists and omit dead ones. A *required* link field blocks a cross-company copy |
 | **Linked passwords** | Not copied; they stay with the original |
 | **Hidden fields** you cannot see | Not copied |
 | Integration identity (external id) | Not copied; the copy is a hand-managed asset |

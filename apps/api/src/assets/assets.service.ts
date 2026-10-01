@@ -1485,7 +1485,11 @@ export class AssetsService {
         let newId: string | null = null;
         try {
           newId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, u.id, targetCompanyId, meta);
-          if (!newId) continue;
+          if (!newId) {
+            // The row exists but its content is gone: the copy is not whole.
+            attachmentsIncomplete = true;
+            continue;
+          }
           // Tenant-scoped write: companyId must be in the filter.
           const { count } = await this.prisma.upload.updateMany({
             where: { id: newId, companyId: targetCompanyId, attachedToId: null },

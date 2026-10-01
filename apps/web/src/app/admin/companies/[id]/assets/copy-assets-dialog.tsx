@@ -42,6 +42,8 @@ export function CopyAssetsDialog({
   const [move, setMove] = useState(false);
   const [pending, setPending] = useState(false);
   const sameCompany = target?.id === companyId;
+  // The Move box is shown unticked for the same company; use what is shown.
+  const isMove = move && !sameCompany;
   const n = assetIds.length;
   const noun = `asset${n === 1 ? '' : 's'}`;
 
@@ -56,7 +58,7 @@ export function CopyAssetsDialog({
     if (!target) return;
     setPending(true);
     try {
-      const body = { targetCompanyId: target.id, archiveOriginal: move && !sameCompany };
+      const body = { targetCompanyId: target.id, archiveOriginal: isMove };
       if (n === 1) {
         const res = await apiFetch<{ id: string }>(
           `/companies/${companyId}/assets/${assetIds[0]}/clone`,
@@ -68,14 +70,14 @@ export function CopyAssetsDialog({
           return;
         }
         const d = res.data as { originalArchived?: boolean; attachmentsIncomplete?: boolean };
-        const kept = move && !d.originalArchived;
+        const kept = isMove && !d.originalArchived;
         const partial = kept || !!d.attachmentsIncomplete;
         toast.push(
           d.attachmentsIncomplete
-            ? `Copied to ${target.name}, but some attachments did not copy${move ? ', so the original was kept' : ''}.`
+            ? `Copied to ${target.name}, but some attachments did not copy${isMove ? ', so the original was kept' : ''}.`
             : kept
               ? `Copied to ${target.name}, but the original could not be archived.`
-              : move
+              : isMove
                 ? `Moved to ${target.name}.`
                 : `Copied to ${target.name}.`,
           partial ? 'warn' : 'ok',
@@ -85,17 +87,28 @@ export function CopyAssetsDialog({
         router.push(`/admin/companies/${target.id}/assets/${res.data.id}`);
         return;
       }
-      const res = await apiFetch<BulkAssetResult>(`/companies/${companyId}/assets/bulk/clone`, {
-        method: 'POST',
-        body: JSON.stringify({ ...body, ids: assetIds }),
-      });
-      if (!res.ok || !res.data) {
-        const p = res.problem as { detail?: string; title?: string } | undefined;
-        toast.push(p?.detail ?? p?.title ?? `Could not copy the ${noun}.`, 'danger');
-        return;
+      // The bulk endpoint takes at most 100 ids per call.
+      const ok: string[] = [];
+      const failed: BulkAssetResult['failed'] = [];
+      for (let i = 0; i < assetIds.length; i += 100) {
+        const res = await apiFetch<BulkAssetResult>(`/companies/${companyId}/assets/bulk/clone`, {
+          method: 'POST',
+          body: JSON.stringify({ ...body, ids: assetIds.slice(i, i + 100) }),
+        });
+        if (!res.ok || !res.data) {
+          const p = res.problem as { detail?: string; title?: string } | undefined;
+          // Earlier batches already copied; report what happened so far.
+          toast.push(
+            `${p?.detail ?? p?.title ?? `Could not copy the ${noun}.`}${ok.length ? ` ${ok.length} were copied before this.` : ''}`,
+            'danger',
+          );
+          if (ok.length) router.refresh();
+          return;
+        }
+        ok.push(...res.data.ok);
+        failed.push(...res.data.failed);
       }
-      const { ok, failed } = res.data;
-      const verb = move ? 'Moved' : 'Copied';
+      const verb = isMove ? 'Moved' : 'Copied';
       if (failed.length === 0) {
         toast.push(`${verb} ${ok.length} ${noun} to ${target.name}.`, 'ok');
       } else {
@@ -131,7 +144,7 @@ export function CopyAssetsDialog({
             Cancel
           </Btn>
           <Btn kind="primary" loading={pending} disabled={!target} onClick={submit}>
-            {move && !sameCompany ? 'Move' : 'Copy'}
+            {isMove ? 'Move' : 'Copy'}
           </Btn>
         </>
       }
@@ -142,7 +155,7 @@ export function CopyAssetsDialog({
         </Field>
         <Checkbox
           label="Move: archive the originals here after copying"
-          checked={move && !sameCompany}
+          checked={isMove}
           onChange={setMove}
           hint={
             sameCompany
