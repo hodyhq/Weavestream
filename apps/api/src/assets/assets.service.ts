@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
@@ -25,6 +26,7 @@ import { FILTERABLE_FIELD_TYPES } from '@weavestream/shared';
 import type { FileFieldEntry } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { RelationsService } from '../relations/relations.service.js';
@@ -276,6 +278,8 @@ type LayoutWithFields = AssetLayout & { fields: AssetField[] };
 
 @Injectable()
 export class AssetsService {
+  private readonly logger = new Logger(AssetsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
@@ -1340,6 +1344,165 @@ export class AssetsService {
   // --------------------------------------------------------------------
   // Bulk archive / restore / purge
   // --------------------------------------------------------------------
+
+  /**
+   * Copy an asset into `targetCompanyId` (the same company, or another).
+   *
+   * The caller must already hold `asset.read` on the source company and
+   * `asset.write` on the target (and `asset.archive` on the source when
+   * `archiveOriginal`). The copy goes through `create()`, so the target gets
+   * the same validation, per-company uniqueness, relations, search index and
+   * audit as a hand-made asset.
+   *
+   * What is carried:
+   *  - only field values the actor can see (`serialize` applies the role's
+   *    field visibility), so a copy never discloses hidden fields;
+   *  - FILE values as fresh copies of the blobs in the target company
+   *    (an upload belongs to exactly one asset);
+   *  - not ASSET_REFERENCE values when the company changes: they point at the
+   *    source company's records;
+   *  - not the external (integration) identity, which belongs to the source.
+   */
+  async clone(
+    actor: AuthedUser,
+    sourceCompanyId: string,
+    id: string,
+    targetCompanyId: string,
+    opts: { archiveOriginal: boolean },
+    meta: AuditMeta,
+  ): Promise<SerializedAsset & { originalArchived: boolean }> {
+    const crossCompany = sourceCompanyId !== targetCompanyId;
+    if (opts.archiveOriginal && !crossCompany) {
+      throw new BadRequestException('Moving an asset requires a different target company.');
+    }
+    const asset = await this.prisma.asset.findFirst({
+      where: { id, companyId: sourceCompanyId },
+      include: {
+        assetLayout: { include: { fields: { orderBy: { position: 'asc' } } } },
+        fieldValues: true,
+      },
+    });
+    if (!asset) throw new NotFoundException();
+    if (asset.archivedAt) throw new BadRequestException('Restore the asset before copying it.');
+
+    const layout = asset.assetLayout;
+    const values = {
+      ...this.serialize(asset, layout, asset.fieldValues, actor.role).fieldValues,
+    };
+    const copiedUploads: string[] = [];
+    let created: SerializedAsset;
+    try {
+      for (const field of layout.fields) {
+        if (field.archivedAt !== null || !(field.slug in values)) continue;
+        if (field.fieldType === 'ASSET_REFERENCE' && crossCompany) {
+          delete values[field.slug];
+        } else if (field.fieldType === 'FILE' && Array.isArray(values[field.slug])) {
+          const entries: FileFieldEntry[] = [];
+          for (const entry of values[field.slug] as FileFieldEntry[]) {
+            if (!entry?.uploadId) continue;
+            const uploadId = await this.uploads.copyToCompany(
+              actor,
+              sourceCompanyId,
+              entry.uploadId,
+              targetCompanyId,
+              meta,
+            );
+            copiedUploads.push(uploadId);
+            entries.push({ ...entry, uploadId });
+          }
+          values[field.slug] = entries;
+        }
+      }
+      created = await this.create(
+        actor,
+        targetCompanyId,
+        { assetLayoutId: layout.id, name: asset.name, fieldValues: values },
+        meta,
+      );
+    } catch (err) {
+      // The copy failed (e.g. a unique field clashes in the target): retire
+      // the duplicated files so the reaper removes them.
+      if (copiedUploads.length > 0) {
+        await this.prisma.upload
+          .updateMany({
+            where: { id: { in: copiedUploads }, companyId: targetCompanyId, attachedToId: null },
+            data: { deletedAt: new Date() },
+          })
+          .catch(() => undefined);
+      }
+      throw err;
+    }
+
+    // The copy is committed from here on. Neither a failed archive nor a
+    // failed provenance row may report the whole operation as failed: the
+    // caller would retry and create a second copy.
+    let originalArchived = false;
+    if (opts.archiveOriginal) {
+      try {
+        await this.archive(actor, sourceCompanyId, id, meta);
+        originalArchived = true;
+      } catch (err) {
+        this.logger.warn(
+          `Asset ${id} copied to ${created.id} but the original could not be archived: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    await this.audit
+      .log({
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.asset.clone,
+        entityType: 'Asset',
+        entityId: created.id,
+        companyId: targetCompanyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: {
+          sourceAssetId: id,
+          sourceCompanyId,
+          moveRequested: opts.archiveOriginal,
+          archivedOriginal: originalArchived,
+          filesCopied: copiedUploads.length,
+        },
+      })
+      .catch((err: unknown) => {
+        // The copy's own `asset.create` row (with full values) is already
+        // written; this row adds provenance. Logged loudly, not rethrown.
+        this.logger.error(
+          `asset.clone audit row failed for copy ${created.id} of ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    return { ...created, originalArchived };
+  }
+
+  /**
+   * Bulk {@link clone}; per-item failures are reported, not thrown. A copy
+   * whose original could not be archived counts as copied (it exists) and is
+   * also listed in `failed` with code `original_not_archived`, so the UI can
+   * say so without offering a retry that would copy it again.
+   */
+  async cloneMany(
+    actor: AuthedUser,
+    sourceCompanyId: string,
+    ids: string[],
+    targetCompanyId: string,
+    opts: { archiveOriginal: boolean },
+    meta: AuditMeta,
+  ): Promise<BulkAssetResult> {
+    const kept: BulkAssetResult['failed'] = [];
+    const result = await this.runBulk(ids, async (id) => {
+      const copy = await this.clone(actor, sourceCompanyId, id, targetCompanyId, opts, meta);
+      if (opts.archiveOriginal && !copy.originalArchived) {
+        kept.push({
+          id,
+          code: 'original_not_archived',
+          reason: 'Copied, but the original could not be archived. Archive it by hand.',
+        });
+      }
+    });
+    return { ok: result.ok, failed: [...result.failed, ...kept] };
+  }
 
   /**
    * Bulk-archive assets. Iterates the input ids and reuses the per-item

@@ -827,6 +827,102 @@ export class UploadsService {
   //    in Phase 7 will reap tombstones older than 30 days.
   // ------------------------------------------------------------------
 
+  /**
+   * Duplicate a stored file into `toCompanyId` as a new, unattached upload,
+   * for an asset clone. The new row is attached by the asset create that
+   * follows (`linkFileFieldUploadsToAsset`).
+   *
+   * Callers must already have authorised reading the source and writing the
+   * target. This method only enforces that the upload really belongs to
+   * `fromCompanyId` (the source asset's tenant), so a forged upload id in a
+   * field value cannot pull a file out of a third company.
+   */
+  async copyToCompany(
+    actor: AuthedUser,
+    fromCompanyId: string,
+    uploadId: string,
+    toCompanyId: string,
+    meta: { ip: string; userAgent: string },
+  ): Promise<string> {
+    const src = await this.prisma.upload.findFirst({
+      where: { id: uploadId, companyId: fromCompanyId, deletedAt: null },
+    });
+    if (!src) throw new NotFoundException('File not found');
+
+    const newId = randomUUID();
+    const storageKey = this.storage.uploadKey(toCompanyId, newId, src.filename);
+    const written: string[] = [];
+    const copy = async (fromKey: string, toKey: string) => {
+      const obj = await this.storage.getObjectStream(fromCompanyId, fromKey);
+      if (!obj) throw new NotFoundException('File content is missing');
+      await this.storage.putObjectStream(toCompanyId, toKey, obj.body, {
+        contentType: src.mimeType,
+        // Same bytes as the source; the original size is the ceiling.
+        maxBytes: src.sizeBytes,
+      });
+      written.push(toKey);
+    };
+
+    try {
+      await this.storage.ensureBucket(toCompanyId);
+      await copy(src.storageKey, storageKey);
+      let thumbnailKey: string | null = null;
+      if (src.thumbnailKey) {
+        thumbnailKey = this.storage.thumbnailKey(toCompanyId, newId);
+        await copy(src.thumbnailKey, thumbnailKey);
+      }
+      await this.prisma.upload.create({
+        data: {
+          id: newId,
+          companyId: toCompanyId,
+          uploaderId: actor.id,
+          filename: src.filename,
+          mimeType: src.mimeType,
+          sizeBytes: src.sizeBytes,
+          storageKey,
+          sha256: src.sha256,
+          isImage: src.isImage,
+          width: src.width,
+          height: src.height,
+          thumbnailKey,
+          attachedToType: 'asset',
+          attachedToId: null,
+        },
+      });
+    } catch (err) {
+      // Leave no orphaned bytes behind for a row that was never written.
+      await Promise.all(
+        written.map((k) => this.storage.deleteObject(toCompanyId, k).catch(() => undefined)),
+      );
+      throw err;
+    }
+
+    try {
+      await this.audit.log({
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.upload.copy,
+        entityType: 'Upload',
+        entityId: newId,
+        companyId: toCompanyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: { sourceUploadId: src.id, sourceCompanyId: fromCompanyId, sizeBytes: src.sizeBytes },
+      });
+    } catch (err) {
+      // Never leave a copied file with no audit trail: retire it (the reaper
+      // removes the bytes) and surface the audit failure itself.
+      await this.prisma.upload
+        .updateMany({
+          where: { id: newId, companyId: toCompanyId, attachedToId: null, deletedAt: null },
+          data: { deletedAt: new Date() },
+        })
+        .catch(() => undefined);
+      throw err;
+    }
+    return newId;
+  }
+
   async softDelete(
     actor: AuthedUser,
     companyId: string,
