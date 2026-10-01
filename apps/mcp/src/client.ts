@@ -67,6 +67,7 @@ export class WeavestreamClient {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
     let res: Response;
+    let text: string;
     try {
       res = await this.fetchImpl(url, {
         method,
@@ -79,6 +80,8 @@ export class WeavestreamClient {
         },
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       });
+      // Read the body inside the try: the timeout signal also covers it.
+      text = await res.text();
     } catch (err) {
       // Timeouts and network failures become tool errors the model can read.
       const reason =
@@ -87,7 +90,6 @@ export class WeavestreamClient {
           : 'could not be reached';
       throw new WeavestreamApiError(0, `Weavestream ${reason}.`);
     }
-    const text = await res.text();
     let json: unknown = undefined;
     if (text) {
       try {
@@ -103,15 +105,33 @@ export class WeavestreamClient {
   }
 }
 
-/** Server problem details are safe to surface; never echo request headers. */
+/**
+ * Server problem details are safe to surface; never echo request headers.
+ * Validation `issues` ({ path, message }) are passed through so the model
+ * can correct its arguments instead of retrying blind.
+ */
 function describeProblem(status: number, json: unknown): string {
-  const p = (json ?? {}) as { detail?: unknown; title?: unknown; message?: unknown };
+  const p = (json ?? {}) as {
+    detail?: unknown;
+    title?: unknown;
+    message?: unknown;
+    issues?: unknown;
+  };
   const detail = [p.detail, p.message, p.title].find((v) => typeof v === 'string' && v.length > 0);
+  const issues = Array.isArray(p.issues)
+    ? p.issues
+        .slice(0, 20)
+        .map(
+          (i: { path?: unknown; message?: unknown }) =>
+            `${typeof i?.path === 'string' && i.path ? i.path : '(body)'}: ${String(i?.message ?? 'invalid')}`,
+        )
+        .join('; ')
+    : '';
   const hint =
     status === 401
       ? ' The API key is invalid, expired or revoked.'
       : status === 403
         ? ' The key\'s owner lacks permission, or this action needs an interactive session.'
         : '';
-  return `Weavestream returned ${status}${detail ? `: ${String(detail)}` : '.'}${hint}`;
+  return `Weavestream returned ${status}${detail ? `: ${String(detail)}` : '.'}${issues ? ` Issues: ${issues}.` : ''}${hint}`;
 }

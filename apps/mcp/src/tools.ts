@@ -19,7 +19,10 @@ const cursor = z.string().max(500).optional().describe('Opaque cursor from a pre
 const limit = z.number().int().min(1).max(100).optional();
 const fieldValues = z
   .record(z.unknown())
-  .describe('Map of layout field id → value. Field ids and types come from get_layout.');
+  .describe(
+    'Map of layout field SLUG → value (not the field id). Slugs and types come from get_layout; unknown slugs are rejected.',
+  );
+const markdown = z.string().min(1).max(500_000);
 
 /**
  * Everything returned comes from records people typed into Weavestream. It is
@@ -68,7 +71,7 @@ export function registerTools(server: McpServer, api: WeavestreamClient, opts: T
 
   tool(
     'search',
-    'Full-text search across assets, articles, passwords (names only), domains and companies.',
+    'Full-text search across assets, articles, passwords (names only), domains and uploaded files. To find a company by name use list_companies with q.',
     { q: z.string().min(1).max(200), companyId: companyId.optional(), limit: z.number().int().min(1).max(50).optional() },
     read,
     (a) => api.request('GET', '/search', { query: a }),
@@ -76,7 +79,7 @@ export function registerTools(server: McpServer, api: WeavestreamClient, opts: T
 
   tool('list_layouts', 'List asset layouts (asset types).', {}, read, () => api.request('GET', '/layouts'));
 
-  tool('get_layout', 'Get one asset layout with its fields (ids, names, types).', { layoutId: id }, read, (a) =>
+  tool('get_layout', 'Get one asset layout with its fields (slugs, names, types). Use the slugs as fieldValues keys.', { layoutId: id }, read, (a) =>
     api.request('GET', `/layouts/${a.layoutId}`),
   );
 
@@ -167,7 +170,7 @@ export function registerTools(server: McpServer, api: WeavestreamClient, opts: T
     {
       companyId,
       title: z.string().min(1).max(200),
-      markdownSource: z.string().max(500_000),
+      markdownSource: markdown,
       folderId: id.optional(),
       visibleToClients: z.boolean().optional(),
     },
@@ -179,7 +182,7 @@ export function registerTools(server: McpServer, api: WeavestreamClient, opts: T
   tool(
     'update_article',
     'Update an article\'s title and/or Markdown body (switches it to Markdown).',
-    { companyId, articleId: id, title: z.string().min(1).max(200).optional(), markdownSource: z.string().max(500_000).optional() },
+    { companyId, articleId: id, title: z.string().min(1).max(200).optional(), markdownSource: markdown.optional() },
     write,
     ({ companyId: c, articleId, ...body }) =>
       api.request('PATCH', `/companies/${c}/articles/${articleId}`, {

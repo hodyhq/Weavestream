@@ -90,3 +90,25 @@ test('network failures become readable tool errors', async () => {
   assert.equal(r.isError, true);
   assert.match(text(r), /could not be reached/);
 });
+
+test('validation issues reach the model so it can fix its arguments', async () => {
+  const { client } = await connect({
+    respond: () =>
+      new Response(
+        JSON.stringify({ detail: 'ValidationError', issues: [{ path: 'fieldValues.serial', message: 'Required' }] }),
+        { status: 400 },
+      ),
+  });
+  const r = await client.callTool({
+    name: 'create_asset',
+    arguments: { companyId: CO, assetLayoutId: ASSET, fieldValues: {} },
+  });
+  assert.match(text(r), /fieldValues\.serial: Required/);
+});
+
+test('empty Markdown is rejected before any request', async () => {
+  const { client, calls } = await connect();
+  const r = await client.callTool({ name: 'create_article', arguments: { companyId: CO, title: 'x', markdownSource: '' } });
+  assert.equal(r.isError, true);
+  assert.equal(calls.length, 0);
+});
