@@ -1393,6 +1393,16 @@ export type MonitoredDomain = {
   latestScore: number | null;
   /** v2 — operator-supplied DKIM selectors (CSV). */
   dkimSelectorOverride: string | null;
+  source: 'MANUAL' | 'CLOUDFLARE';
+  registrar: string | null;
+  registrarAutoRenew: boolean | null;
+  registrarLocked: boolean | null;
+  registrarRegisteredAt: string | null;
+  registrarExpiresAt: string | null;
+  registrarStatuses: string[];
+  nameservers: string[];
+  registrarSyncedAt: string | null;
+  registrarMissingSince: string | null;
   archivedAt: string | null;
   createdBy: string | null;
   createdAt: string;
