@@ -7,6 +7,7 @@ import {
 import { EnvService } from '../../../api/src/config/env.service.js';
 import { RedisService } from '../../../api/src/redis/redis.service.js';
 import { CloudflareListsService } from '../../../api/src/integrations/cloudflare/cloudflare-lists.service.js';
+import { CloudflareRegistrarSyncService } from '../../../api/src/integrations/cloudflare/cloudflare-registrar-sync.service.js';
 import {
   createManagedWorker,
   type ManagedWorker,
@@ -32,6 +33,7 @@ export class CloudflareDriftSweepWorker implements OnModuleDestroy {
     private readonly env: EnvService,
     private readonly redis: RedisService,
     private readonly lists: CloudflareListsService,
+    private readonly registrar: CloudflareRegistrarSyncService,
   ) {}
 
   async start(): Promise<void> {
@@ -60,13 +62,27 @@ export class CloudflareDriftSweepWorker implements OnModuleDestroy {
         `invalid cloudflare-drift-sweep payload: ${parsed.error.message}`,
       );
     }
+    const { integrationId } = parsed.data;
     const startedAt = Date.now();
-    const result = await this.lists.runDriftSweep(parsed.data.integrationId);
+    const result = await this.lists.runDriftSweep(integrationId);
     this.logger.log(
       `Drift sweep job ${job.id ?? '<no-id>'} done in ${Date.now() - startedAt}ms ` +
-        `(integration=${parsed.data.integrationId} checked=${result.checked} ` +
+        `(integration=${integrationId} checked=${result.checked} ` +
         `healed=${result.healed} errors=${result.errors})`,
     );
-    return { integrationId: parsed.data.integrationId, ...result };
+
+    // Registrar sync rides the same schedule. Its failure is logged and
+    // reported in the job result, but must not fail the drift sweep that
+    // already succeeded (BullMQ would retry both).
+    let registrar: unknown;
+    try {
+      registrar = await this.registrar.sync(integrationId, null);
+    } catch (err) {
+      this.logger.error(
+        `Registrar sync failed (integration=${integrationId}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      registrar = { error: err instanceof Error ? err.message : String(err) };
+    }
+    return { integrationId, ...result, registrar };
   }
 }

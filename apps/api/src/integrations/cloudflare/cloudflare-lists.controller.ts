@@ -31,6 +31,8 @@ import {
 import { RequirePermission } from '../../rbac/require-permission.decorator.js';
 import { requestMetaOf as meta } from '../../common/request-meta.js';
 import { CloudflareListsService } from './cloudflare-lists.service.js';
+import { CloudflareRegistrarSyncService } from './cloudflare-registrar-sync.service.js';
+import { Throttle } from '@nestjs/throttler';
 
 /**
  * Cloudflare Rules Lists admin REST surface.
@@ -45,7 +47,27 @@ import { CloudflareListsService } from './cloudflare-lists.service.js';
   version: '1',
 })
 export class CloudflareListsController {
-  constructor(private readonly lists: CloudflareListsService) {}
+  constructor(
+    private readonly lists: CloudflareListsService,
+    private readonly registrar: CloudflareRegistrarSyncService,
+  ) {}
+
+  /**
+   * Pull every domain on the Cloudflare account into Domains now, instead of
+   * waiting for the next scheduled sweep. No-op (`enabled: false`) when the
+   * integration has no domains company configured.
+   */
+  @Post('domains/sync')
+  @HttpCode(200)
+  @RequirePermission('integration.manage')
+  @Throttle({ global: { limit: 3, ttl: 60_000 } })
+  syncDomains(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.registrar.sync(id, user.id, meta(req));
+  }
 
   /** Browse Cloudflare-side IP lists so the operator can pick which to register. */
   @Get('external-lists')
