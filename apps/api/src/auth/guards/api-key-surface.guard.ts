@@ -41,15 +41,35 @@ const DENIED_PREFIXES = [
  */
 const ALLOWED_EXACT = new Set(['/auth/me']);
 
+/**
+ * Reduce a raw request path to the stable route shape the lists above are
+ * written against.
+ *
+ * The app mounts every route under `setGlobalPrefix('api')` with URI
+ * versioning, so `req.path` arrives as `/api/v1/me/api-keys`. Matching the
+ * denylist against the raw path would silently never fire — the guard would
+ * appear installed and protect nothing.
+ *
+ * Also lowercases and collapses duplicate slashes: Express treats `//me//mfa`
+ * and `/ME/MFA` as the same route, so a denylist that does not would be
+ * trivially bypassable.
+ */
+function normalizePath(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/\/{2,}/g, '/')
+    .replace(/^\/api(?=\/|$)/, '')
+    .replace(/^\/v\d+(?=\/|$)/, '')
+    .replace(/\/+$/, '') || '/';
+}
+
 @Injectable()
 export class ApiKeySurfaceGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthedUser }>();
     if (!req.user?.apiKeyId) return true;
 
-    // `req.path` excludes the query string. Strip the global version prefix so
-    // the denylist is written against stable route shapes rather than `/v1/`.
-    const path = req.path.replace(/^\/v\d+/, '');
+    const path = normalizePath(req.path);
     if (ALLOWED_EXACT.has(path)) return true;
 
     if (DENIED_PREFIXES.some((prefix) => path.startsWith(prefix))) {

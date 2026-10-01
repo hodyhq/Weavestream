@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import type { ApiKey } from '@prisma/client';
@@ -89,6 +89,18 @@ export class ApiKeyService {
     expiresInDays?: number | null;
     createdBy: string;
   }): Promise<MintedApiKey> {
+    // The `scopes` column exists so a later change can narrow a key below its
+    // owner's authority without a migration — but nothing consumes it yet.
+    // Accepting a scope list we do not enforce would hand the caller a control
+    // that silently does nothing, which is strictly worse than not offering
+    // one: an operator would believe a key was restricted when it is not.
+    // Reject until PermissionGuard honours it.
+    if (params.scopes && params.scopes.length > 0) {
+      throw new BadRequestException(
+        'Scoped API keys are not supported yet; a key inherits its owner\'s permissions. Omit "scopes".',
+      );
+    }
+
     const keyId = randomBytes(KEY_ID_BYTES).toString('hex');
     const secret = randomBytes(SECRET_BYTES).toString('base64url');
     const days =

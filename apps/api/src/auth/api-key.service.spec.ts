@@ -13,7 +13,7 @@ function makeService() {
   const prisma = {
     apiKey: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
-        const row = {
+        const row: Record<string, unknown> = {
           id: `id-${rows.size + 1}`,
           lastUsedAt: null,
           revokedAt: null,
@@ -92,6 +92,20 @@ describe('ApiKeyService', () => {
         expiresInDays: null,
       });
       expect(record.expiresAt).toBeNull();
+    });
+
+    it('refuses a scope list it cannot enforce', async () => {
+      const { svc } = makeService();
+      // Accepting an unenforced narrowing control would make an operator
+      // believe a key is restricted when it holds the owner's full authority.
+      await expect(
+        svc.mint({
+          userId: 'u-1',
+          name: 'k',
+          createdBy: 'u-1',
+          scopes: ['asset.read'],
+        }),
+      ).rejects.toThrow(/not supported yet/i);
     });
 
     it('issues a distinct keyId and secret every time', async () => {

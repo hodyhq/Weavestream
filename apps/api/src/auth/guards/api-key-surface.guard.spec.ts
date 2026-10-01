@@ -1,0 +1,76 @@
+import { ForbiddenException } from '@nestjs/common';
+import { ApiKeySurfaceGuard } from './api-key-surface.guard.js';
+
+function ctxFor(path: string, apiKeyId?: string) {
+  const req = { path, user: apiKeyId ? { id: 'u-1', apiKeyId } : { id: 'u-1' } };
+  return {
+    switchToHttp: () => ({ getRequest: () => req }),
+  } as never;
+}
+
+describe('ApiKeySurfaceGuard', () => {
+  const guard = new ApiKeySurfaceGuard();
+
+  describe('cookie sessions', () => {
+    it('never interferes with an interactive principal', () => {
+      for (const p of [
+        '/api/v1/me/api-keys',
+        '/api/v1/auth/logout',
+        '/api/v1/me/mfa/backup-codes/regenerate',
+      ]) {
+        expect(guard.canActivate(ctxFor(p))).toBe(true);
+      }
+    });
+  });
+
+  describe('API-key principals', () => {
+    /**
+     * Routes are mounted under `setGlobalPrefix('api')` with URI versioning, so
+     * the guard sees `/api/v1/...`. A denylist written against `/me/...` that
+     * does not strip that prefix matches nothing and protects nothing — the
+     * failure this suite exists to catch.
+     */
+    it.each([
+      '/api/v1/me/api-keys',
+      '/api/v1/me/sessions',
+      '/api/v1/me/sessions/revoke-others',
+      '/api/v1/me/mfa/backup-codes/regenerate',
+      '/api/v1/me/password',
+      '/api/v1/auth/logout',
+      '/api/v1/auth/mfa/enroll',
+      '/api/v1/auth/step-up/verify',
+    ])('denies %s', (path) => {
+      expect(() => guard.canActivate(ctxFor(path, 'k-1'))).toThrow(ForbiddenException);
+    });
+
+    it.each([
+      '/API/V1/ME/API-KEYS',
+      '/api//v1//me//sessions',
+      '/api/v1/me/api-keys/',
+      '/api/v2/me/password',
+    ])('denies %s despite casing, doubled slashes, trailing slash or version drift', (path) => {
+      expect(() => guard.canActivate(ctxFor(path, 'k-1'))).toThrow(ForbiddenException);
+    });
+
+    it('allows read-only self-introspection at /auth/me', () => {
+      expect(guard.canActivate(ctxFor('/api/v1/auth/me', 'k-1'))).toBe(true);
+    });
+
+    it.each([
+      '/api/v1/companies/c-1/assets',
+      '/api/v1/layouts',
+      '/api/v1/companies/c-1/domains',
+      '/api/v1/search',
+    ])('allows business route %s', (path) => {
+      expect(guard.canActivate(ctxFor(path, 'k-1'))).toBe(true);
+    });
+
+    it('does not deny an unrelated route that merely contains a denied word', () => {
+      // `/companies/.../passwords` is the credential vault, which a key may
+      // list; it is StepUpGuard, not this guard, that blocks the reveal.
+      expect(guard.canActivate(ctxFor('/api/v1/companies/c-1/passwords', 'k-1'))).toBe(
+        true,
+      );
+    });
+  });
+});
