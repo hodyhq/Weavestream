@@ -10,6 +10,7 @@ import { DomainsModule } from '../../api/src/domains/domains.module.js';
 import { StorageModule } from '../../api/src/storage/storage.module.js';
 import { CryptoModule } from '../../api/src/crypto/crypto.module.js';
 import { ExportDataModule } from '../../api/src/exports/export-data.module.js';
+import { RbacModule } from '../../api/src/rbac/rbac.module.js';
 import { IntegrationsCoreModule } from '../../api/src/integrations/integrations-core.module.js';
 import { EmailModule } from '../../api/src/email/email.module.js';
 import { AlertsModule } from '../../api/src/alerts/alerts.module.js';
@@ -74,6 +75,10 @@ import { ArticleSummaryWorker } from './article-summary/article-summary.processo
     DomainsModule,
     ExportDataModule,
     IntegrationsCoreModule,
+    // AssetsModule (pulled in for the integration asset writers) declares
+    // AssetsController, which needs PermissionService for the clone target
+    // check. The controller is inert here, but Nest still resolves it.
+    RbacModule,
     // Alerts feature: the worker hosts the `alerts:scan` (cron tick)
     // and `alerts:send` consumers. We import `QueuesProducerModule`
     // (not `QueuesModule`) so the alerts:scan handler can enqueue
