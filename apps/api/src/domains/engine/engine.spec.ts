@@ -524,5 +524,15 @@ describe('runDomainCheck: no-site detection', () => {
     const res = await run(ports);
     expect(res.noSite).toBe(false);
   });
+
+  it('an uncertain www lookup (resolver error) does not count as no site', async () => {
+    const ports = makePorts({ a: [], aaaa: [], tlsThrows: 'getaddrinfo ENOTFOUND example.com' });
+    (ports.dns.resolve4 as jest.Mock).mockImplementation(async (name: string) => {
+      if (name.startsWith('www.')) throw Object.assign(new Error('servfail'), { code: 'ESERVFAIL' });
+      return [];
+    });
+    const res = await run(ports);
+    expect(res.noSite).toBe(false);
+  });
 });
 

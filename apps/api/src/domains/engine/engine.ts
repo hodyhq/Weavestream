@@ -334,7 +334,7 @@ export async function runDomainCheck(
     tlsRaw.status !== 'WARN' &&
     // "No website" means no www either: a bare domain with a working www
     // has a site.
-    !(await hasAddress(ports.dns, `www.${opts.hostname}`));
+    (await wwwAddress(ports.dns, `www.${opts.hostname}`, Math.min(opts.timeoutMs, 8_000))) === 'none';
   const tls: SubCheckResult<TlsSubResult> = noSite ? SKIP_TLS : tlsRaw;
 
   // Phase 2: the v2 sub-checks. Each is wrapped in a per-call timeout
@@ -459,13 +459,43 @@ export function isNoSite(checkDns: boolean, dns: SubCheckResult<DnsSubResult>): 
   return dns.data.a.length === 0 && dns.data.aaaa.length === 0;
 }
 
-/** Whether a name resolves to any address. Lookup errors count as "no". */
-async function hasAddress(dnsPort: EnginePorts['dns'], name: string): Promise<boolean> {
-  const [a, aaaa] = await Promise.all([
-    dnsPort.resolve4(name).catch(() => [] as string[]),
-    dnsPort.resolve6(name).catch(() => [] as string[]),
-  ]);
-  return a.length > 0 || aaaa.length > 0;
+/** DNS answers that confirm a name has no record (as opposed to an error). */
+const NO_RECORD_CODES = new Set(['ENODATA', 'ENOTFOUND', 'NXDOMAIN', 'NODATA']);
+
+/**
+ * Whether `name` has an address: 'some', a confirmed 'none', or 'unknown'
+ * (resolver error or timeout). Only a confirmed 'none' may mark a domain
+ * as having no site; anything uncertain keeps the normal checks.
+ */
+async function wwwAddress(
+  dnsPort: EnginePorts['dns'],
+  name: string,
+  timeoutMs: number,
+): Promise<'some' | 'none' | 'unknown'> {
+  const lookup = async (fn: (n: string) => Promise<string[]>): Promise<string[] | 'unknown'> => {
+    try {
+      return await fn(name);
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      return typeof code === 'string' && NO_RECORD_CODES.has(code) ? [] : 'unknown';
+    }
+  };
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<'unknown'>((resolve) => {
+    timer = setTimeout(() => resolve('unknown'), timeoutMs);
+  });
+  try {
+    const answer = await Promise.race([
+      Promise.all([lookup((n) => dnsPort.resolve4(n)), lookup((n) => dnsPort.resolve6(n))]),
+      timeout,
+    ]);
+    if (answer === 'unknown') return 'unknown';
+    const [a, aaaa] = answer;
+    if ((Array.isArray(a) && a.length > 0) || (Array.isArray(aaaa) && aaaa.length > 0)) return 'some';
+    return a === 'unknown' || aaaa === 'unknown' ? 'unknown' : 'none';
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
