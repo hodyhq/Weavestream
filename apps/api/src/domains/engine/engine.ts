@@ -326,7 +326,15 @@ export async function runDomainCheck(
   // A parked domain: DNS answered, but the name has no web address. The
   // TLS/HTTP probes have nothing to talk to, so their failures are not
   // findings. Report them as skipped and let the status say "no site".
-  const noSite = isNoSite(opts.checkDns, dns);
+  const noSite =
+    isNoSite(opts.checkDns, dns) &&
+    // A probe that reached a server proves there is a site, whatever a
+    // (possibly flaky) A lookup said. Never discard a real certificate.
+    tlsRaw.status !== 'OK' &&
+    tlsRaw.status !== 'WARN' &&
+    // "No website" means no www either: a bare domain with a working www
+    // has a site.
+    !(await hasAddress(ports.dns, `www.${opts.hostname}`));
   const tls: SubCheckResult<TlsSubResult> = noSite ? SKIP_TLS : tlsRaw;
 
   // Phase 2: the v2 sub-checks. Each is wrapped in a per-call timeout
@@ -438,13 +446,26 @@ export async function runDomainCheck(
 }
 
 /**
- * True when DNS resolved the zone but the name itself has no A/AAAA record
- * (CNAMEs are followed by the resolver, so a CNAME to a host counts as an
- * address). A DNS failure is not "no site": that is a real problem.
+ * True when the zone is delegated and answering but the name itself has no
+ * A/AAAA record (CNAMEs are followed by the resolver, so a CNAME to a host
+ * counts as an address). A DNS failure is not "no site": that is a real
+ * problem. Neither is an empty answer with no nameservers: NXDOMAIN and
+ * REFUSED come back as empty arrays, and a domain that does not resolve
+ * at all must stay red.
  */
 export function isNoSite(checkDns: boolean, dns: SubCheckResult<DnsSubResult>): boolean {
   if (!checkDns || dns.status === 'FAIL' || dns.status === 'SKIP' || !dns.data) return false;
+  if (dns.data.ns.length === 0) return false;
   return dns.data.a.length === 0 && dns.data.aaaa.length === 0;
+}
+
+/** Whether a name resolves to any address. Lookup errors count as "no". */
+async function hasAddress(dnsPort: EnginePorts['dns'], name: string): Promise<boolean> {
+  const [a, aaaa] = await Promise.all([
+    dnsPort.resolve4(name).catch(() => [] as string[]),
+    dnsPort.resolve6(name).catch(() => [] as string[]),
+  ]);
+  return a.length > 0 || aaaa.length > 0;
 }
 
 /**

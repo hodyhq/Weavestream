@@ -404,10 +404,10 @@ describe('deriveDomainStatus', () => {
 });
 
 describe('no site (parked domain)', () => {
-  const dnsWith = (a: string[], aaaa: string[] = []) =>
+  const dnsWith = (a: string[], aaaa: string[] = [], ns: string[] = ['a.ns.cloudflare.com']) =>
     ({
       status: 'WARN' as const,
-      data: { a, aaaa, mx: [], ns: ['a.ns.cloudflare.com'], txt: [], caa: [] } as never,
+      data: { a, aaaa, mx: [], ns, txt: [], caa: [] } as never,
       error: null,
     });
 
@@ -415,6 +415,10 @@ describe('no site (parked domain)', () => {
     expect(isNoSite(true, dnsWith([]))).toBe(true);
     expect(isNoSite(true, dnsWith(['192.0.2.1']))).toBe(false);
     expect(isNoSite(true, dnsWith([], ['2001:db8::1']))).toBe(false);
+  });
+
+  it('is not no site when nothing answers (NXDOMAIN / REFUSED come back empty)', () => {
+    expect(isNoSite(true, dnsWith([], [], []))).toBe(false);
   });
 
   it('is not no site when DNS failed or was not checked: that is a real problem', () => {
@@ -487,6 +491,38 @@ describe('no-site scoring', () => {
     expect(parked.breakdown.find((i) => i.id === 'caa')?.status).not.toBe('skip');
     // Not penalised for a website it does not have.
     expect(parked.percent).toBeGreaterThan(naive.percent);
+  });
+});
+
+describe('runDomainCheck: no-site detection', () => {
+  const run = (ports: EnginePorts) =>
+    runDomainCheck(ports, {
+      hostname: 'example.com',
+      checkWhois: true,
+      checkDns: true,
+      checkTls: true,
+      timeoutMs: 1000,
+    });
+
+  it('a parked name (no A/AAAA on apex or www, TLS cannot connect) is no site', async () => {
+    const res = await run(makePorts({ a: [], aaaa: [], tlsThrows: 'getaddrinfo ENOTFOUND example.com' }));
+    expect(res.noSite).toBe(true);
+    expect(res.tls.status).toBe('SKIP');
+  });
+
+  it('a working TLS probe means there is a site, whatever the A lookup said', async () => {
+    const res = await run(makePorts({ a: [], aaaa: [] }));
+    expect(res.noSite).toBe(false);
+    expect(res.tls.status).not.toBe('SKIP');
+  });
+
+  it('a bare domain with a working www has a site', async () => {
+    const ports = makePorts({ a: [], aaaa: [], tlsThrows: 'getaddrinfo ENOTFOUND example.com' });
+    (ports.dns.resolve4 as jest.Mock).mockImplementation(async (name: string) =>
+      name.startsWith('www.') ? ['192.0.2.10'] : [],
+    );
+    const res = await run(ports);
+    expect(res.noSite).toBe(false);
   });
 });
 
