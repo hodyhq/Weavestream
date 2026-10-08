@@ -47,6 +47,9 @@ export const AUDIT_ACTIONS = {
     emailTest: 'settings.email.test',
     aiUpdate: 'settings.ai.update',
     aiTest: 'settings.ai.test',
+    // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
+    // `after` carry `{ apiKeysEnabled }`.
+    apiKeysToggle: 'settings.api_keys.toggle',
   },
   domain: {
     create: 'domain.create',
@@ -182,8 +185,10 @@ export const AUDIT_ACTIONS = {
     cloudflareDriftCheck: 'integration.cloudflare.drift_check',
     cloudflareDriftSelfHealed: 'integration.cloudflare.drift_self_healed',
     // Registrar → MonitoredDomain sync. One summary row per run (counts and
-    // hostnames), entityType 'Integration'.
+    // hostnames), entityType 'Integration'. A run that fails writes the
+    // `.failed` row instead, carrying `{ runId, error }`.
     cloudflareRegistrarSync: 'integration.cloudflare.registrar_sync',
+    cloudflareRegistrarSyncFailed: 'integration.cloudflare.registrar_sync.failed',
   },
   subnet: {
     create: 'subnet.create',
@@ -213,6 +218,9 @@ export const AUDIT_ACTIONS = {
   },
   security: {
     sessionRevoke: 'security.session.revoke',
+    // An admin revoking another user's API key from the Security center.
+    // `entityId` is the key id; `after.targetUserId` is its owner.
+    apiKeyRevoke: 'security.api_key.revoke',
     ipRuleCreate: 'security.ip_rule.create',
     ipRuleUpdate: 'security.ip_rule.update',
     ipRuleDelete: 'security.ip_rule.delete',

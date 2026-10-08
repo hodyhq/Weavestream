@@ -145,8 +145,8 @@ describe('ExpirationsService with dismissals', () => {
   const row = (expiresAt: string) => ({
     kind: 'domain',
     companyId: CO,
-    companyName: 'HODY',
-    companySlug: 'hody',
+    companyName: 'Acme',
+    companySlug: 'acme',
     domainId: DOMAIN,
     hostname: 'example.org',
     source: 'tls',
@@ -225,7 +225,7 @@ describe('dashboard domain alerts respect dismissals', () => {
     };
     const prisma = {
       monitoredDomain: { findMany: jest.fn().mockResolvedValue([base]) },
-      company: { findMany: jest.fn().mockResolvedValue([{ id: CO, name: 'HODY', slug: 'hody' }]) },
+      company: { findMany: jest.fn().mockResolvedValue([{ id: CO, name: 'Acme', slug: 'acme' }]) },
       expirationDismissal: {
         findMany: jest.fn().mockResolvedValue(
           dismissedKeys.map(([source, at]) => ({

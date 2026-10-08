@@ -78,7 +78,7 @@ import { ArticleSummaryWorker } from './article-summary/article-summary.processo
     ExportDataModule,
     IntegrationsCoreModule,
     // AssetsModule (pulled in for the integration asset writers) declares
-    // AssetsController, which needs PermissionService for the clone target
+    // AssetsController, which needs PermissionService for the copy target
     // check. The controller is inert here, but Nest still resolves it.
     RbacModule,
     // Alerts feature: the worker hosts the `alerts:scan` (cron tick)

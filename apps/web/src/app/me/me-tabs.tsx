@@ -64,11 +64,13 @@ export function MeTabs({
   sessions,
   apiKeys,
   apiKeysLoadFailed,
+  apiKeysEnabled,
 }: {
   initialTab: TabId;
   me: Me;
   apiKeys: ApiKeySummary[];
   apiKeysLoadFailed: boolean;
+  apiKeysEnabled: boolean;
   sessions: Session[];
 }) {
   const router = useRouter();
@@ -91,7 +93,10 @@ export function MeTabs({
           display: 'flex',
           gap: 2,
           padding: '6px 6px 0',
-          borderBottom: '1px solid var(--line)',
+          // Draw the baseline inside the strip and keep tabs in it. A border plus
+          // `top: 1` on the tabs overflowed the overflow-x scroll box by 1px,
+          // which forced a permanent vertical scrollbar.
+          boxShadow: 'inset 0 -1px 0 var(--line)',
           background: 'var(--panel-2)',
           overflowX: 'auto',
         }}
@@ -115,8 +120,6 @@ export function MeTabs({
                 borderBottom: active ? '1px solid var(--panel)' : 'none',
                 borderRadius: '6px 6px 0 0',
                 cursor: 'pointer',
-                position: 'relative',
-                top: 1,
                 whiteSpace: 'nowrap',
               }}
               title={t.help}
@@ -282,9 +285,9 @@ export function MeTabs({
 
               <Section
                 title="Change password"
-                description="Update your account password. Other sessions are signed out after a successful change."
+                description="Update your account password. Other sessions are signed out and every API key is revoked after a successful change."
               >
-                <PasswordForm />
+                <PasswordForm apiKeyCount={apiKeysLoadFailed ? null : apiKeys.length} />
               </Section>
             </div>
           </Panel>
@@ -292,13 +295,20 @@ export function MeTabs({
 
         {tab === 'sessions' && (
           <Panel title={`Active sessions (${sessions.length})`} flush noPad>
-            <SessionsList sessions={sessions} />
+            <SessionsList
+              sessions={sessions}
+              apiKeyCount={apiKeysLoadFailed ? null : apiKeys.length}
+            />
           </Panel>
         )}
 
         {tab === 'api-keys' && (
           <Panel title={apiKeysLoadFailed ? 'API keys' : `API keys (${apiKeys.length})`} flush noPad>
-            <ApiKeysList keys={apiKeys} loadFailed={apiKeysLoadFailed} />
+            <ApiKeysList
+              keys={apiKeys}
+              loadFailed={apiKeysLoadFailed}
+              enabled={apiKeysEnabled}
+            />
           </Panel>
         )}
       </div>
