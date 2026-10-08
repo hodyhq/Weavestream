@@ -5,7 +5,7 @@ import type {
   AssetSummary,
   LayoutFieldSummary,
   LayoutSummary,
-} from '../../lib/server-api';
+} from '@weavestream/shared';
 import { LayoutAssetsTable } from './layout-assets-table';
 
 const push = jest.fn();

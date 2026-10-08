@@ -1,16 +1,16 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
+import { requireMe } from '../../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
+import { getAsset } from '../../../../../../lib/server-api/assets';
+import { throwUnlessFound } from '../../../../../../lib/server-api/core';
 import {
-  getAsset,
-  getCompanyDetail,
   getCompanyPasswordFolders,
-  requireMe,
   getPasswordDetailResult,
-  getSettings,
   listPasswordVersions,
-  throwUnlessFound,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/passwords';
 import { canWriteCompany, hasCapability } from '../../../../../../lib/roles';
 import {
   DetailTitle,
@@ -20,10 +20,8 @@ import { TopBar } from '../../../../../../components/shell/top-bar';
 import { ErrorBanner, LayoutSwatch, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
-import {
-  PasswordDetailClient,
-  PasswordHeaderActions,
-} from './password-detail-client';
+import { PasswordDetailClient } from './password-detail/password-detail-client';
+import { PasswordHeaderActions } from './password-detail/password-header-actions';
 
 export const metadata: Metadata = { title: 'Password' };
 
@@ -33,7 +31,7 @@ export const metadata: Metadata = { title: 'Password' };
  * Server-rendered scaffold: all plaintext (password, TOTP secret,
  * decrypted notes) is fetched by the client components when the user
  * explicitly requests it. The server only receives non-secret fields
- * and the decrypted `notes` JSON, which is returned by `GET /:id`.
+ * and the decrypted `notes` text, which is returned by `GET /:id`.
  */
 export default async function PasswordDetailPage({
   params,

@@ -1,15 +1,15 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { getSettings } from '../../../../lib/server-api/settings';
 import {
   getCompanyDetail,
-  getCompanyDomainsBasic,
-  requireMe,
-  getSettings,
-  listAssets,
-  throwUnlessFound,
   type CompanyDetail,
-  type MonitoredDomain,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/companies';
+import { listAssets } from '../../../../lib/server-api/assets';
+import { throwUnlessFound } from '../../../../lib/server-api/core';
+import type { MonitoredDomainDto } from '@weavestream/shared';
+import { getCompanyDomainsBasic } from '../../../../lib/server-api/domains';
 import { canWriteCompany } from '../../../../lib/roles';
 import { DetailTitle, PageBody } from '../../../../components/shell/page-header';
 import { TopBar } from '../../../../components/shell/top-bar';
@@ -29,6 +29,7 @@ import {
   companyTypeTone,
   formatAddressLines,
 } from '../../../../lib/company-format';
+import { ChildrenMenu } from './children-menu';
 import { CompanyActions } from './company-actions';
 
 /**
@@ -50,7 +51,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   const [companyRes, assetsPage, domainPage] = await Promise.all([
     // Deduped against the parent layout's `getCompanyDetail(id)` by
     // React's per-request `cache()`. Same for `getCompanyDomainsBasic`
-    // below. See `lib/server-api.ts` for the full list of
+    // below. See `lib/server-api/companies.ts` for the full list of
     // layout-shared cached reads.
     getCompanyDetail(id),
     listAssets(id, { limit: 5 }),
@@ -381,7 +382,7 @@ function ClassificationPanel({ company, manage }: { company: CompanyDetail; mana
             company.parent ? (
               <Link
                 href={`/admin/companies/${company.parent.id}`}
-                style={{ color: 'var(--text)', textDecoration: 'none' }}
+                style={{ color: 'var(--accent)', textDecoration: 'none' }}
               >
                 {company.parent.name}
               </Link>
@@ -404,12 +405,7 @@ function ClassificationPanel({ company, manage }: { company: CompanyDetail; mana
         {company.childrenCount > 0 && (
           <Row
             label="Children"
-            value={
-              <span>
-                {company.childrenCount} company
-                {company.childrenCount === 1 ? '' : 'ies'}
-              </span>
-            }
+            value={<ChildrenMenu companyId={company.id} count={company.childrenCount} />}
           />
         )}
         <Row
@@ -669,7 +665,7 @@ function externalLink(url: string) {
   );
 }
 
-function alertCount(domains: MonitoredDomain[]): number {
+function alertCount(domains: MonitoredDomainDto[]): number {
   return domains.filter(
     (d) =>
       d.latestStatus === 'EXPIRING' || d.latestStatus === 'EXPIRED' || d.latestStatus === 'FAIL',
@@ -685,7 +681,7 @@ function DomainAlertBanner({
   domains,
   companyId,
 }: {
-  domains: MonitoredDomain[];
+  domains: MonitoredDomainDto[];
   companyId: string;
 }) {
   const counts = domains.reduce(
@@ -693,7 +689,7 @@ function DomainAlertBanner({
       acc[d.latestStatus] = (acc[d.latestStatus] ?? 0) + 1;
       return acc;
     },
-    {} as Record<MonitoredDomain['latestStatus'], number>,
+    {} as Record<MonitoredDomainDto['latestStatus'], number>,
   );
   const total = alertCount(domains);
   return (

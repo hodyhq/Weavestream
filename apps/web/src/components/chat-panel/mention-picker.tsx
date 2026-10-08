@@ -9,11 +9,8 @@ import {
   type RefObject,
 } from 'react';
 import { apiFetch } from '../../lib/api';
-import type {
-  ArticlePage,
-  AssetPage,
-  MonitoredDomain,
-} from '../../lib/server-api';
+import type { AssetPage, MonitoredDomainDto } from '@weavestream/shared';
+import type { ArticlePage } from '../../lib/server-api/articles';
 import { Icon } from '../ui';
 
 /**
@@ -108,7 +105,7 @@ export function MentionPicker({
       const [articleRes, assetRes, domainRes] = await Promise.allSettled([
         apiFetch<ArticlePage>(`/companies/${companyId}/articles?${qs}`),
         apiFetch<AssetPage>(`/companies/${companyId}/assets?${qs}`),
-        apiFetch<{ items: MonitoredDomain[]; nextCursor: string | null }>(
+        apiFetch<{ items: MonitoredDomainDto[]; nextCursor: string | null }>(
           `/companies/${companyId}/domains?${qs}`,
         ),
       ]);

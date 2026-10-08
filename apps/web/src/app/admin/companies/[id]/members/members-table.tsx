@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { MembershipRole, UserRole } from '@weavestream/shared';
-import type { CompanyMembership as Row } from '../../../../../lib/server-api';
+import { problemMessage } from '@weavestream/shared';
+import type { CompanyMembership as Row } from '../../../../../lib/server-api/companies';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -92,8 +93,7 @@ export function MembersTable({
     });
     setPending(false);
     if (!res.ok) {
-      const problem = res.problem as { detail?: string } | undefined;
-      toast.push(problem?.detail ?? 'Could not add member.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not add member.', 'danger');
       return false;
     }
     toast.push('Member added.', 'ok');

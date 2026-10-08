@@ -1,13 +1,14 @@
 import type { Metadata } from 'next';
+import { problemMessage } from '@weavestream/shared';
 
 export const metadata: Metadata = { title: 'Members' };
+import { requireMe } from '../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../lib/server-api/settings';
 import {
   getCompanyDetail,
   getCompanyMemberships,
-  requireMe,
-  getSettings,
-  throwUnlessFound,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/companies';
+import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import { hasCapability } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { ErrorBanner, LayoutSwatch, Panel } from '../../../../../components/ui';
@@ -59,7 +60,7 @@ export default async function CompanyMembersPage({
           <ErrorBanner
             title="Couldn't load memberships."
             detail={
-              (membershipsError.problem as { detail?: string } | undefined)?.detail ??
+              problemMessage(membershipsError.problem) ??
               `The memberships endpoint returned HTTP ${membershipsError.status}.`
             }
           />

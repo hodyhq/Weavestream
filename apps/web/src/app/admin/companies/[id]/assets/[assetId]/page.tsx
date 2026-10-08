@@ -1,18 +1,16 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import React, { Fragment } from 'react';
+import React from 'react';
+import { requireMe } from '../../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
+import { getAsset } from '../../../../../../lib/server-api/assets';
 import {
   forMetadata,
-  getAsset,
-  getCompanyDetail,
-  requireMe,
-  getSettings,
   throwUnlessFound,
-  type AssetSummary,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/core';
 import { canWriteCompany } from '../../../../../../lib/roles';
-import { humanSize } from '@weavestream/shared';
 import {
   DetailTitle,
   PageBody,
@@ -21,12 +19,11 @@ import { TopBar } from '../../../../../../components/shell/top-bar';
 import { Icon, LayoutSwatch, Panel, ShowMore, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
-import { RichTextView } from '../../../../../../components/editor/rich-text-view';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 import { CredentialsPanel } from '../../../../../../components/passwords/credentials-panel';
-import { vaultLinkLabel, vaultLinkUrl } from '../../../../../../lib/vault-link';
-import { ExternalUrlValue } from '../../../../../../components/assets/external-url-value';
+import type { AssetFieldContext } from '../../../../../../components/assets/asset-field-value';
+import { AssetDetailView } from '../../../../../../components/assets/asset-detail-view';
 import { AssetChatContext } from '../../../../../../components/chat-panel/asset-chat-context';
 import { SidebarActive } from '../../../../../../components/shell/sidebar-active';
 import { AssetHeaderActions } from './asset-header-actions';
@@ -71,11 +68,10 @@ export default async function AssetDetailPage({
   const createdBy = asset.createdByUser;
   const updatedBy = asset.updatedByUser;
 
-  const primaryField = asset.fields.find((f) => f.isPrimary);
-  const noteFields = asset.fields.filter(
-    (f) => f.fieldType === 'RICH_TEXT' || f.fieldType === 'TEXTAREA',
-  );
-  const noteFieldSlugs = new Set(noteFields.map((f) => f.slug));
+  const fieldContext: AssetFieldContext = {
+    assetHrefBase: `/admin/companies/${companyId}/assets`,
+    richText: { isAdmin: true, fallbackCompanyId: companyId },
+  };
 
   return (
     <>
@@ -130,82 +126,7 @@ export default async function AssetDetailPage({
             gap: 16,
           }}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Panel>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '180px minmax(0, 1fr)',
-                  gap: '10px 20px',
-                }}
-              >
-                {asset.fields
-                  .filter((f) => !noteFieldSlugs.has(f.slug))
-                  .map((f) => (
-                    <Fragment key={f.id}>
-                      <div
-                        style={{
-                          fontSize: 11.5,
-                          color: 'var(--muted)',
-                          fontFamily: 'var(--font-mono)',
-                          textTransform: 'uppercase',
-                          letterSpacing: 0.3,
-                          paddingTop: 2,
-                        }}
-                      >
-                        {f.name}
-                        {primaryField?.id === f.id && (
-                          <Tag tone="accent" style={{ marginLeft: 6 }}>
-                            primary
-                          </Tag>
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 13,
-                          color: 'var(--text)',
-                          minWidth: 0,
-                          overflowWrap: 'anywhere',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        {renderValue(
-                          f,
-                          asset.fieldValues[f.slug],
-                          asset.references,
-                          companyId,
-                        )}
-                      </div>
-                    </Fragment>
-                  ))}
-              </div>
-            </Panel>
-
-            {noteFields.map((noteField) => {
-              const value = asset.fieldValues[noteField.slug];
-              if (!value) return null;
-              return (
-                <Panel key={noteField.id} title={noteField.name}>
-                  {noteField.fieldType === 'RICH_TEXT' ? (
-                    <RichTextView value={value} isAdmin fallbackCompanyId={companyId} />
-                  ) : (
-                    <div
-                      style={{
-                        fontSize: 13.5,
-                        lineHeight: 1.6,
-                        color: 'var(--text-2)',
-                        whiteSpace: 'pre-wrap',
-                        overflowWrap: 'anywhere',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {String(value ?? '')}
-                    </div>
-                  )}
-                </Panel>
-              );
-            })}
-          </div>
+          <AssetDetailView asset={asset} context={fieldContext} />
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <LinkedItemsPanel
@@ -404,285 +325,4 @@ function Row({ label, value, last, title }: RowProps) {
       </span>
     </div>
   );
-}
-
-function renderValue(
-  field: AssetSummary['fields'][number],
-  value: unknown,
-  references: AssetSummary['references'],
-  companyId: string,
-): React.ReactNode {
-  if (value === null || value === undefined || value === '') {
-    return <span style={{ color: 'var(--dim)' }}>—</span>;
-  }
-  switch (field.fieldType) {
-    case 'BOOLEAN':
-      return (
-        <Tag tone={value ? 'ok' : 'outline'}>
-          {value ? 'true' : 'false'}
-        </Tag>
-      );
-    case 'DROPDOWN': {
-      const choices = ((field.options as { choices?: Array<{ slug: string; label: string }> })
-        .choices ?? []) as Array<{ slug: string; label: string }>;
-      const match = choices.find((c) => c.slug === value);
-      return match?.label ?? String(value);
-    }
-    case 'MULTISELECT': {
-      if (!Array.isArray(value)) return String(value);
-      const choices = ((field.options as { choices?: Array<{ slug: string; label: string }> })
-        .choices ?? []) as Array<{ slug: string; label: string }>;
-      const byName = new Map(choices.map((c) => [c.slug, c.label]));
-      return (
-        <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {value.map((v) => (
-            <Tag key={String(v)} tone="outline">
-              {byName.get(String(v)) ?? String(v)}
-            </Tag>
-          ))}
-        </span>
-      );
-    }
-    case 'TAGS': {
-      // Server-side `hydrateTagFields` converts the stored UUID array into
-      // `{ id, name }` snapshots so we render the canonical display name
-      // even after a rename. Legacy string entries (pre-migration data
-      // that never got resolved) round-trip through `String(v)` as a
-      // fallback so the chip still shows something meaningful.
-      if (!Array.isArray(value)) return String(value);
-      const chips = (value as unknown[])
-        .map((v) => {
-          if (
-            v &&
-            typeof v === 'object' &&
-            typeof (v as { name?: unknown }).name === 'string'
-          ) {
-            const obj = v as { id?: string; name: string };
-            return { key: obj.id ?? obj.name, label: obj.name };
-          }
-          if (typeof v === 'string' && v.length > 0) {
-            return { key: v, label: v };
-          }
-          return null;
-        })
-        .filter((x): x is { key: string; label: string } => x !== null);
-      if (chips.length === 0) return null;
-      return (
-        <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {chips.map((c) => (
-            <Tag key={c.key} tone="outline">
-              {c.label}
-            </Tag>
-          ))}
-        </span>
-      );
-    }
-    case 'URL':
-      return <ExternalUrlValue url={String(value)} />;
-    case 'VAULTWARDEN_LINK':
-      return (
-        <ExternalUrlValue
-          url={vaultLinkUrl(value)}
-          label={vaultLinkLabel(value) || undefined}
-        />
-      );
-    case 'EMAIL':
-      return (
-        <a
-          href={`mailto:${value}`}
-          style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}
-        >
-          {String(value)}
-        </a>
-      );
-    case 'IP_ADDRESS':
-      return (
-        <span
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 12.5,
-            color: 'var(--text)',
-          }}
-        >
-          {String(value)}
-        </span>
-      );
-    case 'ASSET_REFERENCE': {
-      const ids = Array.isArray(value) ? value : [value];
-      return (
-        <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {ids.map((v) => {
-            const id = String(v);
-            const hit = references[id];
-            if (!hit) {
-              return (
-                <span
-                  key={id}
-                  title="Referenced asset is no longer available"
-                  style={{ display: 'inline-flex' }}
-                >
-                  <Tag tone="outline">{id.slice(0, 8)}… (missing)</Tag>
-                </span>
-              );
-            }
-            return (
-              <Link
-                key={id}
-                href={`/admin/companies/${companyId}/assets/${id}`}
-                style={{ textDecoration: 'none' }}
-              >
-                <Tag
-                  tone="info"
-                  style={
-                    hit.archivedAt
-                      ? { textDecoration: 'line-through', opacity: 0.75 }
-                      : undefined
-                  }
-                >
-                  {hit.name}
-                </Tag>
-              </Link>
-            );
-          })}
-        </span>
-      );
-    }
-    case 'DATE':
-    case 'DATETIME': {
-      const raw = typeof value === 'string' ? value : String(value);
-      const formatted = formatDateField(raw, field.fieldType);
-      return (
-        <span
-          style={{
-            fontSize: 12.5,
-          }}
-          title={raw}
-        >
-          {formatted ?? raw}
-        </span>
-      );
-    }
-    case 'RICH_TEXT':
-      return <RichTextView value={value} isAdmin fallbackCompanyId={companyId} />;
-    case 'FILE': {
-      const entries = Array.isArray(value) ? (value as FileFieldValue[]) : [];
-      if (entries.length === 0) return <span style={{ color: 'var(--dim)' }}>—</span>;
-      return <FileTileRow entries={entries} />;
-    }
-    default:
-      return <span>{String(value)}</span>;
-  }
-}
-
-type FileFieldValue = {
-  uploadId: string;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  isImage?: boolean;
-  thumbnailUrl?: string | null;
-  downloadUrl?: string | null;
-};
-
-function FileTileRow({ entries }: { entries: FileFieldValue[] }) {
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-        gap: 8,
-      }}
-    >
-      {entries.map((entry) => {
-        const isImage = entry.isImage ?? entry.mimeType?.startsWith('image/');
-        return (
-          <a
-            key={entry.uploadId}
-            href={entry.downloadUrl ?? '#'}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              border: '1px solid var(--line)',
-              borderRadius: 5,
-              background: 'var(--panel-2)',
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-              textDecoration: 'none',
-              color: 'inherit',
-            }}
-          >
-            <div
-              style={{
-                aspectRatio: '1 / 1',
-                background: 'var(--panel)',
-                display: 'grid',
-                placeItems: 'center',
-                color: 'var(--dim)',
-              }}
-            >
-              {isImage && entry.thumbnailUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={entry.thumbnailUrl}
-                  alt={entry.filename}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-              ) : (
-                <Icon.doc size={22} />
-              )}
-            </div>
-            <div style={{ padding: '6px 8px' }}>
-              <div
-                title={entry.filename}
-                style={{
-                  fontSize: 11.5,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {entry.filename}
-              </div>
-              <div
-                style={{
-                  fontSize: 10,
-                  color: 'var(--dim)',
-                  fontFamily: 'var(--font-mono)',
-                  marginTop: 2,
-                }}
-              >
-                {humanSize(entry.sizeBytes)}
-              </div>
-            </div>
-          </a>
-        );
-      })}
-    </div>
-  );
-}
-
-
-function formatDateField(
-  raw: string,
-  fieldType: 'DATE' | 'DATETIME',
-): string | null {
-  if (!raw) return null;
-  const ms = Date.parse(raw);
-  if (!Number.isFinite(ms)) return null;
-  const date = new Date(ms);
-  if (fieldType === 'DATE') {
-    return date.toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  }
-  return date.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
 }

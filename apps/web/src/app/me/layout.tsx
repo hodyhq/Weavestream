@@ -3,13 +3,11 @@ import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { AdminShell } from '../../components/shell/admin-shell';
 import { CompanyShell } from '../../components/shell/company-shell';
-import {
-  getAssetCountsByLayout,
-  getMe,
-  getSettings,
-  listDomains,
-  listLayouts,
-} from '../../lib/server-api';
+import { getMe } from '../../lib/server-api/auth';
+import { getSettings } from '../../lib/server-api/settings';
+import { listLayouts } from '../../lib/server-api/layouts';
+import { getAssetCountsByLayout } from '../../lib/server-api/assets';
+import { listDomains } from '../../lib/server-api/domains';
 import {
   canAccessAdminShell,
   preferredMembership,

@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import {
-  forMetadata,
   getMeForMetadata,
   requireMe,
-  getSubnetDetail,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/auth';
+import { forMetadata } from '../../../../../lib/server-api/core';
+import { getSubnetDetail } from '../../../../../lib/server-api/ipam';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Tag } from '../../../../../components/ui';

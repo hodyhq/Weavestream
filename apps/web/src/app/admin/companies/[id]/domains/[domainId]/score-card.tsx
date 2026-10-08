@@ -9,10 +9,10 @@ import {
   type TagTone,
 } from '../../../../../../components/ui';
 import type {
-  DomainCheck,
+  DomainCheckDto,
   DomainScoreBreakdownItem,
   DomainScoreTier,
-} from '../../../../../../lib/server-api';
+} from '@weavestream/shared';
 
 /**
  * Domain Check v2 — hygiene score card.
@@ -27,8 +27,8 @@ export function ScoreCard({
   latest,
   previous,
 }: {
-  latest: DomainCheck;
-  previous: DomainCheck | null;
+  latest: DomainCheckDto;
+  previous: DomainCheckDto | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const score = latest.details?.score;

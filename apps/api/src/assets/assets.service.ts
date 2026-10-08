@@ -20,7 +20,7 @@ import type {
   UpdateAssetInput,
   UserRole,
 } from '@weavestream/shared';
-import type { IntegrationTargetProvenance } from '@weavestream/shared';
+import type { FieldType, IntegrationTargetProvenance } from '@weavestream/shared';
 import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 import { FILTERABLE_FIELD_TYPES } from '@weavestream/shared';
 import type { FileFieldEntry } from '@weavestream/shared';
@@ -251,7 +251,7 @@ export interface SerializedAsset {
     id: string;
     slug: string;
     name: string;
-    fieldType: string;
+    fieldType: FieldType;
     isPrimary: boolean;
     visibleToClients: boolean;
     options: Record<string, unknown>;

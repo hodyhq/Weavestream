@@ -2,14 +2,14 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = { title: 'Domains' };
 
+import { requireMe } from '../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../lib/server-api/companies';
+import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import {
-  getCompanyDetail,
   getCompanyDomainsBasic,
-  requireMe,
-  getSettings,
   listDomains,
-  throwUnlessFound,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/domains';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';

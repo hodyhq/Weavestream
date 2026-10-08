@@ -1,7 +1,8 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { ArticleDetail, FolderNode } from '../../../../../lib/server-api';
+import type { FolderNode } from '@weavestream/shared';
+import type { ArticleDetail } from '../../../../../lib/server-api/articles';
 import { ArticleForm } from './article-form';
 
 jest.mock('next/navigation', () => ({
@@ -105,12 +106,15 @@ jest.mock('../../../../../components/ui', () => {
 const folders = [
   {
     id: 'folder-1',
+    companyId: 'company-1',
     name: 'Runbooks',
     slug: 'runbooks',
     icon: null,
     position: 0,
     parentId: null,
     archivedAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
     articleCount: 0,
     children: [],
   },
