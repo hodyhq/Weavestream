@@ -11,10 +11,12 @@ import {
   // converter below stays for the user-facing editor mode switch.
   tiptapDocToMarkdown as tiptapDocToSharedMarkdown,
   type ArticleEditorMode,
+  problemMessage,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { useTimezone } from '../../../../../lib/timezone-context';
-import type { ArticleDetail, FolderNode } from '../../../../../lib/server-api';
+import type { FolderNode } from '@weavestream/shared';
+import type { ArticleDetail } from '../../../../../lib/server-api/articles';
 import {
   Btn,
   Dialog,
@@ -338,7 +340,7 @@ export function ArticleForm({
       });
       setSaving(false);
       if (!res.ok || !res.data) {
-        setError(extractErr(res.problem) ?? 'Create failed');
+        setError(problemMessage(res.problem) ?? 'Create failed');
         return;
       }
       toast.push('Article created', 'ok');
@@ -369,7 +371,7 @@ export function ArticleForm({
     );
     if (kind === 'publish') setSaving(false);
     if (!res.ok) {
-      setError(extractErr(res.problem) ?? 'Save failed');
+      setError(problemMessage(res.problem) ?? 'Save failed');
       return;
     }
     // Track the bumped revision so the chat snapshot's basis claim
@@ -575,7 +577,7 @@ export function ArticleForm({
       });
       if (!res.ok) {
         setDiscarding(false);
-        setError(extractErr(res.problem) ?? 'Could not discard draft.');
+        setError(problemMessage(res.problem) ?? 'Could not discard draft.');
         return;
       }
     }
@@ -1081,20 +1083,6 @@ function flattenFolders(
     if (f.children.length) out.push(...flattenFolders(f.children, depth + 1));
   }
   return out;
-}
-
-function extractErr(problem: unknown): string | null {
-  const p = problem as { detail?: unknown; title?: string } | undefined;
-  if (!p) return null;
-  if (typeof p.detail === 'string') return p.detail;
-  if (
-    p.detail &&
-    typeof p.detail === 'object' &&
-    'message' in (p.detail as Record<string, unknown>)
-  ) {
-    return String((p.detail as { message: string }).message);
-  }
-  return p.title ?? null;
 }
 
 function timeAgo(d: Date, tz: string): string {

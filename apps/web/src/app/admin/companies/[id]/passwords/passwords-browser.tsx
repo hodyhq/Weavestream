@@ -10,10 +10,11 @@ import {
   useTransition,
 } from 'react';
 import type {
-  PasswordFolderRow,
+  PasswordFolderSchema,
+  PasswordGeneratorDefaults,
   PasswordSummary,
-} from '../../../../../lib/server-api';
-import type { PasswordGeneratorDefaults } from '@weavestream/shared';
+} from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -45,7 +46,7 @@ import {
 interface BrowserProps {
   companyId: string;
   rows: PasswordSummary[];
-  folders: PasswordFolderRow[];
+  folders: PasswordFolderSchema[];
   canManage: boolean;
   openNew?: boolean;
   prefillAssetId?: string;
@@ -139,7 +140,7 @@ export function PasswordsBrowser({
     // articles browser so a fresh page load shows the top of the
     // hierarchy without requiring clicks.
     const seed: Record<string, boolean> = {};
-    const byParent = new Map<string | null, PasswordFolderRow[]>();
+    const byParent = new Map<string | null, PasswordFolderSchema[]>();
     for (const f of folders) {
       if (f.archivedAt) continue;
       const list = byParent.get(f.parentId) ?? [];
@@ -340,7 +341,7 @@ export function PasswordsBrowser({
     setFolderBusy(false);
     if (!res.ok) {
       setErr(
-        (res.problem as { message?: string } | undefined)?.message ??
+        problemMessage(res.problem) ??
           'Create folder failed',
       );
       return;
@@ -1504,8 +1505,8 @@ function FolderSubtree({
   open,
   setOpen,
 }: {
-  folder: PasswordFolderRow;
-  all: PasswordFolderRow[];
+  folder: PasswordFolderSchema;
+  all: PasswordFolderSchema[];
   rows: PasswordSummary[];
   active: string | null | 'ALL';
   setActive: (v: string | null | 'ALL') => void;

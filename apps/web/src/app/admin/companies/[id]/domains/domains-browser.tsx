@@ -3,7 +3,8 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
-import type { MonitoredDomain } from '../../../../../lib/server-api';
+import type { MonitoredDomainDto } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -32,7 +33,7 @@ export function DomainsBrowser({
   openNew = false,
 }: {
   companyId: string;
-  rows: MonitoredDomain[];
+  rows: MonitoredDomainDto[];
   canManage: boolean;
   openNew?: boolean;
 }) {
@@ -41,7 +42,7 @@ export function DomainsBrowser({
   const [isPending, startTransition] = useTransition();
   const [dialog, setDialog] = useState<
     | { kind: 'add' }
-    | { kind: 'edit'; row: MonitoredDomain }
+    | { kind: 'edit'; row: MonitoredDomainDto }
     | null
   >(openNew && canManage ? { kind: 'add' } : null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -81,11 +82,11 @@ export function DomainsBrowser({
     };
     const res =
       mode === 'add'
-        ? await apiFetch<MonitoredDomain>(`/companies/${companyId}/domains`, {
+        ? await apiFetch<MonitoredDomainDto>(`/companies/${companyId}/domains`, {
             method: 'POST',
             body: JSON.stringify(body),
           })
-        : await apiFetch<MonitoredDomain>(
+        : await apiFetch<MonitoredDomainDto>(
             `/companies/${companyId}/domains/${id}`,
             { method: 'PATCH', body: JSON.stringify(body) },
           );
@@ -321,7 +322,7 @@ function DomainDialog({
   onCancel,
   onSubmit,
 }: {
-  initial: MonitoredDomain | null;
+  initial: MonitoredDomainDto | null;
   onCancel: () => void;
   onSubmit: (form: FormState) => Promise<void>;
 }) {
@@ -437,7 +438,6 @@ function DomainDialog({
           </span>
         </label>
 
-
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" onClick={onCancel} style={secondaryBtn}>
             Cancel
@@ -511,10 +511,10 @@ function domainColumns({
   archive: (id: string) => Promise<void>;
   restore: (id: string) => Promise<void>;
   setDialog: (
-    s: { kind: 'add' } | { kind: 'edit'; row: MonitoredDomain } | null,
+    s: { kind: 'add' } | { kind: 'edit'; row: MonitoredDomainDto } | null,
   ) => void;
-}): DataColumn<MonitoredDomain>[] {
-  const STATUS_RANK: Record<MonitoredDomain['latestStatus'], number> = {
+}): DataColumn<MonitoredDomainDto>[] {
+  const STATUS_RANK: Record<MonitoredDomainDto['latestStatus'], number> = {
     OK: 0,
     EXPIRING: 1,
     EXPIRED: 2,
@@ -522,7 +522,7 @@ function domainColumns({
     NO_SITE: 4,
     UNKNOWN: 5,
   };
-  const cols: DataColumn<MonitoredDomain>[] = [
+  const cols: DataColumn<MonitoredDomainDto>[] = [
     {
       id: 'hostname',
       header: 'Hostname',
@@ -676,7 +676,7 @@ function domainColumns({
   return cols;
 }
 
-export function StatusPill({ status }: { status: MonitoredDomain['latestStatus'] }) {
+export function StatusPill({ status }: { status: MonitoredDomainDto['latestStatus'] }) {
   const tone = STATUS_TONE[status];
   return <Tag tone={tone.tone}>{tone.label}</Tag>;
 }
@@ -695,7 +695,7 @@ function ScoreChip({ score }: { score: number | null }) {
 }
 
 const STATUS_TONE: Record<
-  MonitoredDomain['latestStatus'],
+  MonitoredDomainDto['latestStatus'],
   { label: string; tone: 'ok' | 'warn' | 'danger' | 'accent' | 'outline' | 'default' }
 > = {
   OK: { label: 'OK', tone: 'ok' },
@@ -722,14 +722,6 @@ function fmtRelative(iso: string | null): string {
   if (hrs < 24) return `${hrs} h ago`;
   const days = Math.round(hrs / 24);
   return `${days} d ago`;
-}
-
-function problemMessage(problem: unknown): string | null {
-  if (!problem || typeof problem !== 'object') return null;
-  const record = problem as Record<string, unknown>;
-  if (typeof record.message === 'string') return record.message;
-  if (typeof record.detail === 'string') return record.detail;
-  return null;
 }
 
 const fieldStyle: React.CSSProperties = {
@@ -789,7 +781,7 @@ const secondaryBtn: React.CSSProperties = {
  * never mistaken for a hand-entered one, plus a warning once the sync stops
  * seeing it on the account.
  */
-function SourceTags({ row }: { row: MonitoredDomain }) {
+function SourceTags({ row }: { row: MonitoredDomainDto }) {
   if (row.source !== 'CLOUDFLARE') return null;
   return (
     <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
@@ -802,7 +794,7 @@ function SourceTags({ row }: { row: MonitoredDomain }) {
 }
 
 /** Registrar expiry plus auto-renew state; an expiry with auto-renew off is the one to act on. */
-function RenewalCell({ row }: { row: MonitoredDomain }) {
+function RenewalCell({ row }: { row: MonitoredDomainDto }) {
   if (!row.registrarExpiresAt) return <span style={{ color: 'var(--muted)' }}>—</span>;
   const manual = row.registrarAutoRenew === false;
   return (

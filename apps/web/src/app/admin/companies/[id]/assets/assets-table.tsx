@@ -4,12 +4,13 @@ import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { CopyAssetsDialog } from './copy-assets-dialog';
 import { useRouter } from 'next/navigation';
-import type { BulkAssetResult } from '@weavestream/shared';
 import type {
   AssetSummary,
+  BulkAssetResult,
   LayoutSummary,
   PasswordSummary,
-} from '../../../../../lib/server-api';
+} from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import {
   Btn,
   DataTable,
@@ -318,9 +319,8 @@ export function AssetsTable({
     setBulkPending(false);
 
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | null;
       toast.push(
-        problem?.detail ?? problem?.title ?? `Bulk ${action} failed.`,
+        problemMessage(res.problem) ?? `Bulk ${action} failed.`,
         'danger',
       );
       return;

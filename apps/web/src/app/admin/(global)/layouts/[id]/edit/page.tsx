@@ -1,7 +1,11 @@
 import { notFound } from 'next/navigation';
-import { getLayout, getMe, listLayouts } from '../../../../../../lib/server-api';
+import { getMe } from '../../../../../../lib/server-api/auth';
+import {
+  getLayout,
+  listLayouts,
+} from '../../../../../../lib/server-api/layouts';
 import { hasCapability } from '../../../../../../lib/roles';
-import { LayoutBuilder } from './layout-builder';
+import { LayoutBuilder } from './layout-builder/layout-builder';
 
 /**
  * Phase 3 layout builder. Readable by every authenticated role (the API

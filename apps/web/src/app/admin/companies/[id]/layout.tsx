@@ -2,17 +2,17 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { CompanyShell } from '../../../../components/shell/company-shell';
+import { getMe } from '../../../../lib/server-api/auth';
+import { getSettings } from '../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../lib/server-api/companies';
+import { getActiveLayouts } from '../../../../lib/server-api/layouts';
+import { getCompanyAssetCounts } from '../../../../lib/server-api/assets';
+import { throwUnlessFound } from '../../../../lib/server-api/core';
+import { getCompanySubnetsBasic } from '../../../../lib/server-api/ipam';
 import {
-  getActiveLayouts,
   getCompanyActivePasswords,
-  getCompanyAssetCounts,
-  getCompanyDetail,
-  getCompanyDomainsBasic,
-  getCompanySubnetsBasic,
-  getMe,
-  getSettings,
-  throwUnlessFound,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/passwords';
+import { getCompanyDomainsBasic } from '../../../../lib/server-api/domains';
 
 /**
  * Shell + title-template for every page under `/admin/companies/[id]`.

@@ -13,6 +13,38 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.11] - 2026-10-05
+
+### Added
+
+- **Parent companies list their children.** On a parent company's overview, the child count in the Classification panel now opens a menu that lists every child company by name and links to it. Archived children are tagged, and a long list scrolls inside the menu. The list is loaded only when the menu opens, from a new `GET /companies/:id/children` endpoint that requires read access to the parent.
+
+### Fixed
+
+- **The child count used the wrong word.** The Classification panel showed "2 companyies" whatever tenant term was configured. It now uses the configured term, for example "2 sites" or "1 customer".
+- **Menu rows had no hover effect.** Rows in action menus and the profile menu now highlight under the pointer, the same as the recent companies menu in the top bar.
+- **The parent company link did not look like a link.** On a child company, the parent name in the Classification panel now uses the link color.
+
+## [1.9.10] - 2026-10-04
+
+### Fixed
+
+- **Breeze sync failed after a Breeze upgrade.** Breeze v0.111 and later add fields within the same partner API version (`parentPolicyId` on configuration policies, memory slot and module details on device inventory), and Weavestream rejected every page that carried a field it did not recognise, which failed device inventory, site inventory, network equipment, virtual machines, configuration policies, and everything that depends on them. Weavestream now reads only the Breeze fields it uses: new fields are ignored, new values in display-only lists sync as text, unknown record variants are skipped, and one record Weavestream cannot read is reported by field path while the rest of the page syncs. Backup configurations, whose Breeze export never matched the earlier schema, now sync too. ([#47](https://github.com/Weavestream/Weavestream/issues/47))
+- **Breeze automations and other procedures were withheld as secrets by chance.** The secret inspection that runs before an article is written read Weavestream's own slug (`automations-<id>`) as an encoded credential whenever the record's UUID happened to look random enough, which withheld about a third of automations and marked the whole resource failed. UUIDs are no longer treated as credentials, and a record withheld by this inspection is now reported as "secret blocked" on that record instead of failing the resource. Credential patterns and genuinely random tokens are still withheld.
+- **Password notes are preserved exactly as plain text.** JSON-looking notes are no longer parsed or rewritten as structured data, so notes entered in the web and mobile apps, exports, and PDFs remain unchanged.
+- **Password details now fit on narrow screens.** Credential fields and strength indicators can shrink and stack on mobile instead of overflowing the viewport.
+- **Long values no longer overflow sticky table cells**, and top-bar content no longer triggers a false missing-key warning during navigation.
+- **Upload type detection is reliable across test workers.** The lazy `file-type` load no longer relies on dynamically generated imports that could reuse a torn-down test runtime.
+- **Integration resource-target changes are no longer silently ignored.** Invalid or unsupported target configuration changes are rejected rather than appearing to succeed.
+
+### Changed
+
+- **Shared domain contracts now define API DTOs**, including subnet contracts, and web, mobile, and worker code consume public API exports instead of duplicating types or depending on internal module paths.
+- **Photo galleries now share components, query logic, and attachment helpers** across the admin and portal experiences.
+- **Asset details share a reusable renderer**, with asset field formatting centralized for consistent display.
+- **API errors now use consistent centralized messages.**
+- **Dependency updates address production and development security advisories** and remove duplicate ProseMirror versions and unused worker dependencies.
+
 ## [1.9.9] - 2026-09-15
 
 ### Fixed
@@ -802,7 +834,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.9...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.10...HEAD
+[1.9.10]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.10
 [1.9.9]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.9
 [1.9.8]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.8
 [1.9.7]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.7

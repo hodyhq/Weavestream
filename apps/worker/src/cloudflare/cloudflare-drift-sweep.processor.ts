@@ -5,10 +5,11 @@ import {
   cloudflareDriftSweepJobSchema,
   QueueNames,
 } from '@weavestream/shared';
-import { EnvService } from '../../../api/src/config/env.service.js';
-import { RedisService } from '../../../api/src/redis/redis.service.js';
-import { CloudflareListsService } from '../../../api/src/integrations/cloudflare/cloudflare-lists.service.js';
-import { CloudflareRegistrarSyncService } from '../../../api/src/integrations/cloudflare/cloudflare-registrar-sync.service.js';
+import { EnvService, RedisService } from '@weavestream/api/runtime';
+import {
+  CloudflareListsService,
+  CloudflareRegistrarSyncService,
+} from '@weavestream/api/integrations';
 import {
   createManagedWorker,
   type ManagedWorker,

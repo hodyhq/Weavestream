@@ -5,19 +5,10 @@ packages:
 confirmModulesPurge: false
 
 overrides:
-  # @nestjs/platform-express pins multer to an exact 2.2.0, which carries
-  # GHSA-wc9g-mqfw-jrwm and GHSA-535w-7cp7-47q4 (DoS via crafted multipart
-  # field names / oversized array index) plus GHSA-qfvm-cv95-jqjf, an
-  # advisory filed against 2.2.0 alone with no listed patched version. The
-  # exact pin means no lockfile refresh can move it — an override is the
-  # only lever. 2.3.0 clears all three. Pinned exactly so the resolver
-  # cannot drift onto a release too new to have cleared pnpm's
-  # minimum-release-age supply-chain gate.
-  multer: 2.3.0
   # next pins postcss to an exact version, so no lockfile refresh can
   # move it — an override is the only lever. The original reason was
   # GHSA-6g55-p6wh-862q (arbitrary file read) and GHSA-r28c-9q8g-f849
-  # (path traversal) in next's old 8.4.31 pin; next 16.3.4 pins 8.5.23,
+  # (path traversal) in next's old 8.4.31 pin; next 16.3.7 pins 8.5.23,
   # which clears both, so the entry is no longer a security force. It
   # stays as a dedupe pin, set to next's own 8.5.23: without it, apps/web
   # keeps a stale 8.5.19 for autoprefixer while apps/mobile and tailwind
@@ -35,16 +26,16 @@ overrides:
   # which is a far wider supply-chain delta than one advisory warrants.
   # The override moves nanoid and nothing else. Drop this entry once the
   # postcss pinned above floors nanoid at >=3.3.18 (postcss 8.5.28 does).
-  # Pinned exactly, for the same reason as multer above.
+  # Pinned exactly, for the same reason as postcss above.
   nanoid: 3.3.18
   # next carries its own optional sharp for next/image optimization,
   # which this app does not use — every image is a plain <img> served
   # through the API. sharp <0.35.4 trips the libheif advisories bundled
-  # as GHSA-rgj7-g3m4-5g8c, so every copy is forced onto the 0.35.4 the
-  # API and worker depend on. next 16.3.4 declares ^0.35.4 itself, so
+  # as GHSA-rgj7-g3m4-5g8c, so every copy is forced onto the 0.35.5 the
+  # API and worker depend on. next 16.3.7 declares ^0.35.4 itself, so
   # this is now a dedupe pin rather than an out-of-range force: it
   # collapses two full sharp+libvips binary sets down to one.
-  sharp: 0.35.4
+  sharp: 0.35.5
   # Two React apps (`apps/web` on Next, `apps/mobile` on Vite) declaring
   # independent ranges let pnpm resolve two copies of the React types.
   # TypeScript treats those as *unrelated* nominal types, so a `Ref`
@@ -54,8 +45,8 @@ overrides:
   # "cannot be named without a reference to .pnpm/@types+react@..."
   # during `next build`. Forcing one copy is the only fix that holds as
   # both apps' ranges drift; bump both together.
-  "@types/react": 19.2.17
-  "@types/react-dom": 19.2.3
+  "@types/react": 19.3.0
+  "@types/react-dom": 19.3.0
 
 supportedArchitectures:
   os:
@@ -71,6 +62,10 @@ supportedArchitectures:
 
 allowBuilds:
   "@nestjs/core": true
+  # Pulled in by jest-haste-map 30.5 for watch mode. Its install script
+  # only builds from source as a fallback; the prebuilt per-platform
+  # binaries (optional deps) cover every supportedArchitectures target.
+  "@parcel/watcher": false
   "@prisma/client": true
   "@prisma/engines": true
   argon2: true

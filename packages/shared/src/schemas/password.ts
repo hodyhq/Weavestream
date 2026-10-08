@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { tiptapDocSchema } from './article.js';
 import { optionalHttpUrlSchema } from './http-url.js';
 
 /**
@@ -42,12 +41,10 @@ export const totpConfigSchema = z.object({
 export type TotpConfigInput = z.infer<typeof totpConfigSchema>;
 
 /**
- * Notes accept either a short plaintext string (common for simple
- * "remember this thing" notes) or a full Tiptap JSON doc for users who
- * paste in structured content. The API encrypts whichever shape arrives
- * at rest and renders it via RichTextView on the way out.
+ * Notes are plain text, written from a textarea and encrypted at rest
+ * verbatim. The API returns the decrypted string exactly as stored.
  */
-export const passwordNotesSchema = z.union([z.string().max(50_000), tiptapDocSchema]);
+export const passwordNotesSchema = z.string().max(50_000);
 
 export const passwordTagsSchema = z
   .array(z.string().min(1).max(40))
@@ -152,12 +149,25 @@ export type PasswordSummary = z.infer<typeof passwordSummarySchema>;
  * password itself + TOTP secret still require an explicit reveal call.
  */
 export const passwordDetailSchema = passwordSummarySchema.extend({
-  notes: passwordNotesSchema.nullable(),
+  notes: z.string().nullable(),
   totpAlgorithm: totpAlgoSchema,
   totpDigits: z.number().int(),
   totpPeriod: z.number().int(),
+  /** True if the signed-in user has starred this password. */
+  isStarred: z.boolean(),
 });
 export type PasswordDetail = z.infer<typeof passwordDetailSchema>;
+
+/** One user who can see a password, with the reason they have access. */
+export const passwordAccessUserSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  email: z.string(),
+  role: z.enum(['SUPER_ADMIN', 'OPERATOR', 'CONTRACTOR']),
+  accessSource: z.enum(['super_admin', 'membership', 'global']),
+  alwaysIncluded: z.boolean(),
+});
+export type PasswordAccessUser = z.infer<typeof passwordAccessUserSchema>;
 
 /**
  * Reveal response. `totpSecret` is only populated when

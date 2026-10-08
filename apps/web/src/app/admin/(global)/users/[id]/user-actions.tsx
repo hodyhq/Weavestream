@@ -7,7 +7,7 @@ import type {
   PlatformCapability,
   UserRole,
 } from '@weavestream/shared';
-import { MANAGER_PRESET, PlatformCapabilityValues } from '@weavestream/shared';
+import { MANAGER_PRESET, PlatformCapabilityValues, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { FormattedDateTime } from '../../../../../lib/timezone-context';
 import {
@@ -25,7 +25,7 @@ import {
   globalAccessLabel,
   roleLabel,
 } from '../../../../../lib/roles';
-import type { UserDetail } from '../../../../../lib/server-api';
+import type { UserDetail } from '../../../../../lib/server-api/admin';
 
 const ROLES: UserRole[] = [
   'SUPER_ADMIN',
@@ -322,8 +322,7 @@ function EditDialog({
     });
     setPending(false);
     if (!res.ok) {
-      const p = res.problem as { detail?: string; title?: string } | undefined;
-      setError(p?.detail ?? p?.title ?? 'Update failed.');
+      setError(problemMessage(res.problem) ?? 'Update failed.');
       return;
     }
     toast.push('User updated.', 'ok');

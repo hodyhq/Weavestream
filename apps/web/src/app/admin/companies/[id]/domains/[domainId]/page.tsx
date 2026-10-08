@@ -3,14 +3,14 @@ import { notFound } from 'next/navigation';
 
 export const metadata: Metadata = { title: 'Domain' };
 
+import { requireMe } from '../../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
+import { throwUnlessFound } from '../../../../../../lib/server-api/core';
 import {
-  getCompanyDetail,
   getDomain,
-  requireMe,
-  getSettings,
   listDomainChecks,
-  throwUnlessFound,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/domains';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../../../components/ui';

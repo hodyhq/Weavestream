@@ -4,10 +4,11 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useMemo, useState, useTransition } from 'react';
 import type {
+  IpReservationDto,
   SubnetDetail,
   SubnetOccupant,
-  IpReservationRow,
-} from '../../../../../../lib/server-api';
+} from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../lib/api';
 import {
   Btn,
@@ -29,7 +30,6 @@ import {
   ProvenanceBadge,
   provenanceAttention,
 } from '../../../../../../components/integrations/provenance-badge';
-import { extractProblemDetailOrMessage as problemMsg } from '../../../../../../lib/api-errors';
 
 type Tab = 'occupants' | 'reservations' | 'grid';
 
@@ -46,7 +46,7 @@ type OccupantRow =
       id: string;
       kind: 'reservation';
       ip: string;
-      reservation: IpReservationRow;
+      reservation: IpReservationDto;
     };
 
 export function SubnetDetailView({
@@ -63,7 +63,7 @@ export function SubnetDetailView({
   const [tab, setTab] = useState<Tab>('occupants');
   const [resDialog, setResDialog] = useState<
     | { kind: 'add' }
-    | { kind: 'edit'; row: IpReservationRow }
+    | { kind: 'edit'; row: IpReservationDto }
     | null
   >(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,7 +125,7 @@ export function SubnetDetailView({
             { method: 'PATCH', body: JSON.stringify(body) },
           );
     if (!res.ok) {
-      setError(problemMsg(res.problem) ?? 'Save failed');
+      setError(problemMessage(res.problem) ?? 'Save failed');
       return;
     }
     setResDialog(null);
@@ -138,7 +138,7 @@ export function SubnetDetailView({
       `/companies/${companyId}/ipam/subnets/${subnet.id}/reservations/${id}`,
       { method: 'DELETE' },
     );
-    if (!res.ok) setError(problemMsg(res.problem) ?? 'Delete failed');
+    if (!res.ok) setError(problemMessage(res.problem) ?? 'Delete failed');
     startTransition(() => router.refresh());
   }
 
@@ -269,7 +269,7 @@ export function SubnetDetailView({
     });
   }
 
-  const reservationColumns: DataColumn<IpReservationRow>[] = [
+  const reservationColumns: DataColumn<IpReservationDto>[] = [
     {
       id: 'ip',
       header: 'IP',
@@ -721,7 +721,7 @@ function ReservationDialog({
   subnetCidr: string;
   subnetPrefix: number;
   existingIps: Set<string>;
-  initial: IpReservationRow | null;
+  initial: IpReservationDto | null;
   onSubmit: (f: ResForm) => Promise<void>;
   onClose: () => void;
   error: string | null;

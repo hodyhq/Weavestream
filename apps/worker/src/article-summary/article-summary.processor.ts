@@ -6,21 +6,17 @@ import {
   articleSummaryJobSchema,
   type ArticleSummaryGenerateJob,
 } from '@weavestream/shared';
-import { RedisService } from '../../../api/src/redis/redis.service.js';
-import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
+import { RedisService, PrismaService, QueuesService } from '@weavestream/api/runtime';
 import {
   AiCompletionHttpError,
   AiCompletionService,
   describeCompletionHttpError,
   isContextLengthError,
   sanitizeAiSummary,
-} from '../../../api/src/ai/ai-completion.service.js';
-import {
   AiNotConfiguredError,
   AiSettingsService,
   type AiResolvedConfig,
-} from '../../../api/src/ai/ai-settings.service.js';
-import { QueuesService } from '../../../api/src/queues/queues.service.js';
+} from '@weavestream/api/ai';
 import {
   createManagedWorker,
   type ManagedWorker,

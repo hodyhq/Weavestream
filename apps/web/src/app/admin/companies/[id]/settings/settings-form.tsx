@@ -14,11 +14,11 @@ import {
   Textarea,
   useToast,
 } from '../../../../../components/ui';
+import { problemMessage, type CompanyType } from '@weavestream/shared';
 import type {
   CompanyDetail,
   CompanyParentRef,
-  CompanyType,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/companies';
 import { capitalize } from '../../../../../lib/term';
 import { useTerm } from '../../../../../lib/term-context';
 import {
@@ -155,9 +155,6 @@ export function CompanySettingsForm({
     // user guessing which field was wrong).
     const p = problem as
       | {
-          detail?: string;
-          title?: string;
-          error?: string;
           issues?: Array<{ path: string; message: string }>;
         }
       | undefined;
@@ -187,9 +184,7 @@ export function CompanySettingsForm({
       );
       return;
     }
-    setError(
-      p?.detail ?? p?.title ?? 'Could not save changes. Please try again.',
-    );
+    setError(problemMessage(p) ?? 'Could not save changes. Please try again.');
   }
 
   function reset() {

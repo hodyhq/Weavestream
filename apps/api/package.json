@@ -3,8 +3,42 @@
   "version": "0.0.1",
   "private": true,
   "main": "dist/main.js",
+  "exports": {
+    "./runtime": {
+      "types": "./dist/public/runtime.d.ts",
+      "default": "./dist/public/runtime.js"
+    },
+    "./load-env": {
+      "types": "./dist/public/load-env.d.ts",
+      "default": "./dist/public/load-env.js"
+    },
+    "./domains": {
+      "types": "./dist/public/domains.d.ts",
+      "default": "./dist/public/domains.js"
+    },
+    "./integrations": {
+      "types": "./dist/public/integrations.d.ts",
+      "default": "./dist/public/integrations.js"
+    },
+    "./alerts": {
+      "types": "./dist/public/alerts.d.ts",
+      "default": "./dist/public/alerts.js"
+    },
+    "./exports": {
+      "types": "./dist/public/exports.d.ts",
+      "default": "./dist/public/exports.js"
+    },
+    "./uploads": {
+      "types": "./dist/public/uploads.d.ts",
+      "default": "./dist/public/uploads.js"
+    },
+    "./ai": {
+      "types": "./dist/public/ai.d.ts",
+      "default": "./dist/public/ai.js"
+    }
+  },
   "scripts": {
-    "build": "nest build",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && nest build",
     "start": "node dist/main.js",
     "dev": "nest start --watch",
     "cli": "node dist/cli.js",
@@ -13,59 +47,59 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --passWithNoTests"
   },
   "dependencies": {
-    "@nestjs/common": "^11.1.19",
-    "@nestjs/core": "^11.1.19",
-    "@nestjs/platform-express": "^11.1.19",
-    "@nestjs/throttler": "^6.5.0",
+    "@nestjs/common": "^11.2.7",
+    "@nestjs/core": "^11.2.7",
+    "@nestjs/platform-express": "^11.2.7",
+    "@nestjs/throttler": "^6.7.1",
     "@prisma/client": "^5.22.0",
     "@weavestream/db": "workspace:*",
     "@weavestream/shared": "workspace:*",
     "@zxcvbn-ts/core": "^3.0.4",
     "@zxcvbn-ts/language-common": "^3.0.4",
     "@zxcvbn-ts/language-en": "^3.0.2",
-    "argon2": "^0.41.1",
+    "argon2": "^0.45.1",
     "bullmq": "^5.76.2",
     "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.1",
-    "compression": "^1.7.5",
+    "class-validator": "^0.15.1",
+    "compression": "^1.8.2",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
     "file-type": "^21.3.4",
-    "helmet": "^8.0.0",
+    "helmet": "^8.3.0",
     "ioredis": "^5.4.1",
     "jose": "^5.9.6",
     "nestjs-pino": "^4.1.0",
-    "nodemailer": "^9.1.1",
+    "nodemailer": "^10.0.13",
     "otplib": "^12.0.1",
-    "pino": "^10.1.1",
+    "pino": "^10.4.0",
     "pino-http": "^11.0.0",
     "pino-pretty": "^13.1.3",
     "prompts": "^2.4.2",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "sharp": "^0.35.4",
-    "undici": "^8.10.0",
+    "sharp": "^0.35.5",
+    "undici": "^8.11.2",
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@nestjs/cli": "^11.0.21",
-    "@nestjs/testing": "^11.1.19",
+    "@nestjs/cli": "^11.0.24",
+    "@nestjs/testing": "^11.2.7",
     "@types/compression": "^1.7.5",
     "@types/cookie-parser": "^1.4.7",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
-    "@types/nodemailer": "^8.0.0",
+    "@types/nodemailer": "^8.0.2",
     "@types/prompts": "^2.4.9",
     "@types/qrcode": "^1.5.5",
     "@types/supertest": "^6.0.2",
-    "eslint": "^9.14.0",
-    "jest": "^30.0.0",
-    "supertest": "^7.0.0",
-    "ts-jest": "^29.4.9",
+    "eslint": "^9.39.5",
+    "jest": "^30.5.2",
+    "supertest": "^7.3.1",
+    "ts-jest": "^29.4.14",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.0",
-    "typescript-eslint": "^8.59.0"
+    "typescript-eslint": "^8.71.0"
   }
 }
