@@ -518,7 +518,7 @@ describe('PasswordsService — detail', () => {
 
     const opted = makeStubs({ passwords: rows() });
     const revealKey = { ...OPERATOR, apiKeyId: 'k-2', apiKeyAllowPasswordReveal: true };
-    // Notes are plain text since upstream 1.9.10.
+    // Notes are returned as stored plain text.
     expect((await opted.svc.getDetail(revealKey, 'co-1', 'pwd-a')).notes).toBe('door code 4471');
   });
 

@@ -38,7 +38,7 @@ Each check produces a status:
 | **No site** (grey) | Registration and DNS are fine, but the name has no A/AAAA record, so nothing is served. Typical for parked domains. TLS and HTTP checks are skipped instead of failing. Registration problems still show as Expiring/Expired. |
 | **Unknown** | Not checked yet |
 
-New domains (added by hand or by the Cloudflare registrar sync) are checked as soon as they are created; after that the nightly sweep keeps them current.
+New domains are checked as soon as they are created; after that the nightly sweep keeps them current.
 
 ## Alert Thresholds
 
