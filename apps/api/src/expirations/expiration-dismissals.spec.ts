@@ -31,8 +31,13 @@ function harness(
       deleteMany: jest.fn(async () => ({ count: 1 })),
     },
     monitoredDomain: {
-      findFirst: jest.fn(async () => (opts.domainInCompany === false ? null : { id: DOMAIN })),
+      findFirst: jest.fn(async () =>
+        opts.domainInCompany === false
+          ? null
+          : { whoisExpiresAt: new Date('2027-01-01T00:00:00.000Z'), tlsExpiresAt: new Date(domainInput.dueAt) },
+      ),
     },
+    assetFieldValue: { findFirst: jest.fn(async () => ({ value: '2026-01-01' })) },
     asset: { findFirst: jest.fn(async () => ({ assetLayoutId: 'layout-1' })) },
     assetField: {
       findFirst: jest.fn(async ({ where }: { where: { visibleToClients?: boolean } }) =>
@@ -41,13 +46,16 @@ function harness(
     },
     password: {
       findFirst: jest.fn(async () => ({
-        id: PW,
         visibleToClients: false,
         restrictedToUserIds: opts.pwRestricted ? ['someone-else'] : [],
+        expiresAt: new Date('2026-11-01T00:00:00.000Z'),
+        lastRotatedAt: null,
+        rotationReminderDays: null,
       })),
     },
   };
-  const audit = { log: jest.fn().mockResolvedValue(undefined) };
+  const audit = { logWithClient: jest.fn().mockResolvedValue(undefined) };
+  Object.assign(prisma, { $transaction: (fn: (tx: unknown) => unknown) => fn(prisma) });
   const permissions = { can: jest.fn().mockResolvedValue({ allowed: opts.allowed ?? true }) };
   const svc = new ExpirationDismissalsService(prisma as never, audit as never, permissions as never);
   return { svc, prisma, audit, permissions, store };
@@ -66,7 +74,7 @@ describe('ExpirationDismissalsService', () => {
     const { svc, permissions, audit } = harness();
     await svc.dismiss(ACTOR, CO, domainInput, META);
     expect(permissions.can).toHaveBeenCalledWith(ACTOR, 'domain.manage', { companyId: CO });
-    expect(audit.log.mock.calls[0][0]).toMatchObject({ action: 'expiration.dismiss', companyId: CO });
+    expect(audit.logWithClient.mock.calls[0][1]).toMatchObject({ action: 'expiration.dismiss', companyId: CO });
   });
 
   it('refuses without the manage permission', async () => {
@@ -107,6 +115,21 @@ describe('ExpirationDismissalsService', () => {
       NotFoundException,
     );
     await expect(harness({ fieldClientVisible: false }).svc.dismiss(ACTOR, CO, input, META)).resolves.toBeDefined();
+  });
+
+  it('only dismisses the date the item is due on now', async () => {
+    await expect(
+      harness().svc.dismiss(ACTOR, CO, { ...domainInput, dueAt: '2030-01-01T00:00:00.000Z' }, META),
+    ).rejects.toThrow(/not the current due date/);
+  });
+
+  it('restore re-checks access to the item', async () => {
+    const h = harness();
+    await h.svc.dismiss(ACTOR, CO, domainInput, META);
+    h.prisma.monitoredDomain.findFirst.mockResolvedValueOnce(null);
+    await expect(
+      h.svc.restore(ACTOR, CO, '55555555-5555-4555-8555-555555555555', META),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('restore only finds dismissals in this company', async () => {

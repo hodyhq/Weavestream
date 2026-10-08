@@ -5,10 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { ExpirationDismissal } from '@prisma/client';
-import {
-  expirationDismissalKey,
-  type DismissExpirationInput,
-} from '@weavestream/shared';
+import { expirationDismissalKey, type DismissExpirationInput } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
@@ -55,41 +52,54 @@ export class ExpirationDismissalsService {
     if (Number.isNaN(dueAt.getTime())) throw new BadRequestException('dueAt is not a valid date.');
 
     await this.assertCanManage(actor, companyId, input.kind);
-    await this.assertItemInCompany(actor, companyId, input);
+    const current = await this.currentDueDate(actor, companyId, input);
+    // Only the date the item is due on now: a future date dismissed ahead of
+    // time would silently suppress the item once it moved to that date.
+    if (!current || current.getTime() !== dueAt.getTime()) {
+      throw new BadRequestException('That is not the current due date for this item.');
+    }
 
     const note = input.note?.length ? input.note : null;
-    const row = await this.prisma.expirationDismissal.upsert({
-      where: {
-        kind_entityId_source_dueAt: {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.expirationDismissal.upsert({
+        where: {
+          kind_entityId_source_dueAt: {
+            kind: input.kind,
+            entityId: input.entityId,
+            source: input.source,
+            dueAt,
+          },
+        },
+        create: {
+          companyId,
           kind: input.kind,
           entityId: input.entityId,
           source: input.source,
           dueAt,
+          note,
+          dismissedBy: actor.id,
         },
-      },
-      create: {
+        update: { note, dismissedBy: actor.id },
+      });
+      await this.audit.logWithClient(tx, {
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.expiration.dismiss,
+        entityType: 'ExpirationDismissal',
+        entityId: row.id,
         companyId,
-        kind: input.kind,
-        entityId: input.entityId,
-        source: input.source,
-        dueAt,
-        note,
-        dismissedBy: actor.id,
-      },
-      update: { note, dismissedBy: actor.id },
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: {
+          kind: row.kind,
+          entityId: row.entityId,
+          source: row.source,
+          dueAt: row.dueAt,
+          note: row.note,
+        },
+      });
+      return row;
     });
-    await this.audit.log({
-      actorId: actor.id,
-      action: AUDIT_ACTIONS.expiration.dismiss,
-      entityType: 'ExpirationDismissal',
-      entityId: row.id,
-      companyId,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: null,
-      after: { kind: row.kind, entityId: row.entityId, source: row.source, dueAt: row.dueAt, note: row.note },
-    });
-    return row;
   }
 
   async restore(
@@ -101,18 +111,34 @@ export class ExpirationDismissalsService {
     // Scoped by company: a dismissal id from another tenant is not found.
     const row = await this.prisma.expirationDismissal.findFirst({ where: { id, companyId } });
     if (!row) throw new NotFoundException();
-    await this.assertCanManage(actor, companyId, row.kind as DismissExpirationInput['kind']);
-    await this.prisma.expirationDismissal.deleteMany({ where: { id, companyId } });
-    await this.audit.log({
-      actorId: actor.id,
-      action: AUDIT_ACTIONS.expiration.restore,
-      entityType: 'ExpirationDismissal',
-      entityId: row.id,
-      companyId,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: { kind: row.kind, entityId: row.entityId, source: row.source, dueAt: row.dueAt, note: row.note },
-      after: null,
+    const kind = row.kind as DismissExpirationInput['kind'];
+    await this.assertCanManage(actor, companyId, kind);
+    // Same item access as dismissing (e.g. a password restricted since).
+    await this.currentDueDate(actor, companyId, {
+      kind,
+      entityId: row.entityId,
+      source: row.source,
+      dueAt: row.dueAt.toISOString(),
+    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.expirationDismissal.deleteMany({ where: { id, companyId } });
+      await this.audit.logWithClient(tx, {
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.expiration.restore,
+        entityType: 'ExpirationDismissal',
+        entityId: row.id,
+        companyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: {
+          kind: row.kind,
+          entityId: row.entityId,
+          source: row.source,
+          dueAt: row.dueAt,
+          note: row.note,
+        },
+        after: null,
+      });
     });
   }
 
@@ -128,41 +154,53 @@ export class ExpirationDismissalsService {
   }
 
   /**
-   * The item must exist in this company (IDOR: knowing an id is not access),
-   * and the source must be one that kind actually has.
+   * The item's current due date for this source, computed the same way as the
+   * Expiring-soon feed. Throws if the item is not in this company or not
+   * visible to the actor (IDOR: knowing an id is not access), or if the source
+   * is not one that kind has.
    */
-  private async assertItemInCompany(
+  private async currentDueDate(
     actor: AuthedUser,
     companyId: string,
     input: DismissExpirationInput,
-  ): Promise<void> {
+  ): Promise<Date | null> {
     if (input.kind === 'domain') {
-      if (!DOMAIN_SOURCES.has(input.source)) throw new BadRequestException('Unknown domain source.');
+      if (!DOMAIN_SOURCES.has(input.source))
+        throw new BadRequestException('Unknown domain source.');
       const d = await this.prisma.monitoredDomain.findFirst({
         where: {
           id: input.entityId,
           companyId,
           ...(actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {}),
         },
-        select: { id: true },
+        select: { whoisExpiresAt: true, tlsExpiresAt: true },
       });
       if (!d) throw new NotFoundException();
-      return;
+      return input.source === 'tls' ? d.tlsExpiresAt : d.whoisExpiresAt;
     }
     if (input.kind === 'password') {
-      if (!PASSWORD_SOURCES.has(input.source)) throw new BadRequestException('Unknown password source.');
+      if (!PASSWORD_SOURCES.has(input.source))
+        throw new BadRequestException('Unknown password source.');
       const p = await this.prisma.password.findFirst({
         where: { id: input.entityId, companyId },
-        select: { id: true, visibleToClients: true, restrictedToUserIds: true },
+        select: {
+          visibleToClients: true,
+          restrictedToUserIds: true,
+          expiresAt: true,
+          lastRotatedAt: true,
+          rotationReminderDays: true,
+        },
       });
       if (!p || !canReadPassword(actor, p)) throw new NotFoundException();
-      return;
+      if (input.source === 'expiry') return p.expiresAt;
+      if (p.rotationReminderDays == null || !p.lastRotatedAt) return null;
+      return new Date(p.lastRotatedAt.getTime() + p.rotationReminderDays * 86_400_000);
     }
     // asset-field: the asset is in the company and the field belongs to its layout.
     if (!UUID_RE.test(input.source)) throw new NotFoundException();
     const a = await this.prisma.asset.findFirst({
       where: { id: input.entityId, companyId },
-      select: { assetLayoutId: true },
+      select: { id: true, assetLayoutId: true },
     });
     if (!a) throw new NotFoundException();
     const field = await this.prisma.assetField.findFirst({
@@ -175,6 +213,14 @@ export class ExpirationDismissalsService {
       select: { id: true },
     });
     if (!field) throw new NotFoundException();
+    const v = await this.prisma.assetFieldValue.findFirst({
+      where: { assetId: a.id, assetFieldId: field.id, companyId },
+      select: { value: true },
+    });
+    // DATE is stored as "YYYY-MM-DD", DATETIME as an ISO timestamp.
+    if (typeof v?.value !== 'string' || v.value.length === 0) return null;
+    const at = new Date(v.value);
+    return Number.isNaN(at.getTime()) ? null : at;
   }
 }
 
@@ -186,12 +232,12 @@ export class ExpirationDismissalsService {
 export async function loadDismissalMap(
   prisma: Pick<PrismaService, 'expirationDismissal'>,
   companyId?: string,
+  kind?: DismissExpirationInput['kind'],
 ): Promise<Map<string, ExpirationDismissal>> {
   const rows = await prisma.expirationDismissal.findMany({
-    where: companyId ? { companyId } : {},
+    where: { ...(companyId ? { companyId } : {}), ...(kind ? { kind } : {}) },
   });
   return new Map(
     rows.map((r) => [expirationDismissalKey(r.kind, r.entityId, r.source, r.dueAt), r] as const),
   );
 }
-

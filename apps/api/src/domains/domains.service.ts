@@ -231,7 +231,7 @@ export class DomainsService {
     }
     // Each dismissal hides at most one row, so over-fetch by that many and
     // trim after filtering; dismissed rows then never use up the limit.
-    const dismissed = await loadDismissalMap(this.prisma);
+    const dismissed = await loadDismissalMap(this.prisma, undefined, 'domain');
     const rows = await this.prisma.monitoredDomain.findMany({
       where,
       orderBy: [{ latestStatus: 'asc' }, { latestScore: 'asc' }, { hostname: 'asc' }],
