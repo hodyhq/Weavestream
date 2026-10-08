@@ -159,17 +159,22 @@ export class ExpirationDismissalsService {
       return;
     }
     // asset-field: the asset is in the company and the field belongs to its layout.
-    if (!UUID_RE.test(input.source)) throw new BadRequestException('Unknown asset field.');
+    if (!UUID_RE.test(input.source)) throw new NotFoundException();
     const a = await this.prisma.asset.findFirst({
       where: { id: input.entityId, companyId },
       select: { assetLayoutId: true },
     });
     if (!a) throw new NotFoundException();
     const field = await this.prisma.assetField.findFirst({
-      where: { id: input.source, assetLayoutId: a.assetLayoutId },
+      where: {
+        id: input.source,
+        assetLayoutId: a.assetLayoutId,
+        // Same rule as asset writes: clients never touch MSP-internal fields.
+        ...(actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {}),
+      },
       select: { id: true },
     });
-    if (!field) throw new BadRequestException('That field is not on this asset.');
+    if (!field) throw new NotFoundException();
   }
 }
 

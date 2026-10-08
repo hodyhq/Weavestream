@@ -7,10 +7,13 @@ import { dismissalKeyOf } from '../alerts/alerts-runner.service.js';
 const CO = '11111111-1111-4111-8111-111111111111';
 const DOMAIN = '22222222-2222-4222-8222-222222222222';
 const PW = '33333333-3333-4333-8333-333333333333';
-const ACTOR = { id: '44444444-4444-4444-8444-444444444444', role: 'OPERATOR' } as never;
+const ACTOR_ID = '44444444-4444-4444-8444-444444444444';
+const ACTOR = { id: ACTOR_ID, role: 'OPERATOR' } as never;
 const META = { ip: '198.51.100.7', userAgent: 'jest' };
 
-function harness(opts: { allowed?: boolean; domainInCompany?: boolean; pwRestricted?: boolean } = {}) {
+function harness(
+  opts: { allowed?: boolean; domainInCompany?: boolean; pwRestricted?: boolean; fieldClientVisible?: boolean } = {},
+) {
   const store: Array<Record<string, unknown>> = [];
   const prisma = {
     expirationDismissal: {
@@ -29,6 +32,12 @@ function harness(opts: { allowed?: boolean; domainInCompany?: boolean; pwRestric
     },
     monitoredDomain: {
       findFirst: jest.fn(async () => (opts.domainInCompany === false ? null : { id: DOMAIN })),
+    },
+    asset: { findFirst: jest.fn(async () => ({ assetLayoutId: 'layout-1' })) },
+    assetField: {
+      findFirst: jest.fn(async ({ where }: { where: { visibleToClients?: boolean } }) =>
+        where.visibleToClients && opts.fieldClientVisible === false ? null : { id: PW },
+      ),
     },
     password: {
       findFirst: jest.fn(async () => ({
@@ -88,7 +97,16 @@ describe('ExpirationDismissalsService', () => {
     await expect(svc.dismiss(ACTOR, CO, { ...domainInput, source: 'whois' }, META)).rejects.toThrow(/Unknown domain source/);
     await expect(
       svc.dismiss(ACTOR, CO, { kind: 'asset-field', entityId: DOMAIN, source: 'warranty', dueAt: '2026-01-01' }, META),
-    ).rejects.toThrow(/Unknown asset field/);
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('client users cannot dismiss an MSP-internal asset field', async () => {
+    const client = { id: ACTOR_ID, role: 'CLIENT_USER' } as never;
+    const input = { kind: 'asset-field' as const, entityId: DOMAIN, source: PW, dueAt: '2026-01-01' };
+    await expect(harness({ fieldClientVisible: false }).svc.dismiss(client, CO, input, META)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(harness({ fieldClientVisible: false }).svc.dismiss(ACTOR, CO, input, META)).resolves.toBeDefined();
   });
 
   it('restore only finds dismissals in this company', async () => {
@@ -137,6 +155,13 @@ describe('ExpirationsService with dismissals', () => {
     await expect(feed(dismissed, [row(dismissed)]).list({ actor: ACTOR })).resolves.toEqual([]);
     const renewed = '2026-11-14T18:01:01.000Z';
     await expect(feed(dismissed, [row(renewed)]).list({ actor: ACTOR })).resolves.toHaveLength(1);
+  });
+
+  it('hides the operator note and user from client users', async () => {
+    const dismissed = '2023-09-26T02:43:53.000Z';
+    const client = { id: ACTOR_ID, role: 'CLIENT_USER' } as never;
+    const out = await feed(dismissed, [row(dismissed)]).list({ actor: client, includeDismissed: true });
+    expect(out[0]).toMatchObject({ dismissal: { note: null, dismissedBy: null } });
   });
 
   it('returns dismissed rows annotated when asked', async () => {

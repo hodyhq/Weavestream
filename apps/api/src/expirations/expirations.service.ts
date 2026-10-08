@@ -84,9 +84,10 @@ export class ExpirationsService {
           ...row,
           dismissal: {
             id: d.id,
-            note: d.note,
+            // The note and who dismissed it are MSP-internal.
+            note: options.actor.role === 'CLIENT_USER' ? null : d.note,
             dismissedAt: d.createdAt.toISOString(),
-            dismissedBy: d.dismissedBy,
+            dismissedBy: options.actor.role === 'CLIENT_USER' ? null : d.dismissedBy,
           },
         });
       }

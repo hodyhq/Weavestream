@@ -229,10 +229,13 @@ export class DomainsService {
     if (opts.minScore !== undefined) {
       where.latestScore = { gte: opts.minScore };
     }
+    // Each dismissal hides at most one row, so over-fetch by that many and
+    // trim after filtering; dismissed rows then never use up the limit.
+    const dismissed = await loadDismissalMap(this.prisma);
     const rows = await this.prisma.monitoredDomain.findMany({
       where,
       orderBy: [{ latestStatus: 'asc' }, { latestScore: 'asc' }, { hostname: 'asc' }],
-      take: safe,
+      take: safe + dismissed.size,
     });
 
     if (rows.length === 0) return [];
@@ -246,7 +249,6 @@ export class DomainsService {
     // Drop rows that are here only because of expiry dates the operator has
     // dismissed (Expiring-soon "Dismiss"). A row also here for a FAIL status
     // or a low score stays.
-    const dismissed = await loadDismissalMap(this.prisma);
     const lowScoreCut = opts.maxScore ?? 54;
     const visible = rows.filter((r) => {
       if (dismissed.size === 0) return true;
@@ -265,7 +267,7 @@ export class DomainsService {
       );
     });
 
-    return visible.map((r) => ({
+    return visible.slice(0, safe).map((r) => ({
       companyId: r.companyId,
       companyName: byId.get(r.companyId)?.name ?? 'Unknown',
       companySlug: byId.get(r.companyId)?.slug ?? 'unknown',
