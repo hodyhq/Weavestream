@@ -244,6 +244,17 @@ describe('Map layouts standard fields', () => {
     expect(suggestStandardField(workstations.fields as never, hostname as never, new Set(['f-host']))).toBeNull();
   });
 
+  it('never pre-selects an operator-owned field that only contains a hint word', () => {
+    const [, os, , ram] = devices.standardFields;
+    const owned = [
+      typed('f-lic', 'OS license key', 'os_license_key', 'TEXT'),
+      typed('f-mem', 'Memory upgrade purchase', 'memory_upgrade_purchase', 'TEXT'),
+    ];
+    expect(suggestStandardField(owned as never, os as never)).toBeNull();
+    expect(suggestStandardField(owned as never, ram as never)).toBeNull();
+    expect(suggestStandardField([...owned, typed('f-ram', 'Memory', 'memory', 'TEXT')] as never, ram as never)?.id).toBe('f-ram');
+  });
+
   it('pre-selects hinted fields, creates missing ones, skips Don\'t sync and maps them preserve_manual', async () => {
     apiFetch.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
       if (path === '/layouts') return { ok: true, data: { items: [workstations] } };

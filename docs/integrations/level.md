@@ -47,7 +47,7 @@ The **Level RMM** section on each device keeps only what a layout does not have:
 
 | Group | Contents |
 |---|---|
-| **Status** | Online or offline, last seen, last reboot, logged-in user, maintenance mode, platform |
+| **Status** | Online or offline, last seen, last reboot, logged-in user, maintenance mode, platform, the Level group (site) the device is in, and its location from IP (city, country) |
 | **Storage** | One usage bar per partition (used = size minus free space), labelled by mount point |
 | **Network** | Public IP, private IPs, and per network interface its MAC address, IP addresses, gateway and DNS servers |
 | **Security** | Risk, OS end of life, security score, patch compliance, antivirus, firewall, encryption of the primary partition, user account control, automatic updates, admin accounts |
@@ -62,6 +62,7 @@ The **Level RMM** section on each device keeps only what a layout does not have:
 
 - **First sync of a device** (a new asset, or an existing asset it adopts): Level writes every mapped field.
 - **Later syncs**: an empty field is filled. A field that still holds the value Level wrote last follows Level, so hardware and OS changes flow through.
+- **A field you map later** on a device Level already syncs: an empty one is filled; one that already holds a value is listed under **Differences** instead of being overwritten.
 - **A field someone changed** is not overwritten. When it differs from Level, it is listed under **Differences** at the bottom of the Level RMM section, with the Weavestream value and the Level RMM value:
   - **Use Level RMM value** writes the Level value now, and the field follows Level again.
   - **Keep ours** keeps your value and stops flagging that field on that device until the Level value changes again.

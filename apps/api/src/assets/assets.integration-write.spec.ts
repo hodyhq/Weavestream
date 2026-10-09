@@ -1471,6 +1471,26 @@ describe('AssetsService standard-field write policy (recordFieldDiffs)', () => {
     expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
   });
 
+  it('a field newly mapped onto an established binding keeps the person value and records a difference', async () => {
+    const other = '54000000-0000-0000-0000-0000000000aa';
+    const { service, tx } = setup({ target: withValue('typed-by-hand'), binding: binding() });
+    const result = await service.writeFromIntegration(standard('host-a', { [other]: checksum('SN-1') }));
+    expect(result).toMatchObject({
+      fieldDiffs: { [ids.field]: { sourceValue: 'host-a', localFingerprint: checksum('typed-by-hand') } },
+    });
+    // No baseline is invented for the person value: it stays a difference until resolved.
+    expect(result.fieldChecksums?.[ids.field]).toBeUndefined();
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+  });
+
+  it('a field newly mapped onto an established binding is still filled when empty', async () => {
+    const other = '54000000-0000-0000-0000-0000000000aa';
+    const { service, tx } = setup({ target: withValue(undefined), binding: binding() });
+    await expect(service.writeFromIntegration(standard('host-a', { [other]: checksum('SN-1') })))
+      .resolves.toMatchObject({ fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('host-a') } });
+    expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+  });
+
   it('fills an empty field even after a baseline exists', async () => {
     const { service, tx } = setup({ target: withValue(undefined), binding: binding() });
     await expect(service.writeFromIntegration(standard('host-b', { [ids.field]: checksum('host-a') })))

@@ -268,13 +268,15 @@ describe('LevelDriver devices', () => {
     expect(s.title).toBe('Level RMM');
     expect(s.groups.map((g) => g.key)).toEqual(['status', 'storage', 'network', 'security', 'patches', 'alerts', 'hardware', 'tags', 'notes']);
     expect(s.groups.find((g) => g.key === 'status')!.rows.map((r) => r.label)).toEqual(
-      ['Status', 'Last seen', 'Last reboot', 'Logged-in user', 'Maintenance mode', 'Platform'],
+      ['Status', 'Last seen', 'Last reboot', 'Logged-in user', 'Maintenance mode', 'Platform', 'Group', 'Location (from IP)'],
     );
     // Standard facts live in layout fields, never again in the block.
     expect(s.groups.find((g) => g.key === 'hardware')!.rows.map((r) => r.label)).toEqual(['Memory modules', 'Disks']);
     const labels = s.groups.flatMap((g) => g.rows.map((r) => r.label));
     for (const gone of ['Hostname', 'Manufacturer', 'Model', 'CPU', 'Memory', 'Role', 'Name', 'Version']) expect(labels).not.toContain(gone);
     expect(row(s, 'status', 'Status')).toMatchObject({ kind: 'badge', value: 'Online', tone: 'success' });
+    expect(row(s, 'status', 'Group')).toMatchObject({ value: 'Nested' });
+    expect(row(s, 'status', 'Location (from IP)')).toMatchObject({ value: 'Example City, US' });
     expect(row(s, 'hardware', 'Memory modules')).toMatchObject({ value: ['8.0 GB DDR4 SODIMM (DIMM0)'] });
     expect(row(s, 'hardware', 'Disks')).toMatchObject({ value: ['Example SSD, SSD, 477 GB'] });
     expect(row(s, 'storage', 'C:')).toEqual({ kind: 'meter', label: 'C:', used: 750, total: 1_000, unit: 'bytes' });

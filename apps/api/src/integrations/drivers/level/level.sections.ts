@@ -88,6 +88,7 @@ function riskTone(risk: string): 'neutral' | 'success' | 'warning' | 'danger' {
 }
 
 function statusRows(d: LevelDevice): Row[] {
+  const location = [str(d.city), str(d.country)].filter(Boolean).join(', ');
   return [
     typeof d.online === 'boolean' ? badge('Status', d.online ? 'Online' : 'Offline', d.online ? 'success' : 'neutral') : null,
     datetime('Last seen', str(d.last_seen_at)),
@@ -95,6 +96,9 @@ function statusRows(d: LevelDevice): Row[] {
     text('Logged-in user', str(d.last_logged_in_user)),
     bool('Maintenance mode', typeof d.maintenance_mode === 'boolean' ? d.maintenance_mode : undefined),
     text('Platform', str(d.platform)),
+    // The Level group (site) and Level's IP-derived location, not the asset's own location.
+    text('Group', str(d.group_name)),
+    text('Location (from IP)', location),
   ];
 }
 

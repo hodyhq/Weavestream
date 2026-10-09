@@ -86,8 +86,10 @@ const tokens = (value: string) => norm(value).split(/[^a-z0-9]+/).filter(Boolean
 
 /**
  * Existing layout field for a standard fact: a compatible type whose slug or
- * name equals a hint, else holds every word of one ("ip" finds "IP address",
- * never "description"). Fields in `taken` are already used by another row.
+ * name equals a hint word for word ("IP address" = ip_address). Exact only:
+ * a partial match would pre-select a field the operator owns ("OS license
+ * key", "Storage location") and the first sync would overwrite it. Fields
+ * in `taken` are already used by another row.
  */
 export function suggestStandardField(
   fields: LayoutFieldSummary[],
@@ -97,17 +99,10 @@ export function suggestStandardField(
   const usable = fields.filter(
     (field) => !field.archivedAt && !taken.has(field.id) && standardFieldTargetCompatible(spec.fieldType, field.fieldType),
   );
-  const hints = [spec.sourceField, ...spec.fieldHints];
-  for (const exact of [true, false]) {
-    for (const hint of hints) {
-      const wanted = tokens(hint);
-      const hit = usable.find((field) =>
-        [field.slug, field.name].some((key) =>
-          exact ? tokens(key).join('_') === wanted.join('_') : wanted.every((word) => tokens(key).includes(word)),
-        ),
-      );
-      if (hit) return hit;
-    }
+  for (const hint of [spec.sourceField, ...spec.fieldHints]) {
+    const wanted = tokens(hint).join('_');
+    const hit = usable.find((field) => [field.slug, field.name].some((key) => tokens(key).join('_') === wanted));
+    if (hit) return hit;
   }
   return null;
 }

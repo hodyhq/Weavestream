@@ -983,6 +983,11 @@ export class AssetsService {
     const existingValues = target
       ? this.currentValuesAsMap(layout, target.fieldValues)
       : {};
+    // A binding that already holds a baseline for other fields: a field
+    // newly mapped onto it has no baseline of its own, but the value it
+    // holds was put there by a person, not by this integration.
+    const establishedBinding =
+      input.recordFieldDiffs === true && Object.keys(input.previousFieldChecksums).length > 0;
     for (const [fieldId, entry] of directionByFieldId) {
       const field = fieldById.get(fieldId)!;
       const stored = existingValues[field.slug];
@@ -993,8 +998,7 @@ export class AssetsService {
         entry.syncDirection === 'preserve_manual' &&
         stored !== null &&
         stored !== undefined &&
-        previousChecksum !== undefined &&
-        previousChecksum !== storedChecksum
+        (previousChecksum !== undefined ? previousChecksum !== storedChecksum : establishedBinding)
       ) {
         // The recorded baseline stays the last integration-authored
         // checksum. Recording the manual value's checksum instead would
@@ -1002,7 +1006,7 @@ export class AssetsService {
         // reach this path would see no edit and overwrite it —
         // preserve_manual retains the operator value until the operator
         // reverts the field to the last synced value themselves.
-        fieldChecksums[fieldId] = previousChecksum;
+        if (previousChecksum !== undefined) fieldChecksums[fieldId] = previousChecksum;
         if (input.recordFieldDiffs) {
           const sourceValue = normalized[field.slug];
           const sourceFingerprint = assetFieldChecksum(sourceValue);
