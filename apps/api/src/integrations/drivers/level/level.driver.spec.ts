@@ -1,4 +1,4 @@
-import { driverDescriptorSchema, integrationSectionSchema, type IntegrationSection } from '@weavestream/shared';
+import { driverDescriptorSchema, driverResourceDescriptorSchema, integrationSectionSchema, type IntegrationSection } from '@weavestream/shared';
 import {
   DriverAuthError,
   DriverRateLimitError,
@@ -13,6 +13,7 @@ import {
   __resetLevelRunCacheForTests,
 } from './level.driver.js';
 import { LEVEL_SETUP_GUIDE } from './level.setup-guide.js';
+import { deviceStandardFields, formatDiskSize, formatRam, privateIpv4 } from './level.sections.js';
 import { setDefaultFetchForTests, setDefaultResolveForTests } from '../../../common/egress/safe-fetch.js';
 
 const API = 'https://api.level.io/v2';
@@ -84,7 +85,7 @@ const LAPTOP = {
   role: 'workstation', platform: 'Windows', online: true, last_seen_at: '2026-10-08T11:00:00Z', last_reboot_time: '2026-10-01T06:00:00Z',
   last_logged_in_user: 'EXAMPLE\\user1', maintenance_mode: false, city: 'Example City', country: 'US',
   manufacturer: 'Example Corp', model: 'Book 14', architecture: 'x64', total_memory: 17_179_869_184, memory_slots: 2, cpu_cores: 8,
-  security_score: 82, notes: 'Front desk PC', tags: ['vip', 'office'], public_ip_address: '203.0.113.10', private_ip_addresses: ['192.0.2.10'],
+  security_score: 82, notes: 'Front desk PC', tags: ['vip', 'office'], public_ip_address: '203.0.113.10', private_ip_addresses: ['10.0.0.10'],
   full_operating_system: 'Windows 10 Pro 22H2',
   operating_system: { full_operating_system: 'Windows 10 Pro 22H2', major_version: 10, minor_version: 0, end_of_life: true, install_date: '2022-01-05T00:00:00Z' },
   cpus: [{ model: 'Example CPU 8000', cores: 8, clock_speed: 3000 }],
@@ -96,7 +97,10 @@ const LAPTOP = {
     { mount_point: 'Z:', size: 0, free_space: 0 },
   ],
   motherboard: { manufacturer: 'Example Corp', model: 'MB-1', bios_version: '1.2.3' },
-  network_interfaces: [{ label: 'Ethernet', mac_address: '00:11:22:33:44:55', ip_addresses: ['192.0.2.10'], gateway: '192.0.2.1', dns_servers: ['192.0.2.53'] }],
+  network_interfaces: [
+    { label: 'Bluetooth', mac_address: '00:11:22:33:44:00', ip_addresses: [] },
+    { label: 'Ethernet', mac_address: '00:11:22:33:44:55', ip_addresses: ['10.0.0.10', 'fe80::1'], gateway: '10.0.0.1', dns_servers: ['10.0.0.53'] },
+  ],
   security: { risk: 'high', patch_compliance: 75, antivirus_provider: 'Example AV', antivirus_status: 'up to date', firewall_enabled: true, primary_partition_encrypted: true, admin_accounts_count: 2 },
 };
 const VM = { id: 'dev-2', hostname: 'vm-01', nickname: null, serial_number: null, group_id: ROOT, online: false };
@@ -239,7 +243,12 @@ describe('LevelDriver devices', () => {
 
     const [laptop, vm] = first.records as LegacyDriverRecord[];
     expect(laptop).toMatchObject({ externalId: 'dev-1', displayName: 'Front desk', fields: { name: 'Front desk', serialNumber: 'SN-001' } });
-    expect(vm).toMatchObject({ externalId: 'dev-2', displayName: 'vm-01', fields: { name: 'vm-01', serialNumber: null } });
+    expect(vm!.fields).toEqual({ name: 'vm-01', serialNumber: null, hostname: 'vm-01' });
+    expect(laptop!.fields).toEqual({
+      name: 'Front desk', serialNumber: 'SN-001', hostname: 'ws-01', manufacturer: 'Example Corp', model: 'Book 14',
+      operating_system: 'Windows 10 Pro 22H2', cpu: 'Example CPU 8000 (8 cores)', ram: '16 GB',
+      storage: '512 GB SSD (Example SSD)', mac_address: '00:11:22:33:44:55', ip_address: '10.0.0.10', role: 'Workstation',
+    });
 
     const second = await driver.fetchRecords(fetchCtx(ctx), first.cursor);
     expect(second).toMatchObject({ hasMore: false, cursor: null, records: [] });
@@ -256,20 +265,26 @@ describe('LevelDriver devices', () => {
     installFetchTable(table());
     const page = await new LevelDriver().fetchRecords(fetchCtx(makeCtx()), null);
     const s = sectionOf(page.records[0] as LegacyDriverRecord);
-    expect(s.title).toBe('Level');
-    expect(s.groups.map((g) => g.key)).toEqual(['status', 'hardware', 'storage', 'os', 'network', 'security', 'patches', 'alerts', 'tags', 'notes']);
+    expect(s.title).toBe('Level RMM');
+    expect(s.groups.map((g) => g.key)).toEqual(['status', 'storage', 'network', 'security', 'patches', 'alerts', 'hardware', 'tags', 'notes']);
+    expect(s.groups.find((g) => g.key === 'status')!.rows.map((r) => r.label)).toEqual(
+      ['Status', 'Last seen', 'Last reboot', 'Logged-in user', 'Maintenance mode', 'Platform', 'Group', 'Location (from IP)'],
+    );
+    // Standard facts live in layout fields, never again in the block.
+    expect(s.groups.find((g) => g.key === 'hardware')!.rows.map((r) => r.label)).toEqual(['Memory modules', 'Disks']);
+    const labels = s.groups.flatMap((g) => g.rows.map((r) => r.label));
+    for (const gone of ['Hostname', 'Manufacturer', 'Model', 'CPU', 'Memory', 'Role', 'Name', 'Version']) expect(labels).not.toContain(gone);
     expect(row(s, 'status', 'Status')).toMatchObject({ kind: 'badge', value: 'Online', tone: 'success' });
-    expect(row(s, 'status', 'Location')).toMatchObject({ value: 'Example City, US' });
-    expect(row(s, 'hardware', 'Memory')).toEqual({ kind: 'bytes', label: 'Memory', value: 17_179_869_184 });
+    expect(row(s, 'status', 'Group')).toMatchObject({ value: 'Nested' });
+    expect(row(s, 'status', 'Location (from IP)')).toMatchObject({ value: 'Example City, US' });
     expect(row(s, 'hardware', 'Memory modules')).toMatchObject({ value: ['8.0 GB DDR4 SODIMM (DIMM0)'] });
     expect(row(s, 'hardware', 'Disks')).toMatchObject({ value: ['Example SSD, SSD, 477 GB'] });
     expect(row(s, 'storage', 'C:')).toEqual({ kind: 'meter', label: 'C:', used: 750, total: 1_000, unit: 'bytes' });
     expect(row(s, 'storage', 'Data')).toMatchObject({ used: 0, total: 2_000 });
     expect(row(s, 'storage', 'Z:')).toBeUndefined();
-    expect(row(s, 'os', 'End of life')).toEqual({ kind: 'badge', label: 'End of life', value: 'Yes', tone: 'danger' });
-    expect(row(s, 'os', 'Version')).toMatchObject({ value: '10.0' });
+    expect(row(s, 'security', 'OS end of life')).toEqual({ kind: 'badge', label: 'OS end of life', value: 'Yes', tone: 'danger' });
     expect(row(s, 'network', 'Public IP')).toMatchObject({ value: '203.0.113.10' });
-    expect(row(s, 'network', 'Ethernet')).toMatchObject({ value: ['MAC 00:11:22:33:44:55', 'IP 192.0.2.10', 'Gateway 192.0.2.1', 'DNS 192.0.2.53'] });
+    expect(row(s, 'network', 'Ethernet')).toMatchObject({ value: ['MAC 00:11:22:33:44:55', 'IP 10.0.0.10', 'IP fe80::1', 'Gateway 10.0.0.1', 'DNS 10.0.0.53'] });
     expect(row(s, 'security', 'Risk')).toMatchObject({ value: 'High', tone: 'danger' });
     expect(row(s, 'security', 'Patch compliance')).toMatchObject({ kind: 'meter', used: 75, total: 100, higherIsBetter: true });
     expect(row(s, 'patches', 'Available updates')).toMatchObject({ value: '2', tone: 'warning' });
@@ -362,5 +377,46 @@ describe('Level byDevice bucketing', () => {
     } finally {
       set.mockRestore();
     }
+  });
+});
+
+describe('Level standard fields', () => {
+  it('describes Level RMM with valid standard fields that skip the match key', () => {
+    const descriptor = new LevelDriver().descriptor;
+    expect(descriptor.label).toBe('Level RMM');
+    const devices = driverResourceDescriptorSchema.parse(descriptor.resources[0]);
+    expect(devices.standardFields!.map((f) => f.sourceField)).toEqual(
+      ['hostname', 'manufacturer', 'model', 'operating_system', 'cpu', 'ram', 'storage', 'mac_address', 'ip_address', 'role'],
+    );
+    expect(devices.standardFields!.find((f) => f.sourceField === 'operating_system')!.fieldHints).toEqual(['operating_system', 'os']);
+  });
+
+  it('summarizes multi-socket CPUs, several disks and picks the primary NIC', () => {
+    expect(deviceStandardFields({
+      cpus: [{ model: 'Example Xeon', cores: 16 }, { model: 'Example Xeon', cores: 16 }],
+      disks: [{ size: 2_000_000_000_000, disk_type: 'NVMe', model: 'Disk A' }, { size: 480_000_000_000, model: 'Disk B' }],
+      network_interfaces: [
+        { mac_address: 'AA:00:00:00:00:01', ip_addresses: ['172.16.5.4'] },
+        { mac_address: 'AA:00:00:00:00:02', ip_addresses: ['8.8.8.8'], gateway: '8.8.8.1' },
+        { mac_address: 'AA:00:00:00:00:03', ip_addresses: ['192.168.1.20/24'], gateway: '192.168.1.1' },
+      ],
+    })).toEqual({
+      cpu: '2x Example Xeon (32 cores)',
+      storage: '2 TB NVMe (Disk A), 480 GB (Disk B)',
+      mac_address: 'AA:00:00:00:00:03',
+      ip_address: '192.168.1.20',
+    });
+  });
+
+  it('falls back to the first NIC with a MAC and the device private IP list, and omits missing facts', () => {
+    expect(deviceStandardFields({
+      network_interfaces: [{ ip_addresses: ['10.1.1.1'] }, { mac_address: 'AA:00:00:00:00:09', ip_addresses: [] }],
+      private_ip_addresses: ['203.0.113.7', '10.9.8.7'],
+      total_memory: 16_900_000_000,
+    })).toEqual({ mac_address: 'AA:00:00:00:00:09', ip_address: '10.9.8.7', ram: '16 GB' });
+    expect(deviceStandardFields({})).toEqual({});
+    expect(privateIpv4('172.32.0.1')).toBeUndefined();
+    expect(formatRam(8 * 2 ** 30)).toBe('8 GB');
+    expect(formatDiskSize(256_060_514_304)).toBe('256 GB');
   });
 });

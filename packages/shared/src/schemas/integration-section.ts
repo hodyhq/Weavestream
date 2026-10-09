@@ -144,5 +144,20 @@ export const assetIntegrationSectionSchema = z.object({
   /** False once the binding is no longer active (the record left the source): history stays visible, tagged. */
   active: z.boolean().optional(),
   section: integrationSectionSchema,
+  /** The binding row, for resolving differences. */
+  syncRecordId: z.string().uuid().optional(),
+  /** Standard fields a person changed that now differ from the source (named after `section.title`). */
+  differences: z
+    .array(
+      z.object({
+        syncRecordId: z.string().uuid(),
+        assetFieldId: z.string().uuid(),
+        fieldLabel: z.string(),
+        localValue: z.string().nullable(),
+        sourceValue: z.string().nullable(),
+        detectedAt: z.string(),
+      }),
+    )
+    .optional(),
 });
 export type AssetIntegrationSection = z.infer<typeof assetIntegrationSectionSchema>;

@@ -4,7 +4,7 @@
 <!-- aliases: integration overview | rmm sync | import devices | external inventory | connectors -->
 <!-- requires: integration.manage -->
 
-Action1, NinjaOne, UniFi, Google Workspace, Level, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
+Action1, NinjaOne, UniFi, Google Workspace, Level RMM, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
 
 Match keys claim existing unclaimed assets instead of duplicating them. Once linked, integration sync records preserve identity across runs.
 
@@ -73,13 +73,13 @@ Per customer: **New integration → Google Workspace**, then on **Credentials & 
 
 Do not leave the app in **Testing**: connections expire after 7 days. **Reconnect** appears when access was revoked or unused for 6 months. Google gives no invoices, purchased seats or renewal dates for direct customers, and usage figures lag 1 to 3 days.
 
-## Configure Level
+## Configure Level RMM
 <!-- aliases: connect level | level rmm | level.io | level api key | level devices | level groups -->
 <!-- requires: integration.manage -->
 
-Level is read-only and connects with an API key. One integration is one Level account. In Level, open **Settings → API keys**, select **Create API key**, and choose **Read-only** access. In Weavestream, select **New integration → Level**, paste the key into **API key** on **Credentials & schedule**, save, then select **Test connection** and **Check setup**.
+Level is read-only and connects with an API key. One integration is one Level account. In Level, open **Settings → API keys**, select **Create API key**, and choose **Read-only** access. In Weavestream, select **New integration → Level RMM**, paste the key into **API key** on **Credentials & schedule**, save, then select **Test connection** and **Check setup**.
 
-Under **Organizations**, each top-level Level group maps to one company; devices in nested groups sync with their top-level group, and devices in no group are not synced. Under **Map layouts**, pick the device layout and match on **Serial number**. Devices without a serial number (often virtual machines) are created and stay linked by their Level id. Everything except name and serial number shows in the **Level** section on the asset: status, hardware, storage per partition, operating system with end of life, network, security, available patches and active alerts. If the key or plan cannot read alerts or patches, those groups say **Not available** and devices still sync. Level does not provide installed software, agent version or warranty dates.
+Under **Organizations**, each top-level Level group maps to one company; devices in nested groups sync with their top-level group, and devices in no group are not synced. Under **Map layouts**, pick the device layout and match on **Serial number**. Devices without a serial number (often virtual machines) are created and stay linked by their Level id. Below the match picker, **Map layouts** lists the standard facts (hostname, manufacturer, model, operating system, CPU, RAM, storage, MAC address, IP address, role): each is set to a fitting layout field, **Create field** or **Don't sync**. Those facts fill the layout fields; the **Level RMM** section on the asset keeps the rest: status, storage per partition, network, security with OS end of life, available patches, active alerts and memory and disk detail. A mapped field someone changed in Weavestream is never overwritten: it shows under **Differences** at the bottom of the Level RMM section and on the integration's **Differences** tab, with **Use Level RMM value** (write it now and follow Level again) or **Keep ours** (stop flagging it until the Level value changes). Resolving needs permission to edit assets in that company. If the key or plan cannot read alerts or patches, those groups say **Not available** and devices still sync. Level does not provide installed software, agent version or warranty dates.
 
 ## Configure Breeze reconstruction sync
 <!-- aliases: configure Breeze reconstruction | Breeze RMM setup | Breeze Partner API | Breeze disaster recovery sync | Breeze documentation sync -->

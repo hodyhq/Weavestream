@@ -14,14 +14,21 @@ import { assertRecommendedDestinations, fetchWithRetry } from '../driver-utils.j
 import type { Lookup } from '../section-rows.js';
 import { LevelKeyError, diagnoseLevel } from './level.diagnose.js';
 import { LEVEL_SETUP_GUIDE } from './level.setup-guide.js';
-import { buildDeviceSection, type LevelAlert, type LevelDevice, type LevelUpdate } from './level.sections.js';
+import {
+  buildDeviceSection,
+  deviceStandardFields,
+  type LevelAlert,
+  type LevelDevice,
+  type LevelUpdate,
+} from './level.sections.js';
 
 /**
  * Level RMM driver (read-only). One integration = one Level account; each
  * top-level group is a source org, and its devices (nested groups
  * included) sync into one company. Every call is a GET with the raw API
  * key in `Authorization` (Level uses no Bearer prefix). Records carry the
- * name and serial number only; everything else goes into the section.
+ * name, the serial number and the standard facts (LEVEL_STANDARD_FIELDS)
+ * that fill layout fields; the extras go into the section.
  *
  * Active alerts and available updates are listed once per org and run,
  * then bucketed by device; a 403/404 there (plan or key permission)
@@ -58,6 +65,20 @@ export const LEVEL_RECOMMENDED_DESTINATIONS = assertRecommendedDestinations('lev
     ],
   },
 });
+
+/** Standard facts Map layouts offers as layout fields (serial is the match key). */
+export const LEVEL_STANDARD_FIELDS: NonNullable<DriverDescriptor['resources'][number]['standardFields']> = [
+  { sourceField: 'hostname', label: 'Hostname', fieldType: 'TEXT', fieldHints: ['hostname', 'host_name', 'computer_name'] },
+  { sourceField: 'manufacturer', label: 'Manufacturer', fieldType: 'TEXT', fieldHints: ['manufacturer', 'make', 'vendor'] },
+  { sourceField: 'model', label: 'Model', fieldType: 'TEXT', fieldHints: ['model'] },
+  { sourceField: 'operating_system', label: 'Operating system', fieldType: 'TEXT', fieldHints: ['operating_system', 'os'] },
+  { sourceField: 'cpu', label: 'CPU', fieldType: 'TEXT', fieldHints: ['cpu', 'processor'] },
+  { sourceField: 'ram', label: 'RAM', fieldType: 'TEXT', fieldHints: ['ram', 'memory'] },
+  { sourceField: 'storage', label: 'Storage', fieldType: 'TEXT', fieldHints: ['storage', 'disk', 'disks'] },
+  { sourceField: 'mac_address', label: 'MAC address', fieldType: 'TEXT', fieldHints: ['mac_address', 'mac'] },
+  { sourceField: 'ip_address', label: 'IP address', fieldType: 'IP_ADDRESS', fieldHints: ['ip_address', 'ip', 'private_ip'] },
+  { sourceField: 'role', label: 'Role', fieldType: 'TEXT', fieldHints: ['role'] },
+];
 
 /** `starting_after` walker state, opaque to the runner. */
 const cursorSchema = z.object({ startingAfter: z.string().min(1).max(256) }).strict();
@@ -230,8 +251,8 @@ export class LevelDriver implements IntegrationDriver {
 
   readonly descriptor: DriverDescriptor = {
     key: 'level',
-    label: 'Level',
-    description: 'Read-only sync of Level RMM devices: hardware, storage, OS, network, security, patches and alerts.',
+    label: 'Level RMM',
+    description: 'Read-only sync of Level RMM devices: hardware, OS and network facts fill layout fields; status, storage, security, patches and alerts show on the asset page.',
     iconKey: 'level',
     configFields: [],
     secretFields: [
@@ -260,6 +281,7 @@ export class LevelDriver implements IntegrationDriver {
           fieldLabel: 'Serial number',
         },
         minimalFields: ['name', 'serialNumber'],
+        standardFields: LEVEL_STANDARD_FIELDS,
       },
     ],
     capabilities: {
@@ -291,6 +313,12 @@ export class LevelDriver implements IntegrationDriver {
     return [
       { key: 'name', label: 'Name', hintType: 'TEXT', alwaysPresent: true },
       { key: 'serialNumber', label: 'Serial number', hintType: 'TEXT', alwaysPresent: false },
+      ...LEVEL_STANDARD_FIELDS.map((field) => ({
+        key: field.sourceField,
+        label: field.label,
+        hintType: field.fieldType === 'IP_ADDRESS' ? ('IP_ADDRESS' as const) : ('TEXT' as const),
+        alwaysPresent: false,
+      })),
     ];
   }
 
@@ -327,7 +355,7 @@ export class LevelDriver implements IntegrationDriver {
           externalId: d.id!,
           displayName: name,
           // No serial (common on VMs): left empty, so the asset is created and bound by Level id.
-          fields: { name, serialNumber: d.serial_number || null },
+          fields: { name, serialNumber: d.serial_number || null, ...deviceStandardFields(d) },
           section: buildDeviceSection({ device: d, alerts, updates }),
           updatedAt: null,
         };

@@ -43,6 +43,7 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 import { INTEGRATION_WRITE_ACTOR } from '../common/integration-write-actor.js';
 import { expandMatchValueVariants } from '../integrations/match-resolver.service.js';
 import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
+import { differenceDisplayValue, parseFieldDiffs } from '../integrations/field-diffs.js';
 
 export interface AuditMeta {
   ip: string;
@@ -125,6 +126,20 @@ export interface IntegrationAssetWriteInput {
     syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
   }>;
   previousFieldChecksums: Readonly<Record<string, string>>;
+  /**
+   * Runner-controlled (resources that declare `standardFields`): a
+   * `preserve_manual` field a person changed is reported in `fieldDiffs`
+   * instead of being silently kept, and a person's value that already
+   * equals the source makes the field follow the source again.
+   */
+  recordFieldDiffs?: boolean;
+}
+
+/** A standard field a person changed that now differs from the source value. */
+export interface IntegrationFieldDiff {
+  sourceValue: unknown;
+  sourceFingerprint: string;
+  localFingerprint: string;
 }
 
 /**
@@ -200,6 +215,8 @@ export interface IntegrationAssetWriteResult {
   companyId: string;
   change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
   fieldChecksums?: Record<string, string>;
+  /** Present when `recordFieldDiffs` was set: keyed by AssetField.id. */
+  fieldDiffs?: Record<string, IntegrationFieldDiff>;
   /** This write adopted an operator-created asset (match-first). */
   adopted?: boolean;
   gap?: {
@@ -529,8 +546,10 @@ export class AssetsService {
     const rows = await this.prisma.integrationSyncRecord.findMany({
       where: { companyId, assetId, sectionData: { not: Prisma.DbNull } },
       select: {
+        id: true,
         lastSyncedAt: true,
         sectionData: true,
+        fieldDiffs: true,
         state: true,
         companyMapping: {
           select: { integration: { select: { id: true, driver: true, name: true } } },
@@ -538,6 +557,22 @@ export class AssetsService {
       },
       orderBy: { lastSyncedAt: 'desc' },
     });
+    const diffsByRow = new Map(rows.map((row) => [row.id, parseFieldDiffs(row.fieldDiffs)]));
+    const fieldIds = [...new Set([...diffsByRow.values()].flatMap((diffs) => Object.keys(diffs)))];
+    const [fields, values] = fieldIds.length === 0
+      ? [[], []]
+      : await Promise.all([
+          this.prisma.assetField.findMany({
+            where: { id: { in: fieldIds }, archivedAt: null },
+            select: { id: true, name: true },
+          }),
+          this.prisma.assetFieldValue.findMany({
+            where: { companyId, assetId, assetFieldId: { in: fieldIds } },
+            select: { assetFieldId: true, value: true },
+          }),
+        ]);
+    const labelById = new Map(fields.map((field) => [field.id, field.name]));
+    const valueById = new Map(values.map((value) => [value.assetFieldId, value.value]));
     const out: NonNullable<SerializedAsset['integrationSections']> = [];
     for (const row of rows) {
       // Re-validated on read: the column is only ever written validated,
@@ -552,6 +587,20 @@ export class AssetsService {
         lastSyncedAt: row.lastSyncedAt,
         active: row.state === 'active',
         section: parsed.data,
+        syncRecordId: row.id,
+        differences: Object.entries(diffsByRow.get(row.id) ?? {}).flatMap(([assetFieldId, diff]) => {
+          const fieldLabel = labelById.get(assetFieldId);
+          // A field archived since the sync has nothing left to resolve.
+          if (fieldLabel === undefined) return [];
+          return [{
+            syncRecordId: row.id,
+            assetFieldId,
+            fieldLabel,
+            localValue: differenceDisplayValue(valueById.get(assetFieldId)),
+            sourceValue: differenceDisplayValue(diff.sourceValue),
+            detectedAt: diff.detectedAt,
+          }];
+        }),
       });
     }
     // ponytail: section values are not indexed for search in v1; add them
@@ -658,6 +707,8 @@ export class AssetsService {
     id: string,
     input: UpdateAssetInput,
     meta: AuditMeta,
+    /** Run the write in the caller's transaction (it holds a lock the write must not outlive). */
+    client?: Prisma.TransactionClient,
   ): Promise<SerializedAsset> {
     const existing = await this.prisma.asset.findFirst({
       where: { id, companyId },
@@ -711,7 +762,9 @@ export class AssetsService {
       fieldValues: this.currentValuesAsMap(layout, existing.fieldValues),
     };
 
-    await this.prisma.$transaction(async (tx) => {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      client ? callback(client) : this.prisma.$transaction(callback);
+    await runTransaction(async (tx) => {
       // `updateMany` lets us carry `companyId` in the `where` clause so
       // the tenant-scope middleware can verify the write is in-scope.
       // Plain `update` requires a unique `where`, which would only
@@ -925,10 +978,15 @@ export class AssetsService {
       target ? 'update' : 'write',
     );
     const fieldChecksums: Record<string, string> = {};
+    const fieldDiffs: Record<string, IntegrationFieldDiff> = {};
     const valuesToWrite: Record<string, unknown> = {};
     const existingValues = target
       ? this.currentValuesAsMap(layout, target.fieldValues)
       : {};
+    // An existing binding (not a first sync or a match-first adoption): a
+    // field newly mapped onto it has no baseline of its own, but the value
+    // it holds was put there by a person, not by this integration.
+    const establishedBinding = input.recordFieldDiffs === true && !!input.existingTargetId;
     for (const [fieldId, entry] of directionByFieldId) {
       const field = fieldById.get(fieldId)!;
       const stored = existingValues[field.slug];
@@ -939,8 +997,7 @@ export class AssetsService {
         entry.syncDirection === 'preserve_manual' &&
         stored !== null &&
         stored !== undefined &&
-        previousChecksum !== undefined &&
-        previousChecksum !== storedChecksum
+        (previousChecksum !== undefined ? previousChecksum !== storedChecksum : establishedBinding)
       ) {
         // The recorded baseline stays the last integration-authored
         // checksum. Recording the manual value's checksum instead would
@@ -948,7 +1005,15 @@ export class AssetsService {
         // reach this path would see no edit and overwrite it —
         // preserve_manual retains the operator value until the operator
         // reverts the field to the last synced value themselves.
-        fieldChecksums[fieldId] = previousChecksum;
+        if (previousChecksum !== undefined) fieldChecksums[fieldId] = previousChecksum;
+        if (input.recordFieldDiffs) {
+          const sourceValue = normalized[field.slug];
+          const sourceFingerprint = assetFieldChecksum(sourceValue);
+          // The person's value already equals the source: nothing differs,
+          // and the field follows the source again from here on.
+          if (sourceFingerprint === storedChecksum) fieldChecksums[fieldId] = storedChecksum;
+          else fieldDiffs[fieldId] = { sourceValue, sourceFingerprint, localFingerprint: storedChecksum };
+        }
         continue;
       }
       const value = normalized[field.slug];
@@ -1031,6 +1096,7 @@ export class AssetsService {
           fieldsChanged,
         }),
         fieldChecksums,
+        ...(input.recordFieldDiffs ? { fieldDiffs } : {}),
         ...(claimed ? { adopted: true } : {}),
       };
     }
@@ -1254,6 +1320,7 @@ export class AssetsService {
       companyId: input.companyId,
       change,
       fieldChecksums,
+      ...(input.recordFieldDiffs ? { fieldDiffs } : {}),
       ...(claimed ? { adopted: true } : {}),
     };
   }

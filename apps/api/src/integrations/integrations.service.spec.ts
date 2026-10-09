@@ -566,6 +566,36 @@ describe('updateResource target configuration', () => {
   });
 });
 
+describe('replaceFieldMappings standard-field types', () => {
+  const resource = {
+    key: 'devices', label: 'Devices', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+    standardFields: [{ sourceField: 'role', label: 'Role', fieldType: 'TEXT', fieldHints: ['role'] }],
+  };
+  function setup(fieldType: string) {
+    const prisma = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: 'i-1', driver: 'level' }) },
+      integrationResource: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'r-1', assetLayoutId: 'l-1', _count: { fieldMappings: 0 } }),
+      },
+      assetField: { findMany: jest.fn().mockResolvedValue([{ id: 'f-1', fieldType }]) },
+      $transaction: jest.fn(),
+    };
+    const drivers = { get: jest.fn().mockReturnValue({ descriptor: { ...baseDescriptor, resources: [resource] } }) };
+    const service = new IntegrationsService(
+      prisma as never, {} as never, {} as never, drivers as never, {} as never, {} as never, {} as never,
+    );
+    return { prisma, service };
+  }
+  const mappings = { mappings: [{ sourceField: 'role', targetFieldId: 'f-1', syncDirection: 'preserve_manual' as const, transform: null }] };
+
+  it.each(['DROPDOWN', 'FILE', 'ASSET_REFERENCE', 'NUMBER'])('refuses to map a standard field to a %s field', async (fieldType) => {
+    const { prisma, service } = setup(fieldType);
+    await expect(service.replaceFieldMappings({ id: 'u' } as never, 'i-1', 'devices', mappings, { ip: '', userAgent: '' }))
+      .rejects.toThrow(/cannot be mapped/);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
 describe('integration deletion', () => {
   const ids = {
     actor: '00000000-0000-4000-8000-000000000001',

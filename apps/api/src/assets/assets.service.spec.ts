@@ -563,13 +563,19 @@ describe('AssetsService.get integration sections', () => {
   function makeService() {
     const sectionRows = [
       {
+        id: 'rec-1',
         lastSyncedAt: new Date('2026-10-01T00:00:00.000Z'),
         sectionData: section,
+        fieldDiffs: {
+          'f-title': { sourceValue: 'Engineer', sourceFingerprint: 's', localFingerprint: 'l', detectedAt: '2026-10-01T00:00:00.000Z' },
+          'f-gone': { sourceValue: 'x', sourceFingerprint: 's', localFingerprint: 'l', detectedAt: '2026-10-01T00:00:00.000Z' },
+        },
         state: 'active',
         companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
       },
       {
         // The record left the source: kept as history, flagged inactive.
+        id: 'rec-2',
         lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'),
         sectionData: section,
         state: 'stale',
@@ -596,6 +602,9 @@ describe('AssetsService.get integration sections', () => {
         }),
       },
       integrationSyncRecord: { findMany },
+      // f-gone was archived: its difference is not shown.
+      assetField: { findMany: jest.fn().mockResolvedValue([{ id: 'f-title', name: 'Job title' }]) },
+      assetFieldValue: { findMany: jest.fn().mockResolvedValue([{ assetFieldId: 'f-title', value: 'Senior engineer' }]) },
     };
     const stars = { isStarred: jest.fn().mockResolvedValue(false) };
     const service = new AssetsService(
@@ -614,9 +623,15 @@ describe('AssetsService.get integration sections', () => {
     expect(asset.integrationSections).toEqual([{
       integrationId, driver: 'google-workspace', integrationName: 'Acme Workspace',
       lastSyncedAt: new Date('2026-10-01T00:00:00.000Z'), active: true, section,
+      syncRecordId: 'rec-1',
+      differences: [{
+        syncRecordId: 'rec-1', assetFieldId: 'f-title', fieldLabel: 'Job title',
+        localValue: 'Senior engineer', sourceValue: 'Engineer', detectedAt: '2026-10-01T00:00:00.000Z',
+      }],
     }, {
       integrationId, driver: 'google-workspace', integrationName: 'Acme Workspace',
       lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'), active: false, section,
+      syncRecordId: 'rec-2', differences: [],
     }]);
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ companyId, assetId }),

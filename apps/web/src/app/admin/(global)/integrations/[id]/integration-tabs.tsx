@@ -15,8 +15,14 @@ import { OrgsTab } from './orgs-tab';
 import { RunsTab } from './runs-tab';
 import { CompletenessTab } from './completeness-tab';
 import { MapLayoutsTab, matchableResources } from './map-layouts-tab';
+import { DifferencesTab } from './differences-tab';
 
-type StaticTabId = 'creds' | 'orgs' | 'layouts' | 'completeness' | 'runs';
+/** Drivers whose resources fill standard layout fields get a Differences tab. */
+export function hasStandardFields(driver: DriverDescriptor | null): boolean {
+  return (driver?.resources ?? []).some((resource) => (resource.standardFields?.length ?? 0) > 0);
+}
+
+type StaticTabId = 'creds' | 'orgs' | 'layouts' | 'differences' | 'completeness' | 'runs';
 type ResourceTabId = `fields:${string}`;
 type TabId = StaticTabId | ResourceTabId;
 
@@ -54,6 +60,13 @@ const MAP_LAYOUTS_TAB: TabDescriptor = {
   id: 'layouts',
   label: 'Map layouts',
   help: 'Choose the layout and match field for each kind of record.',
+  kind: 'static',
+};
+
+const DIFFERENCES_TAB: TabDescriptor = {
+  id: 'differences',
+  label: 'Differences',
+  help: 'Fields changed in Weavestream that now differ from the source.',
   kind: 'static',
 };
 
@@ -129,6 +142,7 @@ export function IntegrationTabs({
   runs,
   driver,
   canManageLayouts = true,
+  differenceCount = null,
 }: {
   initialTab: string;
   integration: IntegrationDto;
@@ -136,6 +150,8 @@ export function IntegrationTabs({
   runs: IntegrationSyncRunDto[];
   driver: DriverDescriptor | null;
   canManageLayouts?: boolean;
+  /** Open differences, for the tab badge; null when unknown. */
+  differenceCount?: number | null;
 }) {
   const router = useRouter();
   const sp = useSearchParams();
@@ -173,8 +189,11 @@ export function IntegrationTabs({
     const head = matchableResources(driver).length > 0
       ? [...STATIC_TABS_HEAD, MAP_LAYOUTS_TAB]
       : STATIC_TABS_HEAD;
-    return [...head, ...resourceTabs, ...tail];
-  }, [driver]);
+    const differences = hasStandardFields(driver)
+      ? [{ ...DIFFERENCES_TAB, label: differenceCount ? `Differences (${differenceCount})` : 'Differences' }]
+      : [];
+    return [...head, ...resourceTabs, ...differences, ...tail];
+  }, [driver, differenceCount]);
 
   // Resolve the initial tab against the descriptor list. Legacy `fields`
   // (singular) routes default to the first resource tab so saved bookmarks
@@ -282,6 +301,9 @@ export function IntegrationTabs({
           />
         )}
         {tab === 'layouts' && <MapLayoutsTab integration={integration} driver={driver} canManageLayouts={canManageLayouts} />}
+        {tab === 'differences' && (
+          <DifferencesTab integrationId={integration.id} mappings={mappings} sourceLabel={driver?.label ?? integration.name} />
+        )}
         {tab === 'runs' && (
           <RunsTab integration={integration} runs={runs} mappings={mappings} />
         )}

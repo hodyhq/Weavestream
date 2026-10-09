@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MapLayoutsTab, matchableResources, suggestField, suggestLayout } from './map-layouts-tab';
+import { MapLayoutsTab, matchableResources, suggestField, suggestLayout, suggestStandardField } from './map-layouts-tab';
 
 const apiFetch = jest.fn();
 const toastPush = jest.fn();
@@ -15,6 +15,10 @@ jest.mock('../../../../../components/ui', () => ({
   Select: (props: React.SelectHTMLAttributes<HTMLSelectElement>) => <select {...props} />,
   Tag: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   useToast: () => ({ push: toastPush }),
+  DataTable: ({ columns, rows }: { columns: Array<{ id: string; render: (row: unknown) => React.ReactNode }>; rows: Array<{ id: string }> }) => (
+    <table><tbody>{rows.map((r) => <tr key={r.id}>{columns.map((c) => <td key={c.id}>{c.render(r)}</td>)}</tr>)}</tbody></table>
+  ),
+  MobileCardRow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 const field = (id: string, name: string, slug: string) => ({
@@ -203,5 +207,132 @@ describe('MapLayoutsTab', () => {
     fireEvent.change(screen.getByLabelText('Layout'), { target: { value: 'l-laptops' } });
     expect(screen.getByLabelText('Match primaryEmail on')).toHaveValue('');
     expect(screen.getByRole('option', { name: 'Create field "Primary email"' })).toBeDisabled();
+  });
+});
+
+describe('Map layouts standard fields', () => {
+  const typed = (id: string, name: string, slug: string, fieldType: string) => ({ ...field(id, name, slug), fieldType });
+  const workstations = layout('l-ws', 'Workstations', 'workstations', [
+    field('f-serial', 'Serial number', 'serial_number'),
+    field('f-host', 'Host name', 'host_name'),
+    typed('f-ip', 'IP address', 'ip_address', 'IP_ADDRESS'),
+    typed('f-os', 'Operating system', 'os_choice', 'DROPDOWN'),
+  ]);
+  const devices = {
+    key: 'devices', label: 'Devices', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+    matchSuggestions: { sourceField: 'serialNumber', layoutHints: ['workstations'], fieldHints: ['serial_number'] },
+    standardFields: [
+      { sourceField: 'hostname', label: 'Hostname', fieldType: 'TEXT', fieldHints: ['hostname', 'host_name'] },
+      { sourceField: 'operating_system', label: 'Operating system', fieldType: 'TEXT', fieldHints: ['operating_system', 'os'] },
+      { sourceField: 'ip_address', label: 'IP address', fieldType: 'IP_ADDRESS', fieldHints: ['ip_address', 'ip'] },
+      { sourceField: 'ram', label: 'RAM', fieldType: 'TEXT', fieldHints: ['ram', 'memory'] },
+    ],
+  };
+  const standardSelect = (key: string) => screen.getByLabelText(`Layout field for ${key}`);
+
+  beforeEach(() => {
+    apiFetch.mockReset();
+    toastPush.mockReset();
+  });
+
+  it('matches hints by whole words and compatible types only', () => {
+    const [hostname, os, ip] = devices.standardFields;
+    expect(suggestStandardField(workstations.fields as never, hostname as never)?.id).toBe('f-host');
+    // "os" never matches "host_name", and a dropdown never takes a fact.
+    expect(suggestStandardField(workstations.fields as never, os as never)).toBeNull();
+    expect(suggestStandardField(workstations.fields as never, ip as never)?.id).toBe('f-ip');
+    expect(suggestStandardField(workstations.fields as never, hostname as never, new Set(['f-host']))).toBeNull();
+  });
+
+  it('never pre-selects an operator-owned field that only contains a hint word', () => {
+    const [, os, , ram] = devices.standardFields;
+    const owned = [
+      typed('f-lic', 'OS license key', 'os_license_key', 'TEXT'),
+      typed('f-mem', 'Memory upgrade purchase', 'memory_upgrade_purchase', 'TEXT'),
+    ];
+    expect(suggestStandardField(owned as never, os as never)).toBeNull();
+    expect(suggestStandardField(owned as never, ram as never)).toBeNull();
+    expect(suggestStandardField([...owned, typed('f-ram', 'Memory', 'memory', 'TEXT')] as never, ram as never)?.id).toBe('f-ram');
+  });
+
+  it('pre-selects hinted fields, creates missing ones, skips Don\'t sync and maps them preserve_manual', async () => {
+    apiFetch.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
+      if (path === '/layouts') return { ok: true, data: { items: [workstations] } };
+      if (path.endsWith('/match-field')) return { ok: true, data: { fieldId: 'f-new-os', created: true } };
+      if (path.endsWith('/field-mappings') && !init) return { ok: true, data: [] };
+      return { ok: true, data: row('devices') };
+    });
+    render(<MapLayoutsTab integration={{ id: 'i1', resources: [row('devices')] } as never} driver={{ resources: [devices] } as never} />);
+    await screen.findByLabelText('Layout', { selector: '#map-layout-devices' });
+    expect(standardSelect('Hostname')).toHaveValue('f-host');
+    expect(standardSelect('Operating system')).toHaveValue('__create_field__');
+    expect(standardSelect('IP address')).toHaveValue('f-ip');
+    expect(standardSelect('RAM')).toHaveValue('__create_field__');
+    fireEvent.change(standardSelect('RAM'), { target: { value: '__dont_sync__' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save layout mapping' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/i1/resources/devices/field-mappings', {
+      method: 'PATCH',
+      body: JSON.stringify({ mappings: [
+        { sourceField: 'serialNumber', targetFieldId: 'f-serial', syncDirection: 'source_wins', transform: null },
+        { sourceField: 'hostname', targetFieldId: 'f-host', syncDirection: 'preserve_manual', transform: null },
+        { sourceField: 'operating_system', targetFieldId: 'f-new-os', syncDirection: 'preserve_manual', transform: null },
+        { sourceField: 'ip_address', targetFieldId: 'f-ip', syncDirection: 'preserve_manual', transform: null },
+      ] }),
+    }));
+    expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/i1/resources/devices/match-field', {
+      method: 'POST', body: JSON.stringify({ assetLayoutId: 'l-ws', sourceField: 'operating_system' }),
+    });
+    expect(apiFetch).not.toHaveBeenCalledWith('/admin/integrations/i1/resources/devices/match-field', {
+      method: 'POST', body: JSON.stringify({ assetLayoutId: 'l-ws', sourceField: 'ram' }),
+    });
+  });
+
+  it('refuses to send two facts into one field', async () => {
+    apiFetch.mockImplementation(async (path: string) =>
+      path === '/layouts' ? { ok: true, data: { items: [workstations] } } : { ok: true, data: row('devices') },
+    );
+    render(<MapLayoutsTab integration={{ id: 'i1', resources: [row('devices')] } as never} driver={{ resources: [devices] } as never} />);
+    await screen.findByLabelText('Layout', { selector: '#map-layout-devices' });
+    fireEvent.change(standardSelect('RAM'), { target: { value: 'f-host' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save layout mapping' }));
+    expect(await screen.findByText(/Each layout field can take only one value/)).toBeInTheDocument();
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('without the layout permission, missing facts default to Don\'t sync and Create field is disabled', async () => {
+    apiFetch.mockImplementation(async (path: string) =>
+      path === '/layouts' ? { ok: true, data: { items: [workstations] } } : { ok: true, data: row('devices') },
+    );
+    render(
+      <MapLayoutsTab
+        integration={{ id: 'i1', resources: [row('devices')] } as never}
+        driver={{ resources: [devices] } as never}
+        canManageLayouts={false}
+      />,
+    );
+    await screen.findByLabelText('Layout', { selector: '#map-layout-devices' });
+    expect(standardSelect('Operating system')).toHaveValue('__dont_sync__');
+    expect(screen.getByRole('option', { name: 'Create field "Operating system"' })).toBeDisabled();
+  });
+
+  it('keeps saved standard mappings selected', async () => {
+    apiFetch.mockImplementation(async (path: string, init?: unknown) => {
+      if (path === '/layouts') return { ok: true, data: { items: [workstations] } };
+      if (path.endsWith('/field-mappings') && !init) {
+        return { ok: true, data: [{ sourceField: 'ram', targetFieldId: 'f-host', syncDirection: 'preserve_manual', transform: null }] };
+      }
+      return { ok: true, data: row('devices') };
+    });
+    render(
+      <MapLayoutsTab
+        integration={{ id: 'i1', resources: [row('devices', { assetLayoutId: 'l-ws', matchKeyFieldIds: ['f-serial'], fieldMappingCount: 2 })] } as never}
+        driver={{ resources: [devices] } as never}
+      />,
+    );
+    await screen.findByLabelText('Layout', { selector: '#map-layout-devices' });
+    expect(standardSelect('RAM')).toHaveValue('f-host');
+    // The saved field is taken, so Hostname does not also claim it.
+    expect(standardSelect('Hostname')).toHaveValue('__create_field__');
   });
 });

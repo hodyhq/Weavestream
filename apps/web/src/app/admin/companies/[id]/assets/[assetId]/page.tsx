@@ -129,7 +129,12 @@ export default async function AssetDetailPage({
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
             <AssetDetailView asset={asset} context={fieldContext} />
-            <IntegrationSections sections={asset.integrationSections ?? []} />
+            <IntegrationSections
+              sections={asset.integrationSections ?? []}
+              companyId={companyId}
+              assetId={asset.id}
+              canResolve={manage && !asset.archivedAt}
+            />
           </div>
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

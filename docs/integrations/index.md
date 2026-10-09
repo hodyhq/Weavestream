@@ -43,7 +43,7 @@ Select an integration below for provider-specific setup guides, resource capabil
 
 [!card title="Google Workspace" text="One-click connect per customer to sync users, licences, storage, groups, domains and devices (read-only)." icon="plug" layout="compact"](/integrations/google-workspace/)
 
-[!card title="Level" text="Sync Level RMM devices per top-level group with hardware, storage, OS, network, security, patches and alerts (read-only)." icon="plug" layout="compact"](/integrations/level/)
+[!card title="Level RMM" text="Sync Level RMM devices per top-level group: hardware, OS and network facts fill your layout fields; status, storage, security, patches and alerts show on the asset (read-only)." icon="plug" layout="compact"](/integrations/level/)
 
 [!card title="NinjaOne" text="Sync agent-managed workstations, servers, SNMP network gear, and guest VMs with dual-resource mapping." icon="plug" layout="compact"](/integrations/ninjaone/)
 

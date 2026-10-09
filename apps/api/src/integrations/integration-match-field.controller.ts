@@ -28,7 +28,7 @@ export class IntegrationMatchFieldController {
   ) {
     // It edits a global layout, so it also needs what the layout builder needs.
     await assertCanManageLayouts(this.permissions, user);
-    return this.matchFields.ensureMatchField(user, id, resourceKey, dto.assetLayoutId, meta(req));
+    return this.matchFields.ensureMatchField(user, id, resourceKey, dto.assetLayoutId, meta(req), dto.sourceField);
   }
 }
 

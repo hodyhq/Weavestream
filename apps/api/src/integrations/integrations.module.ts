@@ -12,6 +12,12 @@ import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
 import { AssetLayoutsModule } from '../asset-layouts/asset-layouts.module.js';
 import { IntegrationMatchFieldController } from './integration-match-field.controller.js';
 import { IntegrationMatchFieldService } from './integration-match-field.service.js';
+import { AssetsModule } from '../assets/assets.module.js';
+import {
+  AssetIntegrationDifferencesController,
+  IntegrationDifferencesController,
+} from './integration-differences.controller.js';
+import { IntegrationDifferencesService } from './integration-differences.service.js';
 
 /**
  * Phase 11 — universal integration framework module (API side).
@@ -24,7 +30,7 @@ import { IntegrationMatchFieldService } from './integration-match-field.service.
  * registration inside the worker.
  */
 @Module({
-  imports: [IntegrationsCoreModule, AssetLayoutsModule],
+  imports: [IntegrationsCoreModule, AssetLayoutsModule, AssetsModule],
   controllers: [
     IntegrationsController,
     CloudflareListsController,
@@ -32,8 +38,15 @@ import { IntegrationMatchFieldService } from './integration-match-field.service.
     IntegrationOAuthAppsController,
     IntegrationOAuthController,
     IntegrationMatchFieldController,
+    IntegrationDifferencesController,
+    AssetIntegrationDifferencesController,
   ],
-  providers: [IntegrationSyncQueueRegistrar, IntegrationOAuthService, IntegrationMatchFieldService],
+  providers: [
+    IntegrationSyncQueueRegistrar,
+    IntegrationOAuthService,
+    IntegrationMatchFieldService,
+    IntegrationDifferencesService,
+  ],
   exports: [IntegrationsCoreModule],
 })
 export class IntegrationsModule {}
