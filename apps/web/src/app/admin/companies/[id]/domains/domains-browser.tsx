@@ -541,12 +541,14 @@ function domainColumns({
             opacity: r.archivedAt ? 0.6 : 1,
             display: 'inline-flex',
             alignItems: 'center',
+            flexWrap: 'wrap',
             gap: 8,
           }}
         >
+          {/* The name never shrinks; tags wrap under it when the column is tight. */}
           <Link
             href={`/admin/companies/${companyId}/domains/${r.id}`}
-            style={{ color: 'var(--text)', fontWeight: 500 }}
+            style={{ color: 'var(--text)', fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0 }}
           >
             {r.hostname}
           </Link>
@@ -801,12 +803,23 @@ export function SourceTags({ row }: { row: MonitoredDomainDto }) {
       {cloudflare && row.registrarMissingSince && (
         <Tag tone="warn">not on account since {fmtDate(row.registrarMissingSince)}</Tag>
       )}
-      {role && <Tag tone="info">Google Workspace · {role}</Tag>}
+      {role && (
+        <span title={`Google Workspace: ${role}`}>
+          <Tag tone="info">Google · {shortWorkspaceRole(row)}</Tag>
+        </span>
+      )}
       {workspaceGone && (
         <Tag tone="warn">not in Google Workspace since {fmtDate(row.workspaceMissingSince)}</Tag>
       )}
     </span>
   );
+}
+
+/** Compact role for list tags; the full label stays in the tooltip and on the domain page. */
+function shortWorkspaceRole(row: Pick<MonitoredDomainDto, 'workspaceRole' | 'workspaceAliasOf'>): string {
+  if (row.workspaceRole === 'PRIMARY') return 'Primary';
+  if (row.workspaceRole === 'SECONDARY') return 'Secondary';
+  return row.workspaceAliasOf ? `Alias of ${row.workspaceAliasOf}` : 'Alias';
 }
 
 /** Registrar expiry plus auto-renew state; an expiry with auto-renew off is the one to act on. */

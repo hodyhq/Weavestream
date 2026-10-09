@@ -29,10 +29,11 @@ function domain(p: Partial<MonitoredDomainDto>): MonitoredDomainDto {
 describe('Google Workspace on domains', () => {
   it('tags the list row with the Workspace role, including the alias parent', () => {
     const { rerender } = render(<SourceTags row={domain({ workspaceRole: 'ALIAS', workspaceAliasOf: 'example.com' })} />);
-    expect(screen.getByText('Google Workspace · Domain alias of example.com')).toBeInTheDocument();
+    expect(screen.getByText('Google · Alias of example.com')).toBeInTheDocument();
+    expect(screen.getByTitle('Google Workspace: Domain alias of example.com')).toBeInTheDocument();
     rerender(<SourceTags row={domain({ workspaceRole: 'PRIMARY', source: 'CLOUDFLARE' })} />);
     expect(screen.getByText('Cloudflare')).toBeInTheDocument();
-    expect(screen.getByText('Google Workspace · Primary domain')).toBeInTheDocument();
+    expect(screen.getByText('Google · Primary')).toBeInTheDocument();
     rerender(<SourceTags row={domain({ workspaceMissingSince: '2026-10-01T00:00:00.000Z' })} />);
     expect(screen.getByText('not in Google Workspace since 2026-10-01')).toBeInTheDocument();
   });
