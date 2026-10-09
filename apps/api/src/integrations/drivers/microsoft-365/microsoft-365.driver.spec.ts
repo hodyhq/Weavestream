@@ -448,6 +448,15 @@ describe('Microsoft365Driver tenant', () => {
     expect(alerts[2]).toEqual({ kind: 'link', label: 'medium: Suspicious sign-in', value: 'https://security.microsoft.com/alerts/1', text: 'new, 2026-10-07' });
   });
 
+  it('leaves out the OneDrive total when the report conceals names', async () => {
+    const hidden =
+      'Report Refresh Date,Site URL,Owner Display Name,Is Deleted,Storage Used (Byte),Storage Allocated (Byte),Owner Principal Name\n' +
+      '2026-10-06,https://contoso-my.sharepoint.com/personal/x,7B8F2C1A,False,2048,1099511627776,7B8F2C1A9D3E4F5A6B7C8D9E0F1A2B3C\n';
+    installFetchTable(baseTable({ [`${G}/reports/getOneDriveUsageAccountDetail`]: { text: hidden } }));
+    const rec = (await driver.fetchRecords(fetchCtx(makeCtx(), 'tenant'), null)).records[0] as LegacyDriverRecord;
+    expect(rowOf(rec, 'storage', 'OneDrive (all users)')).toBeUndefined();
+  });
+
   it('does not present a capped alert page as the full count', async () => {
     installFetchTable(baseTable({
       [`${G}/security/alerts_v2`]: { body: { value: [{ title: 'A', severity: 'low' }], '@odata.nextLink': `${G}/security/alerts_v2?$skiptoken=x` } },

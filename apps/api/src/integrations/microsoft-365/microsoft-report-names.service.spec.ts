@@ -227,4 +227,16 @@ describe('MicrosoftReportNamesService', () => {
     await expect(service.apply(ACTOR, ID, { action: 'keep' }, META)).rejects.toBeInstanceOf(ConflictException);
     expect(secret().consentedAt).toBe('2026-10-03T00:00:00.000Z');
   });
+
+  it('audits a tenant change even when the choice cannot be stored afterwards', async () => {
+    const { state } = graph(true);
+    const { service, audit, prisma } = setup();
+    prisma.integrationSecret.findUnique.mockImplementationOnce(async () => null);
+    await expect(service.apply(ACTOR, ID, { action: 'show' }, META)).rejects.toBeInstanceOf(ConflictException);
+    expect(state()).toBe(false);
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.microsoft.report_names',
+      after: expect.objectContaining({ action: 'show', changed: true, choiceStored: false }),
+    }));
+  });
 });

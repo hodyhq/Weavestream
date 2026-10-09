@@ -582,7 +582,8 @@ export class Microsoft365Driver implements IntegrationDriver {
           storage: {
             ok: true,
             value: {
-              oneDriveBytes: oneDriveLookup.ok
+              // A concealed report has no per-user rows to sum: leave the total out rather than show 0.
+              oneDriveBytes: oneDriveLookup.ok && !oneDriveLookup.value.concealed
                 ? [...oneDriveLookup.value.byUpn.values()].reduce((sum, o) => sum + (o.usedBytes ?? 0), 0)
                 : null,
               sharePointBytes: sharePoint.ok ? sharePoint.value.bytes : null,

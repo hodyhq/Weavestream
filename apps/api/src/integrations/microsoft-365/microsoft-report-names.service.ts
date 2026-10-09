@@ -171,13 +171,21 @@ export class MicrosoftReportNamesService {
         );
       }
     }
-    await this.storeChoice(integrationId, consent, choice);
-    await this.audit.log({
-      ...auditBase,
-      action: AUDIT_ACTIONS.integration.microsoftReportNames,
-      before: { choice: consent.reportNames ?? null, displayConcealedNames: before },
-      after: { ...detail, choice, displayConcealedNames: conceal, changed },
-    });
+    const changeAudit = (choiceStored: boolean) =>
+      this.audit.log({
+        ...auditBase,
+        action: AUDIT_ACTIONS.integration.microsoftReportNames,
+        before: { choice: consent.reportNames ?? null, displayConcealedNames: before },
+        after: { ...detail, choice, displayConcealedNames: conceal, changed, ...(choiceStored ? {} : { choiceStored: false }) },
+      });
+    try {
+      await this.storeChoice(integrationId, consent, choice);
+    } catch (e) {
+      // The tenant may already have changed: that change is audited even when the choice is not stored.
+      await changeAudit(false);
+      throw e;
+    }
+    await changeAudit(true);
     const state = settingState(conceal);
     return {
       concealed: conceal,
