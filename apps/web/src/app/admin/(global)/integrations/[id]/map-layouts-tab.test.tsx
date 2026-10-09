@@ -120,8 +120,50 @@ describe('MapLayoutsTab', () => {
     render(<MapLayoutsTab integration={{ id: 'i1', resources: [row('users', { enabled: false })] } as never} driver={{ resources: [users] } as never} />);
     const select = await screen.findByLabelText('Layout', { selector: '#map-layout-users' });
     fireEvent.change(select, { target: { value: 'l-laptops' } });
+    fireEvent.change(screen.getByLabelText('Match primaryEmail on'), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save layout mapping' }));
     expect(await screen.findByText('Pick the field to match on.')).toBeInTheDocument();
     expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers to create the match field when the layout has none, then maps the created field', async () => {
+    apiFetch.mockImplementation(async (path: string, init?: { method?: string }) => {
+      if (path === '/layouts') return { ok: true, data: { items: [people, laptops] } };
+      if (path.endsWith('/match-field')) return { ok: true, data: { fieldId: 'f-created', created: true } };
+      if (path.endsWith('/field-mappings') && !init) return { ok: true, data: [] };
+      return { ok: true, data: row('users') };
+    });
+    const labelled = { ...users, matchSuggestions: { ...users.matchSuggestions, fieldLabel: 'Email' } };
+    render(<MapLayoutsTab integration={{ id: 'i1', resources: [row('users', { enabled: false })] } as never} driver={{ resources: [labelled] } as never} />);
+    fireEvent.change(await screen.findByLabelText('Layout', { selector: '#map-layout-users' }), { target: { value: 'l-laptops' } });
+    const match = screen.getByLabelText('Match primaryEmail on');
+    // No field fits the hints: "Create field" is pre-selected.
+    expect(match).toHaveValue('__create_field__');
+    expect(screen.getByRole('option', { name: 'Create field "Email"' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save layout mapping' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/i1/resources/users/field-mappings', {
+      method: 'PATCH',
+      body: JSON.stringify({ mappings: [{ sourceField: 'primaryEmail', targetFieldId: 'f-created', syncDirection: 'source_wins', transform: null }] }),
+    }));
+    const paths = apiFetch.mock.calls.map(([path]) => path);
+    expect(paths.indexOf('/admin/integrations/i1/resources/users/match-field')).toBeLessThan(paths.indexOf('/admin/integrations/i1/resources/users'));
+    expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/i1/resources/users/match-field', {
+      method: 'POST', body: JSON.stringify({ assetLayoutId: 'l-laptops' }),
+    });
+    expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/i1/resources/users', {
+      method: 'PATCH',
+      body: JSON.stringify({ assetLayoutId: 'l-laptops', matchKeyFieldIds: ['f-created'], enabled: true }),
+    });
+  });
+
+  it('keeps an existing field pre-selected when one matches the hints', async () => {
+    apiFetch.mockImplementation(async (path: string) =>
+      path === '/layouts' ? { ok: true, data: { items: [people] } } : { ok: true, data: row('users') },
+    );
+    render(<MapLayoutsTab integration={{ id: 'i1', resources: [row('users')] } as never} driver={{ resources: [users] } as never} />);
+    const match = await screen.findByLabelText('Match primaryEmail on');
+    expect(match).toHaveValue('f-email');
+    expect(screen.getByRole('option', { name: 'Create field "Primary email"' })).toBeInTheDocument();
   });
 });

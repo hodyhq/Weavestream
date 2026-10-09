@@ -108,7 +108,7 @@ If sign-in fails with "access blocked" or `admin_policy_enforced`, the customer 
 
 ## Map Layouts and Match-first
 
-The **Map layouts** tab lists every Google resource. For each one, pick the layout it goes into (or create a new one, or skip it) and the field to match on. Weavestream suggests existing layouts by name, such as People for users and Phones for mobile devices.
+The **Map layouts** tab lists every Google resource. For each one, pick the layout it goes into (or create a new one, or skip it) and the field to match on. Weavestream suggests existing layouts by name, such as People for users and Phones for mobile devices. If the layout you pick has no field for the match value (for example no Email field on People), choose **Create field** in the match picker and Weavestream adds that one field to the layout when you save; it is pre-selected when no existing field fits. Only the match field is ever added, and a field with the same name but another type is never changed: pick another field instead.
 
 On sync, a Google record whose match value equals **exactly one** unlinked asset you created yourself adopts that asset instead of creating a duplicate. Text matching ignores upper and lower case. If two or more assets match, the run reports it and links nothing, so you can clean up the duplicates first.
 
