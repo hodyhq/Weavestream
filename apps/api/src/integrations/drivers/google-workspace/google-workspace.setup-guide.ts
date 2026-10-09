@@ -41,6 +41,7 @@ export const GOOGLE_WORKSPACE_SETUP_GUIDE: SetupGuideStep[] = [
     body: [
       'Weavestream reads data through three Google APIs. Open each link below, check that your project is selected, and press **Enable**.',
       '- Admin SDK API (users, groups, domains, devices and usage reports)\n- Enterprise License Manager API (licences)\n- Google Workspace Alert Center API (security alerts)',
+      'Google Workspace resellers who also use the **Google Workspace (reseller)** integration enable the **Google Workspace Reseller API** too.',
     ].join('\n\n'),
     links: [
       { label: 'Admin SDK API', href: 'https://console.cloud.google.com/apis/library/admin.googleapis.com' },

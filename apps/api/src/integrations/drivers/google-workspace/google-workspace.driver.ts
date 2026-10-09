@@ -58,6 +58,7 @@ export const DIRECTORY = 'https://admin.googleapis.com/admin/directory/v1';
 export const REPORTS = 'https://admin.googleapis.com/admin/reports/v1';
 export const LICENSING = 'https://licensing.googleapis.com/apps/licensing/v1';
 export const ALERT_CENTER = 'https://alertcenter.googleapis.com/v1beta1';
+export const RESELLER = 'https://reseller.googleapis.com/apps/reseller/v1';
 const SCOPE = 'https://www.googleapis.com/auth/';
 
 export const GOOGLE_WORKSPACE_OAUTH: DriverOAuthDescriptor = {
@@ -86,7 +87,7 @@ export const GOOGLE_WORKSPACE_OAUTH: DriverOAuthDescriptor = {
 };
 
 /** Edition names for SKUs whose listing omits `skuName`. */
-const SKU_NAMES: Readonly<Record<string, string>> = {
+export const SKU_NAMES: Readonly<Record<string, string>> = {
   '1010020027': 'Business Starter',
   '1010020028': 'Business Standard',
   '1010020025': 'Business Plus',
@@ -203,11 +204,11 @@ export const GOOGLE_WORKSPACE_RECOMMENDED_DESTINATIONS = assertRecommendedDestin
 /** Google pageToken walker state, opaque to the runner (UniFi pattern). */
 const cursorSchema = z.object({ pageToken: z.string().min(1).max(4_096) }).strict();
 
-function encodeCursor(pageToken: string | undefined): string | null {
+export function encodeCursor(pageToken: string | undefined): string | null {
   return pageToken ? Buffer.from(JSON.stringify({ pageToken }), 'utf8').toString('base64') : null;
 }
 
-function decodeCursor(cursor: string | null): string | undefined {
+export function decodeCursor(cursor: string | null): string | undefined {
   if (!cursor) return undefined;
   try {
     const parsed = cursorSchema.safeParse(JSON.parse(Buffer.from(cursor, 'base64').toString('utf8')));
@@ -230,6 +231,7 @@ export const RATE_LIMIT_REASONS = new Set(['userRateLimitExceeded', 'quotaExceed
 export const API_DISABLED_REASONS = new Set(['accessNotConfigured', 'SERVICE_DISABLED']);
 
 export function apiName(url: string): string {
+  if (url.startsWith(RESELLER)) return 'Google Workspace Reseller API';
   if (url.startsWith(LICENSING)) return 'Enterprise License Manager API';
   if (url.startsWith(ALERT_CENTER)) return 'Google Workspace Alert Center API';
   if (url.startsWith(REPORTS)) return 'Admin SDK API (Reports)';
@@ -279,7 +281,7 @@ async function googleGet<T>(ctx: IntegrationContext, url: string): Promise<T> {
   throw new Error(`Google Workspace request to the ${api} failed (HTTP ${res.status}).`);
 }
 
-function withQuery(base: string, params: Record<string, string | undefined>): string {
+export function withQuery(base: string, params: Record<string, string | undefined>): string {
   const url = new URL(base);
   for (const [key, value] of Object.entries(params)) if (value !== undefined) url.searchParams.set(key, value);
   return url.toString();

@@ -47,7 +47,7 @@ export interface GoogleUser {
   orgUnitPath?: string;
 }
 
-type Row = IntegrationSectionRow | null;
+export type Row = IntegrationSectionRow | null;
 
 const CONTROL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 
@@ -56,19 +56,19 @@ export function clean(value: string, max: number): string {
   return value.replace(CONTROL_RE, '').replace(/<(?=[a-z!/?])/gi, '< ').slice(0, max);
 }
 
-function text(label: string, value: string | null | undefined): Row {
+export function text(label: string, value: string | null | undefined): Row {
   return value ? { kind: 'text', label, value: clean(value, 1_000) } : null;
 }
 
-function num(label: string, value: number | null | undefined): Row {
+export function num(label: string, value: number | null | undefined): Row {
   return typeof value === 'number' && Number.isFinite(value) ? { kind: 'number', label, value } : null;
 }
 
-function bool(label: string, value: boolean | null | undefined): Row {
+export function bool(label: string, value: boolean | null | undefined): Row {
   return typeof value === 'boolean' ? { kind: 'boolean', label, value } : null;
 }
 
-function badge(label: string, value: string, tone: 'neutral' | 'success' | 'warning' | 'danger'): Row {
+export function badge(label: string, value: string, tone: 'neutral' | 'success' | 'warning' | 'danger'): Row {
   return { kind: 'badge', label, value: clean(value, 64), tone };
 }
 
@@ -79,12 +79,12 @@ export function toIso(value: string | number | null | undefined): string | null 
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
 
-function datetime(label: string, value: string | number | null | undefined): Row {
+export function datetime(label: string, value: string | number | null | undefined): Row {
   const iso = toIso(value);
   return iso ? { kind: 'datetime', label, value: iso } : null;
 }
 
-function date(label: string, value: string | number | null | undefined): Row {
+export function date(label: string, value: string | number | null | undefined): Row {
   const iso = toIso(value);
   return iso ? { kind: 'date', label, value: iso.slice(0, 10) } : null;
 }
@@ -105,7 +105,7 @@ function usage(label: string, usedMb: number | undefined, totalMb: number | unde
   return { kind: 'bytes', label: `${label} (pooled storage)`, value: usedMb * MB };
 }
 
-function group(
+export function group(
   key: string,
   title: string,
   icon: IntegrationSectionGroup['icon'],
@@ -114,7 +114,7 @@ function group(
   return { key, title, ...(icon ? { icon } : {}), rows: rows.filter((row): row is IntegrationSectionRow => row !== null).slice(0, 40) };
 }
 
-function section(groups: IntegrationSectionGroup[]): IntegrationSection {
+export function section(groups: IntegrationSectionGroup[]): IntegrationSection {
   return { title: SECTION_TITLE, groups: groups.filter((g) => g.rows.length > 0) };
 }
 

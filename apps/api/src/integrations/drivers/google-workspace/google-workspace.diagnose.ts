@@ -21,7 +21,7 @@ import { GOOGLE_SETUP_STEP as S } from './google-workspace.setup-guide.js';
  * redeemed, the connection check issues one cheap GET per API.
  */
 
-type Failure = IntegrationSetupCheck['failures'][number];
+export type Failure = IntegrationSetupCheck['failures'][number];
 
 const UNREACHABLE: Failure = {
   stepId: null,
@@ -91,7 +91,7 @@ function reportDate(): string {
 }
 
 /** Map one probe response (or thrown error) to a failure, or null when it passed. */
-async function probeFailure(url: string, res: Response): Promise<Failure | null> {
+export async function probeFailure(url: string, res: Response, forbidden?: string): Promise<Failure | null> {
   if (res.ok) return null;
   const reasons = await errorReasons(res);
   const has = (...codes: string[]) => codes.some((c) => reasons.has(c));
@@ -109,6 +109,7 @@ async function probeFailure(url: string, res: Response): Promise<Failure | null>
   if (has('ACCESS_TOKEN_SCOPE_INSUFFICIENT', 'insufficientScopes')) {
     return { stepId: S.connect, message: `Not every permission was approved for the ${api}. Press Reconnect and tick every permission (step 7).` };
   }
+  if (forbidden && res.status === 403) return { stepId: S.connect, message: forbidden };
   if (res.status === 401 || res.status === 403) {
     return { stepId: S.connect, message: `The connected account has no admin access to the ${api}. Reconnect with a super admin, or a delegated admin who can read this data (step 7).` };
   }
@@ -170,7 +171,7 @@ export async function diagnoseGoogleConnection(ctx: IntegrationContext): Promise
   return result(passed, failures);
 }
 
-function tokenFailure(e: unknown): Failure {
+export function tokenFailure(e: unknown): Failure {
   if (e instanceof OAuthTokenError) {
     if (e.code === 'admin_policy_enforced') {
       return { stepId: S.trust, message: 'The customer\'s Google Admin console blocks this app. Mark the client ID as Trusted (step 8), then reconnect.' };
