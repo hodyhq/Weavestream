@@ -22,6 +22,12 @@ function domain(p: Partial<MonitoredDomainDto>): MonitoredDomainDto {
     workspaceAliasOf: null,
     workspaceSyncedAt: '2026-10-08T00:00:00.000Z',
     workspaceMissingSince: null,
+    microsoftIntegrationId: null,
+    microsoftDefault: null,
+    microsoftAuthType: null,
+    microsoftServices: [],
+    microsoftSyncedAt: null,
+    microsoftMissingSince: null,
     ...p,
   } as MonitoredDomainDto;
 }
@@ -29,10 +35,18 @@ function domain(p: Partial<MonitoredDomainDto>): MonitoredDomainDto {
 describe('Google Workspace on domains', () => {
   it('tags the list row with the Workspace role, including the alias parent', () => {
     const { rerender } = render(<SourceTags row={domain({ workspaceRole: 'ALIAS', workspaceAliasOf: 'example.com' })} />);
-    expect(screen.getByText('Google Workspace · Domain alias of example.com')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Google Workspace: Domain alias of example.com' })).toBeInTheDocument();
+    // Icons only in the list: no role words.
+    expect(screen.queryByText(/Alias of/)).toBeNull();
     rerender(<SourceTags row={domain({ workspaceRole: 'PRIMARY', source: 'CLOUDFLARE' })} />);
-    expect(screen.getByText('Cloudflare')).toBeInTheDocument();
-    expect(screen.getByText('Google Workspace · Primary domain')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Synced from Cloudflare' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Google Workspace: Primary domain' })).toBeInTheDocument();
+    expect(screen.queryByText('Cloudflare')).toBeNull();
+    // Cloudflare is always listed first.
+    expect(screen.getAllByRole('img').map((el) => el.getAttribute('aria-label'))).toEqual([
+      'Synced from Cloudflare',
+      'Google Workspace: Primary domain',
+    ]);
     rerender(<SourceTags row={domain({ workspaceMissingSince: '2026-10-01T00:00:00.000Z' })} />);
     expect(screen.getByText('not in Google Workspace since 2026-10-01')).toBeInTheDocument();
   });

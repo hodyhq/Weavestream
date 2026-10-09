@@ -9,6 +9,8 @@ import {
   IntegrationOAuthController,
 } from './oauth/integration-oauth.controller.js';
 import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
+import { MicrosoftReportNamesController } from './microsoft-365/microsoft-report-names.controller.js';
+import { MicrosoftReportNamesService } from './microsoft-365/microsoft-report-names.service.js';
 import { AssetLayoutsModule } from '../asset-layouts/asset-layouts.module.js';
 import { IntegrationMatchFieldController } from './integration-match-field.controller.js';
 import { IntegrationMatchFieldService } from './integration-match-field.service.js';
@@ -37,6 +39,7 @@ import { IntegrationDifferencesService } from './integration-differences.service
     TicketsGlobalController,
     IntegrationOAuthAppsController,
     IntegrationOAuthController,
+    MicrosoftReportNamesController,
     IntegrationMatchFieldController,
     IntegrationDifferencesController,
     AssetIntegrationDifferencesController,
@@ -44,6 +47,7 @@ import { IntegrationDifferencesService } from './integration-differences.service
   providers: [
     IntegrationSyncQueueRegistrar,
     IntegrationOAuthService,
+    MicrosoftReportNamesService,
     IntegrationMatchFieldService,
     IntegrationDifferencesService,
   ],

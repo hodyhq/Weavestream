@@ -12,6 +12,7 @@ export { IntegrationProvenanceService } from '../integrations/reconstruction/int
 export { CloudflareListsService } from '../integrations/cloudflare/cloudflare-lists.service.js';
 export { CloudflareRegistrarSyncService } from '../integrations/cloudflare/cloudflare-registrar-sync.service.js';
 export {
-  GoogleWorkspaceDomainSyncService,
-  workspaceDomainSyncWarning,
-} from '../integrations/google-workspace/google-workspace-domain-sync.service.js';
+  IntegrationDomainSyncService,
+  domainSyncWarning,
+  hasDomainFeed,
+} from '../integrations/domain-feeds/integration-domain-sync.service.js';

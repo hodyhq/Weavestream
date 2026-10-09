@@ -19,6 +19,13 @@ import {
 } from '../integration-driver.js';
 import { assertRecommendedDestinations, parseRetryAfter } from '../driver-utils.js';
 import { oauthFetch } from '../../oauth/oauth-token.js';
+import {
+  __resetRunCacheForTests,
+  __runCacheSizeForTests,
+  evictRun,
+  optional as optionalLookup,
+  runCached,
+} from '../run-cache.js';
 import type { IntegrationSetupCheck } from '@weavestream/shared';
 import type { DriverDiagnoseInput } from '../integration-driver.js';
 import { diagnoseGoogleClient, diagnoseGoogleConnection } from './google-workspace.diagnose.js';
@@ -348,30 +355,13 @@ async function listAll<T>(
   return out;
 }
 
-// ---------------------------------------------------------------------
-// Per-run lookup cache
-// ---------------------------------------------------------------------
-
-// ponytail: single process, per run. Keyed by integration + snapshot so
-// every page of one run shares one fetch; entries expire after the TTL.
-const RUN_CACHE_TTL_MS = 15 * 60_000;
-const runCache = new Map<string, { expiresAt: number; value: Promise<unknown> }>();
+// Per-run lookup cache: see ../run-cache.ts.
 
 /** @internal only `*.spec.ts` should call this. */
-export function __resetGoogleWorkspaceRunCacheForTests(): void {
-  runCache.clear();
-}
-
-/** Drops every cached lookup of one run (called when a resource finishes). */
-function evictRun(ctx: IntegrationContext, snapshotAt: string): void {
-  const prefix = `${ctx.integrationId ?? ctx.correlationId}\0${snapshotAt}\0`;
-  for (const key of runCache.keys()) if (key.startsWith(prefix)) runCache.delete(key);
-}
+export const __resetGoogleWorkspaceRunCacheForTests = __resetRunCacheForTests;
 
 /** @internal only `*.spec.ts` should call this. */
-export function __googleWorkspaceRunCacheSizeForTests(): number {
-  return runCache.size;
-}
+export const __googleWorkspaceRunCacheSizeForTests = __runCacheSizeForTests;
 
 function assertWithinCap(count: number, maxItems: number): void {
   if (count > maxItems) {
@@ -381,33 +371,9 @@ function assertWithinCap(count: number, maxItems: number): void {
   }
 }
 
-function runCached<T>(ctx: IntegrationContext, snapshotAt: string, name: string, load: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  for (const [key, entry] of runCache) if (entry.expiresAt <= now) runCache.delete(key);
-  const key = `${ctx.integrationId ?? ctx.correlationId}\0${snapshotAt}\0${name}`;
-  const hit = runCache.get(key);
-  if (hit) return hit.value as Promise<T>;
-  const value = load();
-  runCache.set(key, { expiresAt: now + RUN_CACHE_TTL_MS, value });
-  // A failed load is not cached; the next page retries it.
-  value.catch(() => runCache.delete(key));
-  return value;
-}
-
-/**
- * Optional data: any failure becomes a note, never a failed run. Only a
- * rate limit propagates, so the runner retries the page later.
- */
-async function optional<T>(load: () => Promise<T | null>, unavailable: string): Promise<Lookup<T>> {
-  try {
-    const value = await load();
-    return value === null ? { ok: false, reason: unavailable } : { ok: true, value };
-  } catch (e) {
-    if (e instanceof DriverRateLimitError) throw e;
-    // Both messages are our own fixed text; anything else gets the generic note.
-    if (e instanceof GoogleAccessError || e instanceof LookupTooLargeError) return { ok: false, reason: e.message };
-    return { ok: false, reason: unavailable };
-  }
+/** Our own fixed-text errors (missing privilege, too large) show as is. */
+function optional<T>(load: () => Promise<T | null>, unavailable: string): Promise<Lookup<T>> {
+  return optionalLookup(load, unavailable, (e) => e instanceof GoogleAccessError || e instanceof LookupTooLargeError);
 }
 
 interface Customer {

@@ -25,7 +25,7 @@ const oauth: DriverOAuthDescriptor = {
 };
 
 function status(over: Record<string, unknown> = {}) {
-  return { ok: true, status: 200, data: { provider: 'google', appConfigured: true, redirectUri: 'https://ws.example.test/cb', needsReconnect: false, connection: null, ...over } };
+  return { ok: true, status: 200, data: { provider: 'google', appConfigured: true, redirectUri: 'https://ws.example.test/cb', needsReconnect: false, appSecretExpiryWarning: null, connection: null, ...over } };
 }
 
 async function renderIt() {
@@ -149,5 +149,74 @@ describe('OAuthConnection', () => {
     });
     expect(apiFetch).toHaveBeenLastCalledWith('/admin/integrations/int-1/check', { method: 'POST', body: '{}' });
     expect(screen.getByText('Setup check passed.')).toBeInTheDocument();
+  });
+});
+
+describe('OAuthConnection (Microsoft admin consent)', () => {
+  const msOauth: DriverOAuthDescriptor = {
+    provider: 'microsoft',
+    consentFlow: 'admin_consent',
+    authorizeUrl: 'https://login.microsoftonline.com/organizations/v2.0/adminconsent',
+    tokenUrl: 'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token',
+    clientCredentialsScope: 'https://graph.microsoft.com/.default',
+    scopes: ['User.Read.All'],
+  };
+  const reportNames = { ok: true, status: 200, data: { concealed: true, choice: null, readError: null, canChange: true } };
+
+  async function renderMs() {
+    await act(async () => {
+      render(
+        <ToastProvider>
+          <OAuthConnection integrationId="int-1" oauth={msOauth} />
+        </ToastProvider>,
+      );
+    });
+  }
+
+  it('offers Connect with Microsoft and says who must approve', async () => {
+    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
+    await renderMs();
+    expect(screen.getByRole('button', { name: /Connect with Microsoft/ })).toBeEnabled();
+    expect(screen.getByText(/Global Administrator or Privileged Role Administrator/)).toBeInTheDocument();
+  });
+
+  it('shows the connected tenant, the secret expiry warning and the report-names prompt', async () => {
+    apiFetch.mockImplementation(async (url: string) =>
+      url.endsWith('/microsoft/report-names')
+        ? reportNames
+        : status({
+            provider: 'microsoft',
+            appSecretExpiryWarning: 'The client secret expires on 2026-10-20 (in 11 days).',
+            connection: { connectedAs: 'Contoso', connectedAt: '2026-10-05T12:00:00Z', grantedScopes: [], tenantId: '11111111-2222-4333-8444-555555555555' },
+          }),
+    );
+    await renderMs();
+    expect(screen.getByText(/Connected to/)).toBeInTheDocument();
+    expect(screen.getByText('Contoso')).toBeInTheDocument();
+    expect(screen.getByText(/expires on 2026-10-20/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Usage report names')).toBeInTheDocument());
+  });
+
+  it('turns a failure reason into fixed text and strips it from the URL', async () => {
+    search = new URLSearchParams('oauth=failed&reason=admin_required');
+    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
+    await renderMs();
+    expect(screen.getByText(/must approve/)).toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith('/admin/integrations/int-1');
+  });
+
+  it('ignores an unknown reason value (generic text, nothing echoed)', async () => {
+    search = new URLSearchParams('oauth=failed&reason=<b>evil</b>');
+    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
+    await renderMs();
+    expect(screen.getByText(/Could not connect with Microsoft/)).toBeInTheDocument();
+    expect(screen.queryByText(/evil/)).not.toBeInTheDocument();
+  });
+
+  it('ignores inherited object keys as a reason', async () => {
+    search = new URLSearchParams('oauth=failed&reason=constructor');
+    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
+    await renderMs();
+    expect(screen.getByText(/Could not connect with Microsoft/)).toBeInTheDocument();
   });
 });

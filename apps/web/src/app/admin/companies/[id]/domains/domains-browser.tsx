@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
-import { workspaceRoleLabel } from './workspace-role';
+import { microsoftDomainLabel, workspaceRoleLabel } from './workspace-role';
 import type { MonitoredDomainDto } from '@weavestream/shared';
 import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
@@ -372,7 +372,9 @@ function DomainDialog({
                 ? 'Synced from Cloudflare'
                 : initial?.source === 'GOOGLE_WORKSPACE'
                   ? 'Synced from Google Workspace'
-                  : undefined
+                  : initial?.source === 'MICROSOFT_365'
+                    ? 'Synced from Microsoft 365'
+                    : undefined
             }
             onChange={(e) => setForm({ ...form, hostname: e.target.value })}
             style={inputStyle}
@@ -541,12 +543,14 @@ function domainColumns({
             opacity: r.archivedAt ? 0.6 : 1,
             display: 'inline-flex',
             alignItems: 'center',
+            flexWrap: 'wrap',
             gap: 8,
           }}
         >
+          {/* The name never shrinks; tags wrap under it when the column is tight. */}
           <Link
             href={`/admin/companies/${companyId}/domains/${r.id}`}
-            style={{ color: 'var(--text)', fontWeight: 500 }}
+            style={{ color: 'var(--text)', fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0 }}
           >
             {r.hostname}
           </Link>
@@ -794,17 +798,34 @@ export function SourceTags({ row }: { row: MonitoredDomainDto }) {
   const cloudflare = row.source === 'CLOUDFLARE';
   const role = workspaceRoleLabel(row);
   const workspaceGone = !role && row.workspaceMissingSince !== null;
-  if (!cloudflare && !role && !workspaceGone) return null;
+  const microsoft = microsoftDomainLabel(row);
+  const microsoftGone = !microsoft && row.microsoftMissingSince !== null;
+  if (!cloudflare && !role && !workspaceGone && !microsoft && !microsoftGone) return null;
+  // Cloudflare (the registrar) always comes first, then Google, then Microsoft.
   return (
-    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
-      {cloudflare && <Tag tone="cloudflare">Cloudflare</Tag>}
+    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      {cloudflare && <SourceIcon src="/integrations/icons/cloudflare.svg" label="Synced from Cloudflare" />}
       {cloudflare && row.registrarMissingSince && (
         <Tag tone="warn">not on account since {fmtDate(row.registrarMissingSince)}</Tag>
       )}
-      {role && <Tag tone="info">Google Workspace · {role}</Tag>}
+      {role && <SourceIcon src="/integrations/icons/google.svg" label={`Google Workspace: ${role}`} />}
       {workspaceGone && (
         <Tag tone="warn">not in Google Workspace since {fmtDate(row.workspaceMissingSince)}</Tag>
       )}
+      {microsoft && <SourceIcon src="/integrations/icons/microsoft.svg" label={`Microsoft 365: ${microsoft}`} />}
+      {microsoftGone && (
+        <Tag tone="warn">not in Microsoft 365 since {fmtDate(row.microsoftMissingSince)}</Tag>
+      )}
+    </span>
+  );
+}
+
+/** Source logo in place of a word tag; the label is the tooltip and the accessible name. */
+function SourceIcon({ src, label }: { src: string; label: string }) {
+  return (
+    <span role="img" aria-label={label} title={label} style={{ display: 'inline-flex', lineHeight: 0 }}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- local public SVG icons; next/image SVG needs config */}
+      <img src={src} alt="" width={16} height={16} style={{ display: 'block' }} />
     </span>
   );
 }
