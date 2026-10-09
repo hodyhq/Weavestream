@@ -1537,3 +1537,27 @@ describe('AssetsService standard-field write policy (recordFieldDiffs)', () => {
     expect(result.fieldDiffs).toBeUndefined();
   });
 });
+
+describe('AssetsService.update in a caller transaction', () => {
+  it('writes its asset.update audit row with the caller client, so a rollback takes it too', async () => {
+    const { service, prisma, audit, tx } = setup();
+    const internals = service as unknown as Record<string, unknown>;
+    prisma.asset.findFirst.mockResolvedValueOnce({
+      id: ids.asset, companyId: ids.company, name: 'Edge', externalId: null, externalSource: null, archivedAt: null,
+      assetLayout: { fields: [] }, fieldValues: [],
+    });
+    internals.validateValues = () => ({ hostname: 'edge-02' });
+    internals.assertUniqueValues = async () => undefined;
+    internals.persistFieldValues = async () => undefined;
+    internals.linkFileFieldUploadsToAsset = async () => undefined;
+    internals.get = async () => ({});
+    (audit as Record<string, unknown>).log = jest.fn();
+    await service.update(
+      { id: ids.actor, role: 'SUPER_ADMIN' } as never, ids.company, ids.asset,
+      { fieldValues: { hostname: 'edge-02' } }, { ip: null, userAgent: null } as never, tx as never,
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(audit.logWithClient).toHaveBeenCalledWith(tx, expect.objectContaining({ action: 'asset.update', entityId: ids.asset }));
+    expect((audit as unknown as { log: jest.Mock }).log).not.toHaveBeenCalled();
+  });
+});

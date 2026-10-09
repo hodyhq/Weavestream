@@ -1363,6 +1363,61 @@ export const resolveIntegrationDifferenceSchema = z
   .strict();
 export type ResolveIntegrationDifferenceInput = z.infer<typeof resolveIntegrationDifferenceSchema>;
 
+/**
+ * Most differences one bulk request resolves; the UI loops for more. A
+ * filter batch keeps whole sync records, so one record holding more
+ * differences than this is resolved in a single, larger batch.
+ */
+export const INTEGRATION_DIFFERENCES_BULK_MAX = 500;
+
+/**
+ * Differences tab bulk resolve: either the ticked rows (`items`) or every
+ * open difference matching the tab's company filter (`filter`, walked in
+ * batches through `cursor`). Exactly one of the two. A filter batch never
+ * splits a sync record, so it can exceed INTEGRATION_DIFFERENCES_BULK_MAX
+ * when a single record has more differences than the cap.
+ */
+export const resolveIntegrationDifferencesBulkSchema = z
+  .object({
+    choice: integrationDifferenceChoiceSchema,
+    items: z
+      .array(z.object({ syncRecordId: z.string().uuid(), assetFieldId: z.string().uuid() }).strict())
+      .min(1)
+      .max(INTEGRATION_DIFFERENCES_BULK_MAX)
+      .optional(),
+    filter: z
+      .object({
+        companyId: z.string().uuid().optional(),
+        /** Last sync record id of the previous batch (from `nextCursor`). */
+        cursor: z.string().uuid().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine((input) => (input.items === undefined) !== (input.filter === undefined), {
+    message: 'Send either items or filter',
+  });
+export type ResolveIntegrationDifferencesBulkInput = z.infer<typeof resolveIntegrationDifferencesBulkSchema>;
+
+/** A difference the bulk request did not resolve, with a fixed reason. */
+export interface IntegrationDifferenceBulkMiss {
+  syncRecordId: string;
+  assetFieldId: string;
+  assetName: string | null;
+  reason: string;
+}
+
+export interface IntegrationDifferencesBulkResult {
+  applied: number;
+  /** Not attempted: no permission on that company, or no longer open. */
+  skipped: IntegrationDifferenceBulkMiss[];
+  /** Attempted and refused (a sync just ran, or the value does not fit the field). */
+  failed: IntegrationDifferenceBulkMiss[];
+  /** Filter mode: where the next batch starts, or null when the filter is done. */
+  nextCursor: string | null;
+}
+
 export const integrationDifferencesQuerySchema = z
   .object({
     companyId: z.string().uuid().optional(),

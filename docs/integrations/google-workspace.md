@@ -1,7 +1,7 @@
 ---
 label: Google Workspace
 icon: plug
-description: Connect Google Workspace tenants with one click to sync users, licences, storage, groups, domains and devices.
+description: Connect Google Workspace tenants with one click to sync people, devices, groups and domains into your layouts, with licences and storage on the asset page.
 ---
 
 # Google Workspace Integration
@@ -14,20 +14,49 @@ The Weavestream Google Workspace driver is **read-only**. One integration is one
 
 - **One-click connect per customer**: no per-customer Google Cloud project, no service account keys.
 - **Match first**: on the first sync, Google records link to the assets you already have (users by email, devices by serial number, domains by name). An asset is only created when nothing matches.
-- **No new layout fields**, except the one match field **Create field** adds when you choose it: Google data does not otherwise add fields to your layouts. A created asset gets only its name and match value. Everything else shows in a **Google Workspace** section on the asset page.
+- **Standard facts fill your layout fields**: job title, department and phone for people; model, operating system, MAC and IP address for devices; and a few more per resource (see below). You pick or create the fields in **Map layouts**. Everything else (licences, storage, 2-step verification, org unit, device status) shows in a **Google Workspace** section on the asset page.
+- **Your edits win**: a field someone changed in Weavestream is never overwritten. It is listed as a **difference** instead, and you choose which value to keep.
 - **Usage bars**: mailbox, Drive and total storage per user, and pooled storage for the tenant, shown as bars that turn amber at 80% and red at 95%.
 - **Built-in setup guide and Check setup**: the steps below are also shown inside Weavestream, and **Check setup** points to the step that needs fixing.
 
 ## Synced Data Reference
 
-| Resource | Suggested layout | Matched on | Section groups on the asset page |
-|---|---|---|---|
-| **Tenant** | Google Workspace Tenants (created) | Customer ID | Overview, Licences assigned per edition, Storage (used vs pooled, with Gmail, Drive and shared drives), Security (2-step verification coverage, super admins, unused licences) |
-| **Users** | People | Email | Account (status, org unit, created, last login), Licences, Mailbox, Drive, Total storage, Security (admin role, 2-step verification, unused licence) |
-| **Groups** | Distribution Lists | Email | Group (description, member count, members) |
-| **Domains** | Domains | Domain name | Domain (primary, verified, alias of, created) |
-| **Chrome devices** | Chromebooks, Laptops or Workstations | Serial number | Chrome OS (model, OS version, status, last sync, user, org unit, MAC, auto-update expiration) |
-| **Mobile devices** | Phones | Serial number | Device (model, OS, type, owner, status, last sync, compromised) |
+| Resource | Suggested layout | Matched on | Layout fields filled (when mapped) | Google Workspace section on the asset page |
+|---|---|---|---|---|
+| **Tenant** | Google Workspace Tenants (created) | Customer ID | Name, Customer ID, Primary domain | Overview (active, suspended and archived users, created), Licences assigned per edition, Storage (used vs pooled, with Gmail, Drive and shared drives, data as of), Security (2-step verification coverage, super admins, unused licences) |
+| **Users** | People | Email | Name, Email, Job title, Department, Phone | Account (status, **org unit**, created, last login), Licences, Mailbox, Drive, Total storage, Security (admin role, 2-step verification, unused licence) |
+| **Groups** | Distribution Lists | Email | Name, Email, Description | Group (member count, members) |
+| **Domains** | Domains | Domain name | Domain | Domain (primary, verified, alias of, created) |
+| **Chrome devices** | Laptops, Chromebooks or Workstations | Serial number | Name, Serial number, Model, Operating system, MAC address, IP address (and optionally Auto-update expiration) | Chrome OS (status, last sync, last user, org unit, auto-update expiration) |
+| **Mobile devices** | Phones | Serial number | Name, Serial number, Model, Manufacturer, Operating system, IMEI, MAC address | Device (type, owner, status, last sync, compromised) |
+
+How each layout field is filled:
+
+| Layout field | Value | Example |
+|---|---|---|
+| **Job title** | Title of the user's primary organization (else the first) | `Engineer` |
+| **Department** | Department of that same organization | `Operations` |
+| **Phone** | The primary phone, else the work phone, else the first, as an international number; a number with letters (such as an extension) is skipped | `+15550100199` |
+| **Description** | Group description, as plain text | `All staff` |
+| **Model** | Device model | `Example Chromebook` |
+| **Manufacturer** | Phone brand, else manufacturer | `Example` |
+| **Operating system** | `ChromeOS` and the OS version for Chrome devices; the reported OS for phones | `ChromeOS 128.0`, `Android 15` |
+| **MAC address** | Chrome device MAC, or the phone's Wi-Fi MAC, as `aa:bb:cc:dd:ee:ff` | `00:11:22:aa:bb:cc` |
+| **IP address** | Last known local IP of a Chrome device | `192.0.2.10` |
+| **IMEI** | Phone IMEI | `490154203237518` |
+| **Primary domain** | The tenant's primary domain | `example.com` |
+
+A value Google does not report is left alone: the field is never cleared. The **org unit** stays in the section (it is managed in Google), and a Chrome device's **last user** is only shown there: it never fills an assigned-to field. Fields you own (asset tag, status, location, assigned user, purchase, warranty, notes and the like) are never written.
+
+### How Google updates your fields
+
+- **First sync of a record** (a new asset, or an existing asset it adopts): Google writes every mapped field.
+- **Later syncs**: an empty field is filled. A field that still holds the value Google wrote last follows Google, so a new job title or OS version flows through.
+- **A field you map later** on a record Google already syncs: an empty one is filled; one that already holds a value is listed under **Differences** instead of being overwritten.
+- **A field someone changed** is not overwritten. When it differs from Google, it is listed under **Differences** at the bottom of the Google Workspace section, with the Weavestream value and the Google value:
+  - **Use Google Workspace value** writes the Google value now, and the field follows Google again.
+  - **Keep ours** keeps your value and stops flagging that field on that record until the Google value changes again.
+- Every open difference across all companies is also listed on the integration's **Differences** tab (**Admin > Integrations > your Google Workspace integration**), filterable by company, with the same two buttons. Tick several rows (or **Select all** matching the company filter) to resolve them in one go; the tab confirms first and then lists what was applied, skipped or failed. Resolving a difference needs permission to edit assets in that company and is recorded in the audit log. Differences are never shown to client users.
 
 Chromebook **auto-update expiration** can optionally be mapped to a date field marked as an expiry, so it shows up in **Expiring soon**.
 
@@ -108,7 +137,9 @@ If sign-in fails with "access blocked" or `admin_policy_enforced`, the customer 
 
 ## Map Layouts and Match-first
 
-The **Map layouts** tab lists every Google resource. For each one, pick the layout it goes into (or create a new one, or skip it) and the field to match on. Weavestream suggests existing layouts by name, such as People for users and Phones for mobile devices. If the layout you pick has no field for the match value (for example no Email field on People), choose **Create field** in the match picker and Weavestream adds that one field to the layout when you save; it is pre-selected when no existing field fits. Only the match field is ever added, and a field with the same name but another type is never changed: pick another field instead. **Create new layout** and **Create field** also need permission to manage asset layouts.
+The **Map layouts** tab lists every Google resource. For each one, pick the layout it goes into (or create a new one, or skip it) and the field to match on. Weavestream suggests existing layouts by name, such as People for users and Phones for mobile devices. If the layout you pick has no field for the match value (for example no Email field on People), choose **Create field** in the match picker and Weavestream adds that field to the layout when you save; it is pre-selected when no existing field fits.
+
+Below the match picker, a table lists the resource's standard facts (for users: Job title, Department, Phone). Each row is pre-set to an existing layout field whose name fits (for example **Title** or **Work phone**) and whose type can hold the value. When none fits, the row is set to **Create field**, which adds a field with that name on save (a phone field for Phone, an IP address field for IP address). Pick **Don't sync** to leave a fact out. A field with the same name but another type is never changed: pick another field instead. **Create new layout** and **Create field** also need permission to manage asset layouts.
 
 On sync, a Google record whose match value equals **exactly one** unlinked asset you created yourself adopts that asset instead of creating a duplicate. Text matching ignores upper and lower case. If two or more assets match, the run reports it and links nothing, so you can clean up the duplicates first.
 
@@ -132,6 +163,8 @@ An adopted asset keeps the name you gave it. Assets that Google created follow t
 | "Google hasn't verified this app" warning | Expected for a self-hosted app | Press **Advanced**, then **Go to Weavestream (unsafe)**. |
 | Google refuses new connections with a user cap message | An unverified app allows 100 approving admins over the project's life | Use a new Cloud project for the next customers, or submit the app for Google verification. |
 | Storage shows "not available" or an older date | Usage reports lag 1–3 days | Wait; the next sync picks up newer figures. |
+| A layout field stopped updating from Google | Someone changed it in Weavestream, so it is listed as a difference | Open the asset (or the integration's **Differences** tab) and choose **Use Google Workspace value** or **Keep ours**. |
+| Phone stays empty for a user | The number has letters (such as an extension) or too few digits to be an international number | Fix the number in Google, or type it in Weavestream. |
 | A record was not linked and the run reports "multiple assets match" | Two or more of your assets share the match value | Remove or rename the duplicates, then sync again. |
 
 ## Security Model
@@ -144,4 +177,5 @@ An adopted asset keeps the name you gave it. Assets that Google created follow t
 - **Callback URLs stay out of logs.** Weavestream logs request paths without their query string, so the authorization code and state of `/oauth/callback` never reach its logs. Configure your reverse proxy the same way (log the path, not the query string, for `/v1/admin/integrations/oauth/callback`), or keep proxy access logs short-lived and access-controlled.
 - **Tenant isolation.** A connection's tokens only ever feed the company its tenant is mapped to; a token for a different tenant stops the sync.
 - **No raw Google errors.** Errors shown in Weavestream are fixed messages; Google's own error text is never passed through.
-- **Hidden from client users.** Google Workspace sections are never shown to client users, even on assets they can see.
+- **Hidden from client users.** Google Workspace sections and differences are never shown to client users, even on assets they can see.
+- **Audited choices.** Resolving a difference needs permission to edit that asset's company and writes an `integration.difference.resolve` audit row (ids and the choice, never the values). A bulk action on the **Differences** tab writes one such row per difference plus an `integration.difference.resolve_bulk` summary row (counts only); differences in companies you cannot edit are skipped and listed.

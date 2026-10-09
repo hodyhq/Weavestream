@@ -102,11 +102,15 @@ const ALICE = {
   suspended: false, archived: false, isAdmin: true, isDelegatedAdmin: false,
   isEnrolledIn2Sv: true, isEnforcedIn2Sv: true, lastLoginTime: '2026-10-07T08:00:00.000Z',
   creationTime: '2021-05-01T00:00:00.000Z', orgUnitPath: '/Staff',
+  organizations: [{ title: 'Old title' }, { title: 'Engineer', department: 'Operations', primary: true }],
+  phones: [{ value: '555 0100', type: 'home' }, { value: '(555) 010-0199', type: 'work' }],
 };
 const BOB = {
   id: '1002', primaryEmail: 'bob@example.com', name: { fullName: 'User Bob' },
   suspended: true, isAdmin: false, isDelegatedAdmin: true, isEnrolledIn2Sv: false,
   lastLoginTime: '1970-01-01T00:00:00.000Z', creationTime: '2022-01-01T00:00:00.000Z', orgUnitPath: '/',
+  // No primary organization or phone: the first one is used; a phone with an extension is not a PHONE value.
+  organizations: [{ title: 'Analyst' }], phones: [{ value: '+1 555 0100 ext 12', type: 'work', primary: true }],
 };
 const CAROL = {
   id: '1003', primaryEmail: 'carol@example.com', isEnrolledIn2Sv: false,
@@ -182,7 +186,24 @@ describe('GoogleWorkspaceDriver descriptor', () => {
       expect.objectContaining({ key: 'serialNumber' }),
     ]));
     const users = await driver.listSourceFields({ ...makeCtx(), externalOrgId: CUSTOMER_ID, resourceKey: 'users' });
-    expect(users.map((f) => f.key)).toEqual(['name', 'primaryEmail']);
+    expect(users.map((f) => f.key)).toEqual(['name', 'primaryEmail', 'job_title', 'department', 'phone']);
+  });
+
+  it('declares standard fields per resource that skip the match key and the name', () => {
+    const standard = Object.fromEntries(
+      driverDescriptorSchema.parse(driver.descriptor).resources.map((r) => [r.key, (r.standardFields ?? []).map((f) => f.sourceField)]),
+    );
+    expect(standard).toEqual({
+      tenant: ['primary_domain'],
+      users: ['job_title', 'department', 'phone'],
+      groups: ['description'],
+      domains: [],
+      chrome_devices: ['model', 'operating_system', 'mac_address', 'ip_address'],
+      mobile_devices: ['model', 'manufacturer', 'operating_system', 'imei', 'mac_address'],
+    });
+    const users = driver.descriptor.resources.find((r) => r.key === 'users')!;
+    expect(users.standardFields!.find((f) => f.sourceField === 'phone')).toMatchObject({ fieldType: 'PHONE' });
+    expect(users.standardFields!.find((f) => f.sourceField === 'job_title')!.fieldHints).toEqual(['job_title', 'title']);
   });
 });
 
@@ -270,10 +291,19 @@ describe('GoogleWorkspaceDriver users', () => {
     const [alice, bob] = first.records as LegacyDriverRecord[];
     expect(alice!.externalId).toBe('1001');
     expect(alice!.displayName).toBe('User Alice');
-    expect(alice!.fields).toEqual({ name: 'User Alice', primaryEmail: 'Alice@example.com' });
+    expect(alice!.fields).toEqual({
+      name: 'User Alice', primaryEmail: 'Alice@example.com', job_title: 'Engineer', department: 'Operations', phone: '+15550100199',
+    });
+    expect(bob!.fields).toEqual({ name: 'User Bob', primaryEmail: 'bob@example.com', job_title: 'Analyst' });
 
     const a = sectionOf(alice!);
     expect(row(a, 'account', 'Status')).toMatchObject({ kind: 'badge', value: 'Active' });
+    // Org unit stays in the block; the mapped facts do not.
+    expect(row(a, 'account', 'Org unit')).toMatchObject({ value: '/Staff' });
+    const labels = a.groups.flatMap((g) => g.rows.map((r) => r.label));
+    for (const mapped of ['Name', 'Email', 'Job title', 'Department', 'Phone']) {
+      expect(labels).not.toContain(mapped);
+    }
     expect(row(a, 'licences', 'Assigned')).toEqual({ kind: 'list', label: 'Assigned', value: ['Google Workspace Business Standard'] });
     expect(row(a, 'mailbox', 'Mailbox storage')).toEqual({ kind: 'meter', label: 'Mailbox storage', used: 4_000, total: 30_720, unit: 'mb' });
     expect(row(a, 'drive', 'Drive storage')).toMatchObject({ kind: 'meter', used: 8_000 });
@@ -293,6 +323,7 @@ describe('GoogleWorkspaceDriver users', () => {
 
     const second = await driver.fetchRecords(fetchCtx(ctx, 'users'), first.cursor);
     expect(second).toMatchObject({ hasMore: false, cursor: null });
+    expect((second.records[0] as LegacyDriverRecord).fields).toEqual({ name: 'carol@example.com', primaryEmail: 'carol@example.com' });
     const carol = sectionOf(second.records[0] as LegacyDriverRecord);
     expect(row(carol, 'licences', 'Assigned')).toMatchObject({ kind: 'text', value: 'None' });
     expect(row(carol, 'security', 'Wasted licence')).toMatchObject({ value: 'No' });
@@ -438,8 +469,11 @@ describe('GoogleWorkspaceDriver tenant', () => {
     expect(page).toMatchObject({ hasMore: false, cursor: null });
     const tenant = page.records[0] as LegacyDriverRecord;
     expect(tenant.externalId).toBe(CUSTOMER_ID);
-    expect(tenant.fields).toEqual({ name: 'example.com', customerId: CUSTOMER_ID });
+    expect(tenant.fields).toEqual({ name: 'example.com', customerId: CUSTOMER_ID, primary_domain: 'example.com' });
     const s = sectionOf(tenant);
+    expect(row(s, 'overview', 'Primary domain')).toBeUndefined();
+    expect(row(s, 'overview', 'Customer ID')).toBeUndefined();
+    expect(row(s, 'overview', 'Created')).toMatchObject({ kind: 'datetime' });
     expect(row(s, 'overview', 'Active users')).toMatchObject({ value: 2 });
     expect(row(s, 'overview', 'Suspended users')).toMatchObject({ value: 1 });
     expect(row(s, 'licences', 'Google Workspace Business Standard')).toMatchObject({ kind: 'number', value: 1 });
@@ -477,7 +511,12 @@ describe('GoogleWorkspaceDriver groups, domains and devices', () => {
         chromeosdevices: [{
           deviceId: 'dev-1', serialNumber: 'SN123', model: 'Example Chromebook', status: 'ACTIVE',
           osVersion: '128.0', lastSync: '2026-10-07T10:00:00.000Z', annotatedUser: 'alice@example.com',
-          orgUnitPath: '/Staff', macAddress: '00:11:22:33:44:55', autoUpdateExpiration: '1780272000000',
+          orgUnitPath: '/Staff', macAddress: '001122AABBCC', autoUpdateExpiration: '1780272000000',
+          lastKnownNetwork: [{ ipAddress: '192.0.2.10', wanIpAddress: '198.51.100.7' }],
+        }, {
+          deviceId: 'dev-2', serialNumber: 'SN124', status: 'DISABLED', macAddress: 'not-a-mac',
+          recentUsers: [{ email: 'carol@example.com', type: 'USER_TYPE_MANAGED' }],
+          lastKnownNetwork: [{ ipAddress: 'unknown' }],
         }],
       },
     },
@@ -487,6 +526,7 @@ describe('GoogleWorkspaceDriver groups, domains and devices', () => {
           resourceId: 'm-1', serialNumber: 'PH1', model: 'Example Phone', os: 'Android 15', type: 'ANDROID',
           email: ['bob@example.com'], status: 'APPROVED', lastSync: '2026-10-06T09:00:00.000Z',
           deviceCompromisedStatus: 'No compromise detected',
+          brand: 'Example', manufacturer: 'Example Corp', imei: '490154203237518', wifiMacAddress: 'AA-BB-CC-00-11-22',
         }],
       },
     },
@@ -500,11 +540,13 @@ describe('GoogleWorkspaceDriver groups, domains and devices', () => {
   it('groups: member list, count and plain-text description', async () => {
     installFetchTable(table);
     const [g] = await only('groups');
-    expect(g!.fields).toEqual({ name: 'Staff', email: 'staff@example.com' });
+    // The description is a layout field now, cleaned to plain text.
+    expect(g!.fields).toEqual({ name: 'Staff', email: 'staff@example.com', description: 'All < b>staff< /b>' });
     const s = sectionOf(g!);
     expect(row(s, 'group', 'Members')).toMatchObject({ value: 75 });
     expect(row(s, 'group', 'Members (first 2)')).toMatchObject({ value: ['alice@example.com (owner)', 'bob@example.com'] });
-    expect(row(s, 'group', 'Description')).toMatchObject({ value: 'All < b>staff< /b>' });
+    expect(row(s, 'group', 'Description')).toBeUndefined();
+    expect(row(s, 'group', 'Email')).toBeUndefined();
   });
 
   it('domains: primary and alias records', async () => {
@@ -518,21 +560,36 @@ describe('GoogleWorkspaceDriver groups, domains and devices', () => {
     expect(row(sectionOf(records[1]!), 'domain', 'Alias of')).toMatchObject({ value: 'example.com' });
   });
 
-  it('chrome devices: serial match key and the expiry as an optional date field', async () => {
+  it('chrome devices: serial match key, standard facts, and the expiry as an optional date field', async () => {
     installFetchTable(table);
-    const [d] = await only('chrome_devices');
+    const [d, bare] = await only('chrome_devices');
     expect(d!.externalId).toBe('dev-1');
-    expect(d!.fields).toEqual({ name: 'Example Chromebook SN123', serialNumber: 'SN123', autoUpdateExpiration: '2026-06-01' });
+    expect(d!.fields).toEqual({
+      name: 'Example Chromebook SN123', serialNumber: 'SN123', autoUpdateExpiration: '2026-06-01',
+      model: 'Example Chromebook', operating_system: 'ChromeOS 128.0', mac_address: '00:11:22:aa:bb:cc', ip_address: '192.0.2.10',
+    });
     const s = sectionOf(d!);
     expect(row(s, 'chrome', 'Auto-update expiration')).toEqual({ kind: 'date', label: 'Auto-update expiration', value: '2026-06-01' });
     expect(row(s, 'chrome', 'Updates')).toMatchObject({ value: 'Expired' });
+    expect(row(s, 'chrome', 'Last user')).toMatchObject({ value: 'alice@example.com' });
+    expect(row(s, 'chrome', 'Org unit')).toMatchObject({ value: '/Staff' });
+    for (const label of ['Model', 'Serial number', 'OS version', 'MAC address']) expect(row(s, 'chrome', label)).toBeUndefined();
+    // Unreported or malformed facts are omitted, never cleared; the last user falls back to recentUsers.
+    expect(bare!.fields).toEqual({ name: 'SN124', serialNumber: 'SN124', autoUpdateExpiration: null });
+    expect(row(sectionOf(bare!), 'chrome', 'Last user')).toMatchObject({ value: 'carol@example.com' });
   });
 
   it('mobile devices: device group', async () => {
     installFetchTable(table);
     const [d] = await only('mobile_devices');
-    expect(d!.fields).toEqual({ name: 'Example Phone PH1', serialNumber: 'PH1' });
-    expect(row(sectionOf(d!), 'device', 'Compromised')).toMatchObject({ tone: 'success' });
+    expect(d!.fields).toEqual({
+      name: 'Example Phone PH1', serialNumber: 'PH1', model: 'Example Phone', manufacturer: 'Example',
+      operating_system: 'Android 15', imei: '490154203237518', mac_address: 'aa:bb:cc:00:11:22',
+    });
+    const s = sectionOf(d!);
+    expect(row(s, 'device', 'Compromised')).toMatchObject({ tone: 'success' });
+    expect(row(s, 'device', 'Owner')).toMatchObject({ value: ['bob@example.com'] });
+    for (const label of ['Model', 'Serial number', 'OS']) expect(row(s, 'device', label)).toBeUndefined();
   });
 });
 

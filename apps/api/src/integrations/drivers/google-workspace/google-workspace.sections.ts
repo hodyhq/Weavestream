@@ -1,12 +1,16 @@
+import { isIP } from 'node:net';
 import type { IntegrationSection, IntegrationSectionGroup } from '@weavestream/shared';
-import { badge, bool, date, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
+import { PhoneStrategy } from '../../../field-types/strategies/contact.strategy.js';
+import { badge, bool, clean, date, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
 
 export { badge, bool, clean, date, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
 
 /**
- * Pure builders for the Google Workspace integration sections. Records
- * only carry the name and the match key as layout fields; everything
- * below is rendered read-only on the asset page (integrationSectionSchema).
+ * Pure builders for the Google Workspace records. Standard facts (job
+ * title, model, OS, MAC, ...) fill layout fields through the
+ * `*StandardFields` helpers; the sections below hold only the extras a
+ * layout does not have, rendered read-only on the asset page
+ * (integrationSectionSchema).
  */
 
 export const SECTION_TITLE = 'Google Workspace';
@@ -42,6 +46,44 @@ export interface GoogleUser {
   lastLoginTime?: string;
   creationTime?: string;
   orgUnitPath?: string;
+  organizations?: Array<{ title?: string; department?: string; primary?: boolean }>;
+  phones?: Array<{ value?: string; type?: string; primary?: boolean }>;
+}
+
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+
+/** Present values only, cleaned: a fact Google does not report is omitted, never cleared. */
+function facts(values: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) if (value) out[key] = clean(value, 1_000);
+  return out;
+}
+
+/** "aa:bb:cc:dd:ee:ff" from any 12-hex-digit spelling, else undefined. */
+export function normalizeMac(value: string | undefined): string | undefined {
+  const hex = value?.replace(/[^0-9a-f]/gi, '').toLowerCase();
+  return hex && hex.length === 12 && /^[0-9a-f]{12}$/.test(hex) ? hex.match(/../g)!.join(':') : undefined;
+}
+
+const PHONE = new PhoneStrategy();
+
+/** E.164 the PHONE field accepts; anything with letters (extensions) or too short is omitted. */
+export function normalizePhone(value: string | undefined): string | undefined {
+  if (!value || !/^[\d\s()+.-]+$/.test(value)) return undefined;
+  const e164 = PHONE.normalize(value);
+  return typeof e164 === 'string' && PHONE.valueSchema().safeParse(e164).success ? e164 : undefined;
+}
+
+export function userStandardFields(user: GoogleUser): Record<string, string> {
+  const orgs = user.organizations ?? [];
+  const org = orgs.find((o) => o?.primary) ?? orgs[0];
+  const phones = (user.phones ?? []).filter((p) => str(p?.value));
+  const phone = phones.find((p) => p.primary) ?? phones.find((p) => p.type === 'work') ?? phones[0];
+  return facts({
+    job_title: str(org?.title),
+    department: str(org?.department),
+    phone: normalizePhone(str(phone?.value)),
+  });
 }
 
 /**
@@ -138,8 +180,6 @@ export function buildUserSection(
 }
 
 export interface TenantInput {
-  customerId: string;
-  primaryDomain: string;
   createdAt?: string;
   users: GoogleUser[];
   licences: Lookup<ReadonlyMap<string, string[]>>;
@@ -185,8 +225,6 @@ export function buildTenantSection(input: TenantInput): IntegrationSection {
 
   return section([
     group('overview', 'Overview', 'google', [
-      text('Primary domain', input.primaryDomain),
-      text('Customer ID', input.customerId),
       num('Active users', active.length),
       num('Suspended users', input.users.filter((u) => u.suspended && !u.archived).length),
       num('Archived users', input.users.filter((u) => u.archived).length),
@@ -212,13 +250,15 @@ export interface GoogleGroup {
   directMembersCount?: string | number;
 }
 
+export function groupStandardFields(g: GoogleGroup): Record<string, string> {
+  return facts({ description: str(g.description) });
+}
+
 export function buildGroupSection(g: GoogleGroup, members: Array<{ email?: string; role?: string }>): IntegrationSection {
   const count = Number(g.directMembersCount);
   const shown = members.filter((m) => m.email).map((m) => (m.role && m.role !== 'MEMBER' ? `${m.email} (${m.role.toLowerCase()})` : m.email!));
   return section([
     group('group', 'Group', 'google', [
-      text('Email', g.email),
-      text('Description', g.description),
       num('Members', Number.isFinite(count) ? count : members.length),
       shown.length > 0 ? list(Number.isFinite(count) && count > shown.length ? `Members (first ${shown.length})` : 'Member list', shown) : null,
     ]),
@@ -253,20 +293,30 @@ export interface ChromeDevice {
   orgUnitPath?: string;
   macAddress?: string;
   autoUpdateExpiration?: string;
+  recentUsers?: Array<{ email?: string; type?: string }>;
+  lastKnownNetwork?: Array<{ ipAddress?: string; wanIpAddress?: string }>;
+}
+
+export function chromeStandardFields(d: ChromeDevice): Record<string, string> {
+  const os = str(d.osVersion);
+  const ip = str(d.lastKnownNetwork?.[0]?.ipAddress);
+  return facts({
+    model: str(d.model),
+    operating_system: os && `ChromeOS ${os}`,
+    mac_address: normalizeMac(d.macAddress),
+    ip_address: ip && isIP(ip) ? ip : undefined,
+  });
 }
 
 export function buildChromeSection(d: ChromeDevice, nowMs: number): IntegrationSection {
   const expiry = toIso(d.autoUpdateExpiration);
   return section([
     group('chrome', 'Chrome OS', 'chrome', [
-      text('Model', d.model),
-      text('Serial number', d.serialNumber),
-      text('OS version', d.osVersion),
       d.status ? badge('Status', d.status, d.status === 'ACTIVE' ? 'success' : 'neutral') : null,
       datetime('Last sync', d.lastSync),
-      text('User', d.annotatedUser),
+      // Shown only: a device's last user never fills assigned-to.
+      text('Last user', str(d.annotatedUser) ?? str(d.recentUsers?.[0]?.email)),
       text('Org unit', d.orgUnitPath),
-      text('MAC address', d.macAddress),
       date('Auto-update expiration', d.autoUpdateExpiration),
       expiry && Date.parse(expiry) < nowMs ? badge('Updates', 'Expired', 'danger') : null,
     ]),
@@ -283,15 +333,26 @@ export interface MobileDevice {
   status?: string;
   lastSync?: string;
   deviceCompromisedStatus?: string;
+  brand?: string;
+  manufacturer?: string;
+  imei?: string;
+  wifiMacAddress?: string;
+}
+
+export function mobileStandardFields(d: MobileDevice): Record<string, string> {
+  return facts({
+    model: str(d.model),
+    manufacturer: str(d.brand) ?? str(d.manufacturer),
+    operating_system: str(d.os),
+    imei: str(d.imei),
+    mac_address: normalizeMac(d.wifiMacAddress),
+  });
 }
 
 export function buildMobileSection(d: MobileDevice): IntegrationSection {
   const compromised = d.deviceCompromisedStatus;
   return section([
     group('device', 'Device', 'android', [
-      text('Model', d.model),
-      text('Serial number', d.serialNumber),
-      text('OS', d.os),
       text('Type', d.type),
       d.email && d.email.length > 0 ? list('Owner', d.email) : null,
       text('Status', d.status),

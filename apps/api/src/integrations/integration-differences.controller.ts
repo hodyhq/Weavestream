@@ -3,8 +3,10 @@ import type { Request } from 'express';
 import {
   integrationDifferencesQuerySchema,
   resolveIntegrationDifferenceSchema,
+  resolveIntegrationDifferencesBulkSchema,
   type IntegrationDifferencesQuery,
   type ResolveIntegrationDifferenceInput,
+  type ResolveIntegrationDifferencesBulkInput,
 } from '@weavestream/shared';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
@@ -43,5 +45,18 @@ export class IntegrationDifferencesController {
     @Query(new ZodBody(integrationDifferencesQuerySchema)) query: IntegrationDifferencesQuery,
   ) {
     return this.differences.list(id, query);
+  }
+
+  /** Bulk Use source / Keep ours; asset.write is checked per company inside. */
+  @Post(':id/differences/resolve-bulk')
+  @RequirePermission('integration.manage')
+  @HttpCode(200)
+  resolveBulk(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodBody(resolveIntegrationDifferencesBulkSchema)) dto: ResolveIntegrationDifferencesBulkInput,
+    @Req() req: Request,
+  ) {
+    return this.differences.resolveBulk(user, id, dto, meta(req));
   }
 }

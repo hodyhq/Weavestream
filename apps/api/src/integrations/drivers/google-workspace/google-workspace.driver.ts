@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type {
   DriverDescriptor,
   DriverOAuthDescriptor,
+  DriverStandardField,
   SourceFieldDto,
   SourceOrgDto,
 } from '@weavestream/shared';
@@ -29,7 +30,11 @@ import {
   buildMobileSection,
   buildTenantSection,
   buildUserSection,
+  chromeStandardFields,
+  groupStandardFields,
+  mobileStandardFields,
   toIso,
+  userStandardFields,
   type ChromeDevice,
   type GoogleGroup,
   type GoogleUser,
@@ -43,8 +48,9 @@ import {
  * Google Workspace driver (read-only, one integration = one Workspace
  * tenant). Plain REST over `oauthFetch` (egress guard, token refresh);
  * every Google API call is a GET. External ids are Google's immutable
- * ids; records carry only the name and the match key as layout fields,
- * every other detail goes into the integration section.
+ * ids; records carry the name, the match key and the standard facts
+ * (`standardFields` per resource) that fill layout fields; the extras
+ * go into the integration section.
  *
  * Lookups shared by every page of one run (licences, storage usage) are
  * cached in process per integration + snapshot. Licensing, Reports and
@@ -130,7 +136,13 @@ interface ResourceSpec {
   layoutHints: string[];
   fieldHints: string[];
   layout: RecommendedDestination['layout'];
+  /** Facts Map layouts offers as layout fields (the name and match key are minimal fields). */
+  standardFields?: DriverStandardField[];
 }
+
+const MODEL: DriverStandardField = { sourceField: 'model', label: 'Model', fieldType: 'TEXT', fieldHints: ['model'] };
+const OS: DriverStandardField = { sourceField: 'operating_system', label: 'Operating system', fieldType: 'TEXT', fieldHints: ['operating_system', 'os'] };
+const MAC: DriverStandardField = { sourceField: 'mac_address', label: 'MAC address', fieldType: 'TEXT', fieldHints: ['mac_address', 'mac'] };
 
 const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
   tenant: {
@@ -140,6 +152,9 @@ const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
     layoutHints: ['google_workspace', 'workspace', 'tenant', 'tenants'],
     fieldHints: ['customer_id', 'customerid', 'tenant_id'],
     layout: { name: 'Google Workspace Tenants', slug: 'google_workspace_tenants', icon: 'building', color: 'blue' },
+    standardFields: [
+      { sourceField: 'primary_domain', label: 'Primary domain', fieldType: 'TEXT', fieldHints: ['primary_domain', 'domain'] },
+    ],
   },
   users: {
     label: 'Users',
@@ -148,6 +163,11 @@ const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
     layoutHints: ['people', 'contacts', 'users', 'staff', 'employees'],
     fieldHints: ['email', 'primary_email', 'e_mail', 'mail'],
     layout: { name: 'People', slug: 'people', icon: 'person', color: 'blue' },
+    standardFields: [
+      { sourceField: 'job_title', label: 'Job title', fieldType: 'TEXT', fieldHints: ['job_title', 'title'] },
+      { sourceField: 'department', label: 'Department', fieldType: 'TEXT', fieldHints: ['department'] },
+      { sourceField: 'phone', label: 'Phone', fieldType: 'PHONE', fieldHints: ['phone', 'phone_number', 'work_phone'] },
+    ],
   },
   groups: {
     label: 'Groups',
@@ -156,6 +176,9 @@ const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
     layoutHints: ['distribution_lists', 'distribution', 'groups', 'mailing_lists'],
     fieldHints: ['email', 'group_email', 'address'],
     layout: { name: 'Distribution Lists', slug: 'distribution_lists', icon: 'users', color: 'teal' },
+    standardFields: [
+      { sourceField: 'description', label: 'Description', fieldType: 'TEXTAREA', fieldHints: ['description'] },
+    ],
   },
   domains: {
     label: 'Domains',
@@ -172,6 +195,12 @@ const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
     layoutHints: ['laptops', 'chromebooks', 'workstations', 'computers', 'devices'],
     fieldHints: ['serial_number', 'serial', 'serialnumber', 'service_tag'],
     layout: { name: 'Chromebooks', slug: 'chromebooks', icon: 'laptop', color: 'amber' },
+    standardFields: [
+      MODEL,
+      OS,
+      MAC,
+      { sourceField: 'ip_address', label: 'IP address', fieldType: 'IP_ADDRESS', fieldHints: ['ip_address', 'ip', 'private_ip'] },
+    ],
   },
   mobile_devices: {
     label: 'Mobile devices',
@@ -180,6 +209,13 @@ const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
     layoutHints: ['phones', 'mobile', 'mobile_devices', 'tablets'],
     fieldHints: ['serial_number', 'serial', 'serialnumber', 'imei'],
     layout: { name: 'Phones', slug: 'phones', icon: 'box', color: 'violet' },
+    standardFields: [
+      MODEL,
+      { sourceField: 'manufacturer', label: 'Manufacturer', fieldType: 'TEXT', fieldHints: ['manufacturer', 'make', 'vendor', 'brand'] },
+      OS,
+      { sourceField: 'imei', label: 'IMEI', fieldType: 'TEXT', fieldHints: ['imei'] },
+      MAC,
+    ],
   },
 };
 
@@ -563,7 +599,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
     key: 'google-workspace',
     label: 'Google Workspace',
     description:
-      'Read-only sync of a Google Workspace tenant: users, licences, storage, groups, domains and devices.',
+      'Read-only sync of a Google Workspace tenant: names, job titles, device models, OS and network facts fill layout fields; licences, storage, security and device status show on the asset page.',
     iconKey: null,
     configFields: [],
     secretFields: [],
@@ -581,6 +617,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
         dependsOnResourceKeys: [],
         matchSuggestions: { sourceField: spec.matchField, layoutHints: spec.layoutHints, fieldHints: spec.fieldHints, fieldLabel: spec.matchLabel },
         minimalFields: spec.matchField === 'name' ? ['name'] : ['name', spec.matchField],
+        ...(spec.standardFields ? { standardFields: spec.standardFields } : {}),
       };
     }),
     capabilities: {
@@ -625,6 +662,14 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
         description: 'Date the device stops receiving ChromeOS updates.',
       });
     }
+    for (const field of spec.standardFields ?? []) {
+      fields.push({
+        key: field.sourceField,
+        label: field.label,
+        hintType: field.fieldType === 'IP_ADDRESS' || field.fieldType === 'TEXTAREA' ? field.fieldType : 'TEXT',
+        alwaysPresent: false,
+      });
+    }
     return fields;
   }
 
@@ -662,15 +707,13 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
         const users = await listAll<GoogleUser>(ctx, usersUrl, (body) => body.users as never);
         const storage = await optional(() => getCustomerUsage(ctx, snapshotAt), REPORT_UNAVAILABLE);
         const section = buildTenantSection({
-          customerId: customer.id,
-          primaryDomain: customer.customerDomain,
           createdAt: customer.customerCreationTime,
           users,
           licences: await licences(),
           storage,
           nowMs,
         });
-        return { records: [record(key, customer.id, customer.customerDomain, customer.id, section)] };
+        return { records: [record(key, customer.id, customer.customerDomain, customer.id, section, { primary_domain: customer.customerDomain })] };
       }
       case 'users': {
         const body = await googleGet<{ users?: GoogleUser[]; nextPageToken?: string }>(ctx, usersUrl(pageToken));
@@ -679,7 +722,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
         const records = (body.users ?? [])
           .filter((u) => u.id && u.primaryEmail)
           .map((u) =>
-            record(key, u.id!, u.name?.fullName || u.primaryEmail!, u.primaryEmail, buildUserSection(u, licenceLookup, usage, nowMs)),
+            record(key, u.id!, u.name?.fullName || u.primaryEmail!, u.primaryEmail, buildUserSection(u, licenceLookup, usage, nowMs), userStandardFields(u)),
           );
         return { records, nextPageToken: body.nextPageToken };
       }
@@ -696,7 +739,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
             ctx,
             withQuery(`${DIRECTORY}/groups/${encodeURIComponent(g.id)}/members`, { maxResults: '50' }),
           );
-          records.push(record(key, g.id, g.name || g.email, g.email, buildGroupSection(g, members.members ?? [])));
+          records.push(record(key, g.id, g.name || g.email, g.email, buildGroupSection(g, members.members ?? []), groupStandardFields(g)));
         }
         return { records, nextPageToken: body.nextPageToken };
       }
@@ -738,6 +781,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
             const name = d.annotatedAssetId || [d.model, d.serialNumber].filter(Boolean).join(' ') || d.deviceId!;
             return record(key, d.deviceId!, name, d.serialNumber, buildChromeSection(d, nowMs), {
               [AUTO_UPDATE_FIELD]: expiry ? expiry.slice(0, 10) : null,
+              ...chromeStandardFields(d),
             });
           });
         return { records, nextPageToken: body.nextPageToken };
@@ -751,7 +795,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
           .filter((d) => d.resourceId)
           .map((d) => {
             const name = [d.model, d.serialNumber].filter(Boolean).join(' ') || d.resourceId!;
-            return record(key, d.resourceId!, name, d.serialNumber, buildMobileSection(d));
+            return record(key, d.resourceId!, name, d.serialNumber, buildMobileSection(d), mobileStandardFields(d));
           });
         return { records, nextPageToken: body.nextPageToken };
       }

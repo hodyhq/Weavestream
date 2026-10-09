@@ -79,6 +79,86 @@ describe('DifferencesTab', () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter(([p]) => String(p).includes('/differences')).length).toBe(2));
   });
 
+  describe('bulk selection', () => {
+    const item2 = { ...item, syncRecordId: '00000000-0000-4000-8000-0000000000e2', assetName: 'Workstation 02', localValue: 'lab-pc' };
+    const bulkCalls = () => fetchMock.mock.calls.filter(([p]) => String(p).endsWith('/resolve-bulk'));
+    const bodyOf = (call: unknown[]) => JSON.parse((call[1] as { body: string }).body);
+
+    function listing(page: { items: unknown[]; total: number; nextCursor: string | null }, bulk: (body: Record<string, unknown>) => unknown) {
+      fetchMock.mockImplementation(async (path: string, init?: RequestInit) =>
+        (path.endsWith('/resolve-bulk')
+          ? { ok: true, status: 200, data: bulk(JSON.parse(String(init!.body))) }
+          : { ok: true, status: 200, data: page }) as never,
+      );
+    }
+
+    it('selects one row, asks to confirm in the page, sends the items and shows the summary', async () => {
+      listing({ items: [item, item2], total: 2, nextCursor: null }, () => ({
+        applied: 1, failed: [],
+        skipped: [{ syncRecordId: item2.syncRecordId, assetFieldId: ids.field, assetName: 'Workstation 02', reason: 'You cannot edit assets in this company.' }],
+        nextCursor: null,
+      }));
+      const confirmSpy = jest.spyOn(window, 'confirm');
+      renderTab();
+      fireEvent.click((await screen.findAllByLabelText('Select Hostname on Workstation 02'))[0]!);
+      expect(screen.getByText('1 selected')).toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: 'Use Level RMM value' })[0]!);
+      expect(bulkCalls()).toHaveLength(0);
+      expect(screen.getByRole('alertdialog')).toHaveTextContent('Write the Level RMM value into 1 difference?');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+      await waitFor(() => expect(bulkCalls()).toHaveLength(1));
+      expect(bodyOf(bulkCalls()[0]!)).toEqual({ choice: 'source', items: [{ syncRecordId: item2.syncRecordId, assetFieldId: ids.field }] });
+      expect(await screen.findByText('Used the Level RMM value for 1 difference. Skipped 1, failed 0.')).toBeInTheDocument();
+      expect(screen.getByText('Skipped: Workstation 02: You cannot edit assets in this company.')).toBeInTheDocument();
+      expect(confirmSpy).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+
+    it('select all loaded, then all matching walks the filter with the cursor until it is done', async () => {
+      const cursor = '00000000-0000-4000-8000-0000000000e9';
+      listing({ items: [item, item2], total: 600, nextCursor: cursor }, (body) => {
+        const filter = body['filter'] as { cursor?: string };
+        return filter.cursor
+          ? { applied: 99, skipped: [], failed: [{ syncRecordId: item.syncRecordId, assetFieldId: ids.field, assetName: 'Workstation 01', reason: 'The integration synced this asset just now. Try again.' }], nextCursor: null }
+          : { applied: 500, skipped: [], failed: [], nextCursor: cursor };
+      });
+      renderTab();
+      await screen.findAllByText('Workstation 01');
+      fireEvent.change(screen.getByLabelText('Company'), { target: { value: ids.company } });
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/admin/integrations/${ids.integration}/differences?companyId=${ids.company}`));
+      fireEvent.click(await screen.findByLabelText('Select all loaded differences'));
+      expect(screen.getByText('2 selected')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Select all 600 matching' }));
+      expect(screen.getByText('All 600 matching selected')).toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: 'Keep ours' })[0]!);
+      expect(screen.getByRole('alertdialog')).toHaveTextContent('Keep the Weavestream value for 600 differences?');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+      expect(await screen.findByText('Kept ours for 599 differences. Skipped 0, failed 1.')).toBeInTheDocument();
+      expect(bulkCalls().map(bodyOf)).toEqual([
+        { choice: 'local', filter: { companyId: ids.company } },
+        { choice: 'local', filter: { companyId: ids.company, cursor } },
+      ]);
+      expect(screen.getByText('Failed: Workstation 01: The integration synced this asset just now. Try again.')).toBeInTheDocument();
+    });
+
+    it('Cancel sends nothing, and a failed request stops early with the reason', async () => {
+      fetchMock.mockImplementation(async (path: string) =>
+        (path.endsWith('/resolve-bulk')
+          ? { ok: false, status: 403, problem: { title: 'Forbidden', status: 403, detail: 'No access.' } }
+          : { ok: true, status: 200, data: { items: [item], total: 1, nextCursor: null } }) as never,
+      );
+      renderTab();
+      fireEvent.click((await screen.findAllByLabelText('Select Hostname on Workstation 01'))[0]!);
+      fireEvent.click(screen.getAllByRole('button', { name: 'Keep ours' })[0]!);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(bulkCalls()).toHaveLength(0);
+      fireEvent.click(screen.getAllByRole('button', { name: 'Keep ours' })[0]!);
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+      expect(await screen.findByText(/Stopped early: No access/)).toBeInTheDocument();
+    });
+  });
+
   it('shows a load error', async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 403, problem: { title: 'Forbidden', status: 403, detail: 'No access.' } } as never);
     renderTab();
