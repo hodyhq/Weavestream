@@ -116,6 +116,7 @@ export default async function IntegrationDetailPage({
               mappings={mappings}
               runs={runs}
               driver={driver}
+              canManageLayouts={hasCapability(me, 'LAYOUT_MANAGE')}
             />
           )}
         </Panel>

@@ -9,7 +9,7 @@ import { minimalRecommendation, type AuditMeta } from './integrations.service.js
 /**
  * "Map layouts" on an existing layout that lacks the field a resource
  * matches on: create that one field (name, slug and type from the driver's
- * recommended destination) through the layout builder's own save path, so
+ * recommended destination) through the layout service's add-one-field path, so
  * it is validated and audited like any field the operator adds. A field
  * with the same slug but another type is never altered.
  */
@@ -28,7 +28,7 @@ export class IntegrationMatchFieldService {
     assetLayoutId: string,
     meta: AuditMeta,
   ): Promise<EnsureResourceMatchFieldResult> {
-    // Layout reads are role-filtered; a filtered field list must never be saved back.
+    // Defense in depth: client users never edit layouts.
     if (actor.role === 'CLIENT_USER') throw new ForbiddenException();
     const integration = await this.prisma.integration.findUnique({ where: { id: integrationId }, select: { driver: true } });
     if (!integration) throw new NotFoundException();
@@ -46,43 +46,29 @@ export class IntegrationMatchFieldService {
 
     const layout = await this.layouts.get(actor, assetLayoutId);
     if (layout.archivedAt || !layout.isActive) throw new BadRequestException('Pick an active layout.');
-    const fields = layout.fields.filter((field) => field.archivedAt === null);
-    const existing = fields.find((field) => field.slug === wanted.slug);
-    if (existing) {
-      if (existing.fieldType !== wanted.fieldType) {
-        throw new BadRequestException(
-          `The layout already has a field "${existing.name}" (${existing.slug}) of type ${existing.fieldType}, and this integration needs ${wanted.fieldType}. Pick that field or another one to match on.`,
-        );
-      }
-      return { fieldId: existing.id, created: false };
-    }
-
-    const saved = await this.layouts.saveFields(
+    // Adds against the layout's current fields (not this read), so a field
+    // added concurrently is never dropped.
+    const { field, created } = await this.layouts.addField(
       actor,
       assetLayoutId,
       {
-        fields: [
-          ...fields.map(({ archivedAt: _archivedAt, ...field }) => field),
-          {
-            name: wanted.name,
-            slug: wanted.slug,
-            fieldType: wanted.fieldType,
-            position: fields.length,
-            isRequired: false,
-            isUniquePerCompany: false,
-            visibleToClients: true,
-            // A layout always has exactly one primary field.
-            isPrimary: !fields.some((field) => field.isPrimary),
-            showInTable: wanted.showInTable,
-            options: wanted.options,
-          },
-        ],
+        name: wanted.name,
+        slug: wanted.slug,
+        fieldType: wanted.fieldType,
+        isRequired: false,
+        isUniquePerCompany: false,
+        visibleToClients: true,
+        isPrimary: false,
+        showInTable: wanted.showInTable,
+        options: wanted.options,
       },
-      {},
       meta,
     );
-    const created = saved.fields.find((field) => field.slug === wanted.slug && field.archivedAt === null);
-    if (!created) throw new Error('The match field was not created.');
-    return { fieldId: created.id, created: true };
+    if (!created && field.fieldType !== wanted.fieldType) {
+      throw new BadRequestException(
+        `The layout already has a field "${field.name}" (${field.slug}) of type ${field.fieldType}, and this integration needs ${wanted.fieldType}. Pick that field or another one to match on.`,
+      );
+    }
+    return { fieldId: field.id, created };
   }
 }

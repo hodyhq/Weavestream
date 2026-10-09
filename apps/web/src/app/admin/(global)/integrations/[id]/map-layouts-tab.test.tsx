@@ -4,16 +4,17 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MapLayoutsTab, matchableResources, suggestField, suggestLayout } from './map-layouts-tab';
 
 const apiFetch = jest.fn();
+const toastPush = jest.fn();
 jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh: jest.fn() }) }));
 jest.mock('../../../../../lib/api', () => ({ apiFetch: (...args: unknown[]) => apiFetch(...args) }));
 jest.mock('../../../../../components/ui', () => ({
-  Btn: ({ children, loading: _loading, kind: _kind, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & Record<string, unknown>) => <button {...props}>{children}</button>,
+  Btn: ({ children, loading, kind: _kind, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & Record<string, unknown>) => <button aria-busy={Boolean(loading)} {...props}>{children}</button>,
   Field: ({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }) => (
     <div><label htmlFor={htmlFor}>{label}</label>{children}</div>
   ),
   Select: (props: React.SelectHTMLAttributes<HTMLSelectElement>) => <select {...props} />,
   Tag: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
-  useToast: () => ({ push: jest.fn() }),
+  useToast: () => ({ push: toastPush }),
 }));
 
 const field = (id: string, name: string, slug: string) => ({
@@ -61,7 +62,10 @@ describe('layout matcher suggestions', () => {
 });
 
 describe('MapLayoutsTab', () => {
-  beforeEach(() => apiFetch.mockReset());
+  beforeEach(() => {
+    apiFetch.mockReset();
+    toastPush.mockReset();
+  });
 
   it('pre-selects suggested layouts and match fields, creates a new layout when none fits, and saves', async () => {
     apiFetch.mockImplementation(async (path: string, init?: { method?: string }) => {
@@ -165,5 +169,39 @@ describe('MapLayoutsTab', () => {
     const match = await screen.findByLabelText('Match primaryEmail on');
     expect(match).toHaveValue('f-email');
     expect(screen.getByRole('option', { name: 'Create field "Primary email"' })).toBeInTheDocument();
+  });
+
+  it('resets pending and toasts when the match-field request rejects', async () => {
+    apiFetch.mockImplementation(async (path: string) => {
+      if (path === '/layouts') return { ok: true, data: { items: [laptops] } };
+      if (path.endsWith('/match-field')) throw new TypeError('Failed to fetch');
+      return { ok: true, data: row('users') };
+    });
+    render(<MapLayoutsTab integration={{ id: 'i1', resources: [row('users')] } as never} driver={{ resources: [users] } as never} />);
+    fireEvent.change(await screen.findByLabelText('Layout'), { target: { value: 'l-laptops' } });
+    const button = screen.getByRole('button', { name: 'Save layout mapping' });
+    fireEvent.click(button);
+    await waitFor(() => expect(toastPush).toHaveBeenCalledWith(expect.stringMatching(/Could not save/), 'danger'));
+    expect(button).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('disables Create new layout and Create field without the layout permission', async () => {
+    apiFetch.mockImplementation(async (path: string) =>
+      path === '/layouts' ? { ok: true, data: { items: [laptops] } } : { ok: true, data: row('users') },
+    );
+    render(
+      <MapLayoutsTab
+        integration={{ id: 'i1', resources: [row('users')] } as never}
+        driver={{ resources: [users] } as never}
+        canManageLayouts={false}
+      />,
+    );
+    // No layout fits the hints: it falls back to Skip instead of a disabled Create new layout.
+    expect(await screen.findByLabelText('Layout')).toHaveValue('__skip__');
+    expect(screen.getByRole('option', { name: 'Create new layout' })).toBeDisabled();
+    expect(screen.getByText(/need permission to manage asset layouts/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Layout'), { target: { value: 'l-laptops' } });
+    expect(screen.getByLabelText('Match primaryEmail on')).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'Create field "Primary email"' })).toBeDisabled();
   });
 });

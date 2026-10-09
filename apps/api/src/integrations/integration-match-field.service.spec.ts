@@ -18,9 +18,12 @@ function field(overrides: Record<string, unknown>) {
 function setup(driver: string, fields: ReturnType<typeof field>[]) {
   const layouts = {
     get: jest.fn().mockResolvedValue({ id: LAYOUT_ID, isActive: true, archivedAt: null, fields }),
-    saveFields: jest.fn().mockImplementation(async (_actor, _id, input: { fields: Array<Record<string, unknown>> }) => ({
-      fields: input.fields.map((f, i) => ({ ...f, id: f.id ?? `f-new-${i}`, archivedAt: null })),
-    })),
+    saveFields: jest.fn(),
+    // Mirrors AssetLayoutsService.addField: reuse a live field with the slug, else create one.
+    addField: jest.fn().mockImplementation(async (_actor, _id, input: { slug: string }) => {
+      const hit = fields.find((f) => f.slug === input.slug && f.archivedAt === null);
+      return hit ? { field: hit, created: false } : { field: { ...input, id: 'f-new' }, created: true };
+    }),
   };
   const prisma = { integration: { findUnique: jest.fn().mockResolvedValue({ driver }) } };
   const service = new IntegrationMatchFieldService(prisma as never, new IntegrationDriverRegistry(), layouts as never);
@@ -28,24 +31,20 @@ function setup(driver: string, fields: ReturnType<typeof field>[]) {
 }
 
 describe('IntegrationMatchFieldService', () => {
-  it('creates the missing match field through the layout builder save, keeping existing fields', async () => {
+  it('adds only the missing match field, never resubmitting the read snapshot', async () => {
     const { service, layouts } = setup('level', [field({})]);
-    await expect(service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META)).resolves.toEqual({ fieldId: 'f-new-1', created: true });
-    const [, layoutId, input, opts, meta] = layouts.saveFields.mock.calls[0]!;
+    await expect(service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META)).resolves.toEqual({ fieldId: 'f-new', created: true });
+    // A snapshot-based saveFields would archive any field added after the read.
+    expect(layouts.saveFields).not.toHaveBeenCalled();
+    const [, layoutId, input, meta] = layouts.addField.mock.calls[0]!;
     expect(layoutId).toBe(LAYOUT_ID);
-    expect(opts).toEqual({});
     expect(meta).toBe(META);
-    expect(input.fields).toEqual([
-      expect.objectContaining({ id: 'f-name', slug: 'name', isPrimary: true }),
-      expect.objectContaining({ slug: 'serial_number', name: 'Serial number', fieldType: 'TEXT', isPrimary: false, isRequired: false }),
-    ]);
-    expect(input.fields[0]).not.toHaveProperty('archivedAt');
+    expect(input).toEqual(expect.objectContaining({ slug: 'serial_number', name: 'Serial number', fieldType: 'TEXT', isRequired: false }));
   });
 
   it('reuses an existing field with the same slug and type without saving', async () => {
     const { service, layouts } = setup('google-workspace', [field({}), field({ id: 'f-email', name: 'Email', slug: 'email', fieldType: 'EMAIL', isPrimary: false })]);
     await expect(service.ensureMatchField(ADMIN, 'i-1', 'users', LAYOUT_ID, META)).resolves.toEqual({ fieldId: 'f-email', created: false });
-    expect(layouts.saveFields).not.toHaveBeenCalled();
   });
 
   it('refuses when a field with that slug has another type, and never alters it', async () => {
@@ -67,7 +66,7 @@ describe('IntegrationMatchFieldService', () => {
     await expect(service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META)).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.ensureMatchField(ADMIN, 'i-1', 'nope', LAYOUT_ID, META)).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.ensureMatchField({ id: 'u', role: 'CLIENT_USER' } as never, 'i-1', 'devices', LAYOUT_ID, META)).rejects.toBeInstanceOf(ForbiddenException);
-    expect(layouts.saveFields).not.toHaveBeenCalled();
+    expect(layouts.addField).not.toHaveBeenCalled();
   });
 
   it('is gated by integration.manage', () => {
@@ -75,5 +74,18 @@ describe('IntegrationMatchFieldService', () => {
       action: 'integration.manage',
       companyIdFrom: undefined,
     });
+  });
+
+  it('also requires layout.manage.global, and refuses with 403 without it', async () => {
+    const ensureMatchField = jest.fn().mockResolvedValue({ fieldId: 'f', created: true });
+    const can = jest.fn().mockResolvedValue({ allowed: false });
+    const controller = new IntegrationMatchFieldController({ ensureMatchField } as never, { can } as never);
+    const req = { headers: {}, ip: '198.51.100.7' } as never;
+    const dto = { assetLayoutId: LAYOUT_ID };
+    await expect(controller.ensureMatchField(ADMIN, 'i-1', 'devices', dto, req)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(can).toHaveBeenCalledWith(ADMIN, 'layout.manage.global');
+    expect(ensureMatchField).not.toHaveBeenCalled();
+    can.mockResolvedValue({ allowed: true });
+    await expect(controller.ensureMatchField(ADMIN, 'i-1', 'devices', dto, req)).resolves.toEqual({ fieldId: 'f', created: true });
   });
 });

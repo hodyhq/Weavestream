@@ -61,6 +61,7 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PermissionService } from '../rbac/permission.service.js';
+import { assertCanManageLayouts } from './integration-match-field.controller.js';
 import { describeError } from '../common/describe-error.js';
 import { withCallbackHostWarning } from './oauth/integration-oauth-app.service.js';
 
@@ -477,12 +478,14 @@ export class IntegrationsController {
 
   @Post(':id/resources/:resourceKey/destination')
   @RequirePermission('integration.manage')
-  createResourceDestination(
+  async createResourceDestination(
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('resourceKey') resourceKey: string,
     @Req() req: Request,
   ) {
+    // Creates a global layout and its fields: also needs the layouts create permission.
+    await assertCanManageLayouts(this.permissions, user);
     return this.integrations.createResourceDestination(user, id, resourceKey, meta(req));
   }
 

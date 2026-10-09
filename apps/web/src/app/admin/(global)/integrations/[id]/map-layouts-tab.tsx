@@ -77,22 +77,24 @@ function initialChoice(
   resource: MatchableResource,
   row: IntegrationResourceDto | undefined,
   layouts: LayoutSummary[],
+  canCreate: boolean,
 ): Choice {
+  const createField = canCreate ? CREATE_FIELD : '';
   if (row?.assetLayoutId) {
     if (!row.enabled) return { layout: SKIP, matchFieldId: '' };
     const layout = layouts.find((candidate) => candidate.id === row.assetLayoutId);
     const matchFieldId =
       row.matchKeyFieldIds[0] ??
       (layout ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id : undefined) ??
-      CREATE_FIELD;
+      createField;
     return { layout: row.assetLayoutId, matchFieldId };
   }
   if (row && !row.enabled) return { layout: SKIP, matchFieldId: '' };
   const layout = suggestLayout(layouts, resource.matchSuggestions.layoutHints);
-  if (!layout) return { layout: NEW_LAYOUT, matchFieldId: '' };
+  if (!layout) return { layout: canCreate ? NEW_LAYOUT : SKIP, matchFieldId: '' };
   return {
     layout: layout.id,
-    matchFieldId: suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? CREATE_FIELD,
+    matchFieldId: suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? createField,
   };
 }
 
@@ -107,9 +109,12 @@ function initialChoice(
 export function MapLayoutsTab({
   integration,
   driver,
+  canManageLayouts = true,
 }: {
   integration: IntegrationDto;
   driver: DriverDescriptor | null;
+  /** LAYOUT_MANAGE: needed for Create new layout and Create field (the API enforces it too). */
+  canManageLayouts?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -135,7 +140,7 @@ export function MapLayoutsTab({
       const saved: Record<string, Choice | null> = {};
       for (const resource of resources) {
         const row = integration.resources.find((candidate) => candidate.resourceKey === resource.key);
-        next[resource.key] = initialChoice(resource, row, active);
+        next[resource.key] = initialChoice(resource, row, active, canManageLayouts);
         saved[resource.key] = persistedChoice(row);
       }
       setLayouts(active);
@@ -145,7 +150,7 @@ export function MapLayoutsTab({
     return () => {
       cancelled = true;
     };
-  }, [integration.resources, resources]);
+  }, [integration.resources, resources, canManageLayouts]);
 
   function choose(key: string, layoutValue: string) {
     const resource = resources.find((candidate) => candidate.key === key)!;
@@ -154,7 +159,9 @@ export function MapLayoutsTab({
       ...prev,
       [key]: {
         layout: layoutValue,
-        matchFieldId: layout ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? CREATE_FIELD : '',
+        matchFieldId: layout
+          ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? (canManageLayouts ? CREATE_FIELD : '')
+          : '',
       },
     }));
     setErrors((prev) => ({ ...prev, [key]: '' }));
@@ -232,21 +239,27 @@ export function MapLayoutsTab({
 
   async function save() {
     setPending(true);
-    const nextErrors: Record<string, string> = {};
-    for (const resource of resources) {
-      const choice = choices[resource.key];
-      const before = persisted[resource.key];
-      if (!choice || (before && before.layout === choice.layout && before.matchFieldId === choice.matchFieldId)) {
-        continue;
+    try {
+      const nextErrors: Record<string, string> = {};
+      for (const resource of resources) {
+        const choice = choices[resource.key];
+        const before = persisted[resource.key];
+        if (!choice || (before && before.layout === choice.layout && before.matchFieldId === choice.matchFieldId)) {
+          continue;
+        }
+        const error = await saveResource(resource, choice);
+        if (error) nextErrors[resource.key] = error;
       }
-      const error = await saveResource(resource, choice);
-      if (error) nextErrors[resource.key] = error;
-    }
-    setPending(false);
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length === 0) {
-      toast.push('Layouts mapped.', 'ok');
-      router.refresh();
+      setErrors(nextErrors);
+      if (Object.keys(nextErrors).length === 0) {
+        toast.push('Layouts mapped.', 'ok');
+        router.refresh();
+      }
+    } catch {
+      // A rejected request (network down) has no problem body to show; say so instead of hanging.
+      toast.push('Could not save the layout mapping. Check your connection and try again.', 'danger');
+    } finally {
+      setPending(false);
     }
   }
 
@@ -266,6 +279,11 @@ export function MapLayoutsTab({
           shows in the integration section on the asset page. Skipped resources are not synced.
         </p>
       </header>
+      {!canManageLayouts && (
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>
+          Create new layout and Create field need permission to manage asset layouts.
+        </p>
+      )}
       {loadError && <Tag tone="danger">{loadError}</Tag>}
       {!layouts && !loadError && <Tag tone="default">Loading layouts…</Tag>}
       {layouts &&
@@ -303,7 +321,9 @@ export function MapLayoutsTab({
                       {candidate.name}
                     </option>
                   ))}
-                  <option value={NEW_LAYOUT}>Create new layout</option>
+                  <option value={NEW_LAYOUT} disabled={!canManageLayouts}>
+                    Create new layout
+                  </option>
                   <option value={SKIP}>Skip (do not sync)</option>
                 </Select>
               </Field>
@@ -326,7 +346,9 @@ export function MapLayoutsTab({
                         {field.name}
                       </option>
                     ))}
-                    <option value={CREATE_FIELD}>{`Create field "${createFieldLabel(resource)}"`}</option>
+                    <option value={CREATE_FIELD} disabled={!canManageLayouts}>
+                      {`Create field "${createFieldLabel(resource)}"`}
+                    </option>
                   </Select>
                 </Field>
               )}
