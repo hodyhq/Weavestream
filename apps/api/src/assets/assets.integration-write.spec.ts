@@ -1209,6 +1209,17 @@ describe('AssetsService integration system writes', () => {
         expect(call.data).not.toHaveProperty('name');
       });
 
+      it('serializes the co-bind check per integration and asset inside the page transaction', async () => {
+        const { service, tx } = setup({ match: [owned()] });
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
+        })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
+        const lock = tx.$queryRaw.mock.calls.find((call) => Array.isArray(call[0]) && String(call[0][0]).includes('pg_advisory_xact_lock'));
+        expect(lock).toBeDefined();
+        expect(lock!.slice(1)).toEqual([`cobind:${ids.integration}:${ids.manual}`]);
+        expect(tx.integrationSyncRecord.findFirst).toHaveBeenCalled();
+      });
+
       it('co-binds a device by serial owned by an RMM', async () => {
         const rmm = owned({ externalSource: 'level', externalId: 'lvl-1' });
         const { service, tx } = setup({ match: [rmm] });

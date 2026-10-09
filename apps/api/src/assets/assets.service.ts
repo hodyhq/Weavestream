@@ -2269,6 +2269,12 @@ export class AssetsService {
       target.externalSource === null ||
       !(input.coBindSources ?? []).includes(target.externalSource)
     ) return false;
+    // Two mappings of one integration can sync the same company at once:
+    // serialize the check with the binding write (same page transaction)
+    // per integration and asset, so only one record co-binds it.
+    if (input.tx) {
+      await input.tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`cobind:${input.integrationId}:${target.id}`}, 0))`;
+    }
     const own = await client.integrationSyncRecord.findFirst({
       where: { companyId: input.companyId, assetId: target.id, companyMapping: { integrationId: input.integrationId } },
       select: { id: true },
