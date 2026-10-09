@@ -116,6 +116,11 @@ export function ReportNamesChoice({ integrationId, choice: initialChoice }: { in
                 No, keep names hidden (change nothing)
               </Btn>
             )}
+            {choice === null && concealed === false && (
+              <Btn kind="primary" size="sm" onClick={() => void act('keep')} loading={busy === 'keep'} disabled={busy !== null}>
+                Keep real names shown (change nothing)
+              </Btn>
+            )}
             {concealed === false && (
               <Btn kind="outline" size="sm" onClick={() => void act('conceal')} loading={busy === 'conceal'} disabled={busy !== null}>
                 Turn concealment back on

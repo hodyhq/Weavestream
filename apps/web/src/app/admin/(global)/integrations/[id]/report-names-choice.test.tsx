@@ -82,6 +82,20 @@ describe('ReportNamesChoice', () => {
     expect(screen.getByText(/You chose to keep names hidden/)).toBeInTheDocument();
   });
 
+  it('lets the admin record names that are already shown without changing anything', async () => {
+    apiFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { concealed: false, choice: null, readError: null } })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { concealed: false, choice: 'shown', readError: null, message: 'Nothing was changed in the tenant.' } });
+    await renderIt();
+    expect(screen.queryByRole('button', { name: /No, keep names hidden/ })).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Keep real names shown/ }));
+    });
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenLastCalledWith(URL_, { method: 'POST', body: JSON.stringify({ action: 'keep' }) });
+    expect(screen.getByRole('button', { name: 'Turn concealment back on' })).toBeEnabled();
+  });
+
   it('turns concealment back on after confirming', async () => {
     apiFetch
       .mockResolvedValueOnce({ ok: true, status: 200, data: { concealed: false, choice: 'shown', readError: null } })
