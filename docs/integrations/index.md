@@ -43,6 +43,8 @@ Select an integration below for provider-specific setup guides, resource capabil
 
 [!card title="Google Workspace" text="One-click connect per customer to sync users, licences, storage, groups, domains and devices (read-only)." icon="plug" layout="compact"](/integrations/google-workspace/)
 
+[!card title="Level" text="Sync Level RMM devices per top-level group with hardware, storage, OS, network, security, patches and alerts (read-only)." icon="plug" layout="compact"](/integrations/level/)
+
 [!card title="NinjaOne" text="Sync agent-managed workstations, servers, SNMP network gear, and guest VMs with dual-resource mapping." icon="plug" layout="compact"](/integrations/ninjaone/)
 
 [!card title="UniFi" text="Import Ubiquiti UniFi network gateways, switches, access points, and connected client devices into asset records." icon="plug" layout="compact"](/integrations/unifi/)

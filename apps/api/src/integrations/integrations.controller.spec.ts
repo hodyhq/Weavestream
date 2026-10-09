@@ -502,3 +502,39 @@ describe('IntegrationsController Cloudflare domains company binding', () => {
     expect(create.mock.calls[0]![1].config).toEqual({ accountId: 'a' });
   });
 });
+
+describe('IntegrationsController Create new layout permission', () => {
+  const ACTOR = { id: 'u-1', role: 'OPERATOR' } as never;
+  const req = { headers: {}, ip: '198.51.100.7' } as never;
+
+  function make(allowed: boolean) {
+    const createResourceDestination = jest.fn().mockResolvedValue({ key: 'devices' });
+    const can = jest.fn().mockResolvedValue({ allowed });
+    const controller = new IntegrationsController(
+      { createResourceDestination } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { can } as never,
+    );
+    return { controller, createResourceDestination, can };
+  }
+
+  it('refuses with 403 when the operator cannot manage layouts', async () => {
+    const { controller, createResourceDestination, can } = make(false);
+    await expect(controller.createResourceDestination(ACTOR, 'i-1', 'devices', req)).rejects.toThrow(
+      /manage asset layouts/,
+    );
+    expect(can).toHaveBeenCalledWith(ACTOR, 'layout.manage.global');
+    expect(createResourceDestination).not.toHaveBeenCalled();
+  });
+
+  it('creates the layout when the operator may manage layouts', async () => {
+    const { controller, createResourceDestination } = make(true);
+    await expect(controller.createResourceDestination(ACTOR, 'i-1', 'devices', req)).resolves.toEqual({ key: 'devices' });
+    expect(createResourceDestination).toHaveBeenCalled();
+  });
+});

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import type {
   DriverDescriptor,
   DriverResourceDescriptor,
+  EnsureResourceMatchFieldResult,
   IntegrationDto,
   IntegrationFieldMappingDto,
   IntegrationResourceDto,
@@ -30,6 +31,16 @@ export function matchableResources(driver: DriverDescriptor | null): MatchableRe
 
 export const NEW_LAYOUT = '__new__';
 export const SKIP = '__skip__';
+/** "Match on" choice: create the match field on the picked layout when saving. */
+export const CREATE_FIELD = '__create_field__';
+
+/** Name of the field "Create field" adds (the driver's label, else the source key spelled out). */
+export function createFieldLabel(resource: MatchableResource): string {
+  const { fieldLabel, sourceField } = resource.matchSuggestions;
+  if (fieldLabel) return fieldLabel;
+  const spaced = sourceField.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
 
 const norm = (value: string) => value.trim().toLowerCase();
 
@@ -66,22 +77,24 @@ function initialChoice(
   resource: MatchableResource,
   row: IntegrationResourceDto | undefined,
   layouts: LayoutSummary[],
+  canCreate: boolean,
 ): Choice {
+  const createField = canCreate ? CREATE_FIELD : '';
   if (row?.assetLayoutId) {
     if (!row.enabled) return { layout: SKIP, matchFieldId: '' };
     const layout = layouts.find((candidate) => candidate.id === row.assetLayoutId);
     const matchFieldId =
       row.matchKeyFieldIds[0] ??
       (layout ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id : undefined) ??
-      '';
+      createField;
     return { layout: row.assetLayoutId, matchFieldId };
   }
   if (row && !row.enabled) return { layout: SKIP, matchFieldId: '' };
   const layout = suggestLayout(layouts, resource.matchSuggestions.layoutHints);
-  if (!layout) return { layout: NEW_LAYOUT, matchFieldId: '' };
+  if (!layout) return { layout: canCreate ? NEW_LAYOUT : SKIP, matchFieldId: '' };
   return {
     layout: layout.id,
-    matchFieldId: suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? '',
+    matchFieldId: suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? createField,
   };
 }
 
@@ -96,9 +109,12 @@ function initialChoice(
 export function MapLayoutsTab({
   integration,
   driver,
+  canManageLayouts = true,
 }: {
   integration: IntegrationDto;
   driver: DriverDescriptor | null;
+  /** LAYOUT_MANAGE: needed for Create new layout and Create field (the API enforces it too). */
+  canManageLayouts?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -124,7 +140,7 @@ export function MapLayoutsTab({
       const saved: Record<string, Choice | null> = {};
       for (const resource of resources) {
         const row = integration.resources.find((candidate) => candidate.resourceKey === resource.key);
-        next[resource.key] = initialChoice(resource, row, active);
+        next[resource.key] = initialChoice(resource, row, active, canManageLayouts);
         saved[resource.key] = persistedChoice(row);
       }
       setLayouts(active);
@@ -134,7 +150,7 @@ export function MapLayoutsTab({
     return () => {
       cancelled = true;
     };
-  }, [integration.resources, resources]);
+  }, [integration.resources, resources, canManageLayouts]);
 
   function choose(key: string, layoutValue: string) {
     const resource = resources.find((candidate) => candidate.key === key)!;
@@ -143,7 +159,9 @@ export function MapLayoutsTab({
       ...prev,
       [key]: {
         layout: layoutValue,
-        matchFieldId: layout ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? '' : '',
+        matchFieldId: layout
+          ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? (canManageLayouts ? CREATE_FIELD : '')
+          : '',
       },
     }));
     setErrors((prev) => ({ ...prev, [key]: '' }));
@@ -179,9 +197,18 @@ export function MapLayoutsTab({
     }
 
     if (!choice.matchFieldId) return 'Pick the field to match on.';
+    let matchFieldId = choice.matchFieldId;
+    if (matchFieldId === CREATE_FIELD) {
+      const ensured = await apiFetch<EnsureResourceMatchFieldResult>(`${base}/match-field`, {
+        method: 'POST',
+        body: JSON.stringify({ assetLayoutId: choice.layout }),
+      });
+      if (!ensured.ok || !ensured.data) return problemMessage(ensured.problem) ?? 'Could not create the match field.';
+      matchFieldId = ensured.data.fieldId;
+    }
     const updated = await patch({
       assetLayoutId: choice.layout,
-      matchKeyFieldIds: [choice.matchFieldId],
+      matchKeyFieldIds: [matchFieldId],
       enabled: true,
     });
     if (!updated.ok) return problemMessage(updated.problem) ?? 'Could not save the layout.';
@@ -195,7 +222,7 @@ export function MapLayoutsTab({
         (mapping) =>
           mapping.targetFieldId !== null &&
           mapping.sourceField !== sourceField &&
-          mapping.targetFieldId !== choice.matchFieldId,
+          mapping.targetFieldId !== matchFieldId,
       );
     }
     const saved = await putMappings([
@@ -205,28 +232,34 @@ export function MapLayoutsTab({
         syncDirection: mapping.syncDirection,
         transform: mapping.transform,
       })),
-      { sourceField, targetFieldId: choice.matchFieldId, syncDirection: 'source_wins', transform: null },
+      { sourceField, targetFieldId: matchFieldId, syncDirection: 'source_wins', transform: null },
     ]);
     return saved.ok ? null : problemMessage(saved.problem) ?? 'Could not save the match-key mapping.';
   }
 
   async function save() {
     setPending(true);
-    const nextErrors: Record<string, string> = {};
-    for (const resource of resources) {
-      const choice = choices[resource.key];
-      const before = persisted[resource.key];
-      if (!choice || (before && before.layout === choice.layout && before.matchFieldId === choice.matchFieldId)) {
-        continue;
+    try {
+      const nextErrors: Record<string, string> = {};
+      for (const resource of resources) {
+        const choice = choices[resource.key];
+        const before = persisted[resource.key];
+        if (!choice || (before && before.layout === choice.layout && before.matchFieldId === choice.matchFieldId)) {
+          continue;
+        }
+        const error = await saveResource(resource, choice);
+        if (error) nextErrors[resource.key] = error;
       }
-      const error = await saveResource(resource, choice);
-      if (error) nextErrors[resource.key] = error;
-    }
-    setPending(false);
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length === 0) {
-      toast.push('Layouts mapped.', 'ok');
-      router.refresh();
+      setErrors(nextErrors);
+      if (Object.keys(nextErrors).length === 0) {
+        toast.push('Layouts mapped.', 'ok');
+        router.refresh();
+      }
+    } catch {
+      // A rejected request (network down) has no problem body to show; say so instead of hanging.
+      toast.push('Could not save the layout mapping. Check your connection and try again.', 'danger');
+    } finally {
+      setPending(false);
     }
   }
 
@@ -241,10 +274,16 @@ export function MapLayoutsTab({
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)' }}>
           Pick the layout each kind of record belongs to and the field that identifies an existing
           asset. Records that match an existing asset are linked to it; only unmatched records create
-          new assets, which get just their name and the match value. Everything else shows in the
-          integration section on the asset page. Skipped resources are not synced.
+          new assets, which get just their name and the match value. If a layout has no field for the
+          match value, pick Create field and it is added to the layout when you save. Everything else
+          shows in the integration section on the asset page. Skipped resources are not synced.
         </p>
       </header>
+      {!canManageLayouts && (
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>
+          Create new layout and Create field need permission to manage asset layouts.
+        </p>
+      )}
       {loadError && <Tag tone="danger">{loadError}</Tag>}
       {!layouts && !loadError && <Tag tone="default">Loading layouts…</Tag>}
       {layouts &&
@@ -282,7 +321,9 @@ export function MapLayoutsTab({
                       {candidate.name}
                     </option>
                   ))}
-                  <option value={NEW_LAYOUT}>Create new layout</option>
+                  <option value={NEW_LAYOUT} disabled={!canManageLayouts}>
+                    Create new layout
+                  </option>
                   <option value={SKIP}>Skip (do not sync)</option>
                 </Select>
               </Field>
@@ -305,6 +346,9 @@ export function MapLayoutsTab({
                         {field.name}
                       </option>
                     ))}
+                    <option value={CREATE_FIELD} disabled={!canManageLayouts}>
+                      {`Create field "${createFieldLabel(resource)}"`}
+                    </option>
                   </Select>
                 </Field>
               )}

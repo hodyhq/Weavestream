@@ -1,8 +1,7 @@
-import type {
-  IntegrationSection,
-  IntegrationSectionGroup,
-  IntegrationSectionRow,
-} from '@weavestream/shared';
+import type { IntegrationSection, IntegrationSectionGroup } from '@weavestream/shared';
+import { badge, bool, date, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
+
+export { badge, bool, clean, date, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
 
 /**
  * Pure builders for the Google Workspace integration sections. Records
@@ -15,8 +14,6 @@ const DAY_MS = 86_400_000;
 export const INACTIVE_DAYS = 90;
 const MB = 1024 * 1024;
 
-/** A lookup that may be unavailable (missing privilege, API off, report lag). */
-export type Lookup<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 export interface StorageUsage {
   usedMb?: number;
@@ -47,52 +44,6 @@ export interface GoogleUser {
   orgUnitPath?: string;
 }
 
-export type Row = IntegrationSectionRow | null;
-
-const CONTROL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
-
-/** Plain text the section schema accepts: no controls, nothing tag-shaped, capped. */
-export function clean(value: string, max: number): string {
-  return value.replace(CONTROL_RE, '').replace(/<(?=[a-z!/?])/gi, '< ').slice(0, max);
-}
-
-export function text(label: string, value: string | null | undefined): Row {
-  return value ? { kind: 'text', label, value: clean(value, 1_000) } : null;
-}
-
-export function num(label: string, value: number | null | undefined): Row {
-  return typeof value === 'number' && Number.isFinite(value) ? { kind: 'number', label, value } : null;
-}
-
-export function bool(label: string, value: boolean | null | undefined): Row {
-  return typeof value === 'boolean' ? { kind: 'boolean', label, value } : null;
-}
-
-export function badge(label: string, value: string, tone: 'neutral' | 'success' | 'warning' | 'danger'): Row {
-  return { kind: 'badge', label, value: clean(value, 64), tone };
-}
-
-/** ISO string, or an epoch-milliseconds string, as an ISO datetime. */
-export function toIso(value: string | number | null | undefined): string | null {
-  if (value === null || value === undefined || value === '') return null;
-  const ms = typeof value === 'number' || /^\d+$/.test(value) ? Number(value) : Date.parse(value);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-}
-
-export function datetime(label: string, value: string | number | null | undefined): Row {
-  const iso = toIso(value);
-  return iso ? { kind: 'datetime', label, value: iso } : null;
-}
-
-export function date(label: string, value: string | number | null | undefined): Row {
-  const iso = toIso(value);
-  return iso ? { kind: 'date', label, value: iso.slice(0, 10) } : null;
-}
-
-function list(label: string, values: string[]): Row {
-  return { kind: 'list', label, value: values.slice(0, 50).map((value) => clean(value, 200)) };
-}
-
 /**
  * A usage bar against a quota, or (pooled storage: no per-user quota, or
  * a quota of -1 / 0) the used amount as bytes with "pooled" in the label.
@@ -103,15 +54,6 @@ function usage(label: string, usedMb: number | undefined, totalMb: number | unde
     return { kind: 'meter', label, used: usedMb, total: totalMb, unit: 'mb' };
   }
   return { kind: 'bytes', label: `${label} (pooled storage)`, value: usedMb * MB };
-}
-
-export function group(
-  key: string,
-  title: string,
-  icon: IntegrationSectionGroup['icon'],
-  rows: Row[],
-): IntegrationSectionGroup {
-  return { key, title, ...(icon ? { icon } : {}), rows: rows.filter((row): row is IntegrationSectionRow => row !== null).slice(0, 40) };
 }
 
 export function section(groups: IntegrationSectionGroup[]): IntegrationSection {

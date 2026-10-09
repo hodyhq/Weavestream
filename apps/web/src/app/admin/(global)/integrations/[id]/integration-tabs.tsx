@@ -128,12 +128,14 @@ export function IntegrationTabs({
   mappings,
   runs,
   driver,
+  canManageLayouts = true,
 }: {
   initialTab: string;
   integration: IntegrationDto;
   mappings: IntegrationCompanyMappingDto[];
   runs: IntegrationSyncRunDto[];
   driver: DriverDescriptor | null;
+  canManageLayouts?: boolean;
 }) {
   const router = useRouter();
   const sp = useSearchParams();
@@ -279,7 +281,7 @@ export function IntegrationTabs({
             driver={driver}
           />
         )}
-        {tab === 'layouts' && <MapLayoutsTab integration={integration} driver={driver} />}
+        {tab === 'layouts' && <MapLayoutsTab integration={integration} driver={driver} canManageLayouts={canManageLayouts} />}
         {tab === 'runs' && (
           <RunsTab integration={integration} runs={runs} mappings={mappings} />
         )}

@@ -4,7 +4,7 @@
 <!-- aliases: integration overview | rmm sync | import devices | external inventory | connectors -->
 <!-- requires: integration.manage -->
 
-Action1, NinjaOne, UniFi, Google Workspace, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
+Action1, NinjaOne, UniFi, Google Workspace, Level, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
 
 Match keys claim existing unclaimed assets instead of duplicating them. Once linked, integration sync records preserve identity across runs.
 
@@ -72,6 +72,14 @@ Once per Weavestream install, an administrator creates a Google Cloud project, e
 Per customer: **New integration → Google Workspace**, then on **Credentials & schedule** select **Connect with Google** and sign in with the customer's super admin (or a delegated admin with read access). On "Google hasn't verified this app", select **Advanced**, then **Go to Weavestream (unsafe)**: expected for a self-hosted app. If the customer blocks third-party apps, they mark the Client ID **Trusted** under **Security → Access and data control → API controls**. Then map the tenant under **Organizations**, choose layouts and match fields under **Map layouts**, and run a dry run.
 
 Do not leave the app in **Testing**: connections expire after 7 days. **Reconnect** appears when access was revoked or unused for 6 months. Google gives no invoices, purchased seats or renewal dates for direct customers, and usage figures lag 1 to 3 days.
+
+## Configure Level
+<!-- aliases: connect level | level rmm | level.io | level api key | level devices | level groups -->
+<!-- requires: integration.manage -->
+
+Level is read-only and connects with an API key. One integration is one Level account. In Level, open **Settings → API keys**, select **Create API key**, and choose **Read-only** access. In Weavestream, select **New integration → Level**, paste the key into **API key** on **Credentials & schedule**, save, then select **Test connection** and **Check setup**.
+
+Under **Organizations**, each top-level Level group maps to one company; devices in nested groups sync with their top-level group, and devices in no group are not synced. Under **Map layouts**, pick the device layout and match on **Serial number**. Devices without a serial number (often virtual machines) are created and stay linked by their Level id. Everything except name and serial number shows in the **Level** section on the asset: status, hardware, storage per partition, operating system with end of life, network, security, available patches and active alerts. If the key or plan cannot read alerts or patches, those groups say **Not available** and devices still sync. Level does not provide installed software, agent version or warranty dates.
 
 ## Configure Breeze reconstruction sync
 <!-- aliases: configure Breeze reconstruction | Breeze RMM setup | Breeze Partner API | Breeze disaster recovery sync | Breeze documentation sync -->

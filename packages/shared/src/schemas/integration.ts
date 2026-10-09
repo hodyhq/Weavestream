@@ -169,6 +169,8 @@ const resourceDescriptorBaseShape = {
       sourceField: z.string().min(1).max(128),
       layoutHints: z.array(z.string().min(1).max(64)).max(16),
       fieldHints: z.array(z.string().min(1).max(64)).max(16),
+      /** Name of the match field Map layouts offers to create on an existing layout that lacks it. */
+      fieldLabel: z.string().min(1).max(80).optional(),
     })
     .strict()
     .optional(),
@@ -576,6 +578,20 @@ export const updateIntegrationResourceSchema = z
 
 export type CreateIntegrationResourceInput = z.infer<typeof createIntegrationResourceSchema>;
 export type UpdateIntegrationResourceInput = z.infer<typeof updateIntegrationResourceSchema>;
+
+/**
+ * "Map layouts" on an existing layout: make sure it has the field the
+ * resource matches on (the driver's recommended match-key field), creating
+ * it when missing. Only that one minimal field is ever created.
+ */
+export const ensureResourceMatchFieldSchema = z.object({ assetLayoutId: z.string().uuid() }).strict();
+export type EnsureResourceMatchFieldInput = z.infer<typeof ensureResourceMatchFieldSchema>;
+
+export interface EnsureResourceMatchFieldResult {
+  fieldId: string;
+  /** False when the layout already had a compatible field with that slug. */
+  created: boolean;
+}
 
 export const integrationDtoSchema = z.object({
   id: z.string().uuid(),

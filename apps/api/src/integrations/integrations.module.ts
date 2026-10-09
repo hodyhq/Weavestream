@@ -9,6 +9,9 @@ import {
   IntegrationOAuthController,
 } from './oauth/integration-oauth.controller.js';
 import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
+import { AssetLayoutsModule } from '../asset-layouts/asset-layouts.module.js';
+import { IntegrationMatchFieldController } from './integration-match-field.controller.js';
+import { IntegrationMatchFieldService } from './integration-match-field.service.js';
 
 /**
  * Phase 11 — universal integration framework module (API side).
@@ -21,15 +24,16 @@ import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
  * registration inside the worker.
  */
 @Module({
-  imports: [IntegrationsCoreModule],
+  imports: [IntegrationsCoreModule, AssetLayoutsModule],
   controllers: [
     IntegrationsController,
     CloudflareListsController,
     TicketsGlobalController,
     IntegrationOAuthAppsController,
     IntegrationOAuthController,
+    IntegrationMatchFieldController,
   ],
-  providers: [IntegrationSyncQueueRegistrar, IntegrationOAuthService],
+  providers: [IntegrationSyncQueueRegistrar, IntegrationOAuthService, IntegrationMatchFieldService],
   exports: [IntegrationsCoreModule],
 })
 export class IntegrationsModule {}

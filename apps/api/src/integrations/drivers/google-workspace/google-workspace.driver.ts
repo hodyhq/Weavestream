@@ -579,7 +579,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
         targetKind: 'asset' as const,
         targetConfig: {},
         dependsOnResourceKeys: [],
-        matchSuggestions: { sourceField: spec.matchField, layoutHints: spec.layoutHints, fieldHints: spec.fieldHints },
+        matchSuggestions: { sourceField: spec.matchField, layoutHints: spec.layoutHints, fieldHints: spec.fieldHints, fieldLabel: spec.matchLabel },
         minimalFields: spec.matchField === 'name' ? ['name'] : ['name', spec.matchField],
       };
     }),

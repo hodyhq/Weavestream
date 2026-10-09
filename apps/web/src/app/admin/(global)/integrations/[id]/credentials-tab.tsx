@@ -26,6 +26,7 @@ import {
 import { DriverFieldsEditor } from '../driver-fields-editor';
 import { safeIntegrationProblemMessage } from '../integration-feedback';
 import { OAuthConnection } from './oauth-connection';
+import { ApiKeySetupGuide } from './api-key-setup-guide';
 
 const STATUSES: Array<{ value: IntegrationStatusValue; label: string }> = [
   { value: 'ACTIVE', label: 'Active — scheduled syncs run, manual sync allowed' },
@@ -272,6 +273,10 @@ export function CredentialsTab({
       )}
 
       {driver?.oauth && <OAuthConnection integrationId={integration.id} oauth={driver.oauth} setupGuide={driver.setupGuide} />}
+
+      {driver && !driver.oauth && driver.setupGuide && driver.setupGuide.length > 0 && (
+        <ApiKeySetupGuide integrationId={integration.id} steps={driver.setupGuide} hasSecret={integration.hasSecret} />
+      )}
 
       {driver && driver.secretFields.length > 0 && (
         <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
