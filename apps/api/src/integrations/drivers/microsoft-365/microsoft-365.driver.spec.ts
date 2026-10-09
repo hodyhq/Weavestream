@@ -312,7 +312,7 @@ describe('Microsoft365Driver users', () => {
     await driver.fetchRecords(fetchCtx(makeCtx(), 'users'), null);
     const report = calls.find((c) => c.url.startsWith(`${G}/reports/getMailboxUsageDetail`))!;
     expect(report.headers.authorization).toMatch(/^Bearer /);
-    const download = calls.find((c) => c.url.startsWith(CSV_HOST))!;
+    const download = calls.find((c) => new URL(c.url).origin === new URL(CSV_HOST).origin)!;
     expect(download.headers.authorization).toBeUndefined();
   });
 
@@ -321,7 +321,7 @@ describe('Microsoft365Driver users', () => {
       [`${G}/reports/getMailboxUsageDetail`]: { status: 302, headers: { location: 'https://reports.example.net/mailbox.csv' } },
     }));
     await expect(graphReportCsv(makeCtx(), "getMailboxUsageDetail(period='D7')", 'the mailbox usage report')).rejects.toThrow(/unsafe download link/);
-    expect(calls.some((c) => c.url.startsWith('https://reports.example.net'))).toBe(false);
+    expect(calls.some((c) => new URL(c.url).hostname === 'reports.example.net')).toBe(false);
   });
 
   it('detects shared mailboxes with $batch (20 per request, GET only) and flags their licence as wasted', async () => {
