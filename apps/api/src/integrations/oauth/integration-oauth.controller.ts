@@ -14,6 +14,7 @@ import {
   UseFilters,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import {
   integrationOAuthProviderSchema,
   updateIntegrationOAuthAppSchema,
@@ -61,6 +62,16 @@ export class IntegrationOAuthAppsController {
     @Req() req: Request,
   ) {
     return this.apps.update(user, parseProvider(provider), dto, meta(req));
+  }
+
+  /** Check setup: verifies the saved client against the provider (read-only). */
+  @Post(':provider/check')
+  @RequirePermission('settings.manage')
+  @InteractiveOnly()
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  @HttpCode(200)
+  check(@CurrentUser() user: AuthedUser, @Param('provider') provider: string, @Req() req: Request) {
+    return this.apps.check(user, parseProvider(provider), meta(req));
   }
 }
 

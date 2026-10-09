@@ -271,7 +271,7 @@ export function CredentialsTab({
         />
       )}
 
-      {driver?.oauth && <OAuthConnection integrationId={integration.id} oauth={driver.oauth} />}
+      {driver?.oauth && <OAuthConnection integrationId={integration.id} oauth={driver.oauth} setupGuide={driver.setupGuide} />}
 
       {driver && driver.secretFields.length > 0 && (
         <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

@@ -101,6 +101,7 @@ export class IntegrationOAuthService {
     return {
       provider: oauth.provider,
       appConfigured: Boolean(client),
+      redirectUri: this.apps.redirectUri(),
       connection: stored
         ? {
             connectedAs: stored.connectedAs ?? null,

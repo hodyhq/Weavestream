@@ -143,4 +143,51 @@ describe('IntegrationOAuthAppService', () => {
       secretFingerprint: null,
     });
   });
+
+  describe('check (Check setup)', () => {
+    const guide = [{ id: 'credentials', title: 'Paste', body: 'Paste it.' }];
+    function checkSetup(row: Parameters<typeof setup>[0], diagnose = jest.fn(async () => ({ ok: true, passedStepIds: ['client'], failures: [] }))) {
+      const ctx = setup(row);
+      const drivers = (ctx.service as unknown as { drivers: Record<string, unknown> }).drivers;
+      drivers.list = () => [{ key: 'gw', oauth: { provider: 'google', scopes: ['openid'] }, setupGuide: guide }];
+      drivers.kindOf = () => 'pull';
+      drivers.get = () => ({ diagnose });
+      (ctx.service as unknown as { env: { values: Record<string, unknown> } }).env.values = {
+        API_URL: 'https://ws.example.test/api/', INTEGRATION_HTTP_TIMEOUT_MS: 5_000, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1,
+      };
+      return { ...ctx, diagnose };
+    }
+    const actor = { id: 'user-1' } as never;
+    const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+    it('runs the driver client check with the decrypted client and redirect URI, and audits the outcome only', async () => {
+      const { service, diagnose, audit } = checkSetup({
+        clientId: 'client-1', secretCiphertext: `enc[${integrationOAuthAppSecretAad('google')}]shh-secret`, updatedAt: new Date(),
+      });
+      await expect(service.check(actor, 'google', meta)).resolves.toEqual({ ok: true, passedStepIds: ['client'], failures: [] });
+      expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({
+        mode: 'client',
+        oauthClient: { clientId: 'client-1', clientSecret: 'shh-secret' },
+        redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
+      }));
+      expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'settings.integration_oauth_app.check',
+        after: { provider: 'google', ok: true, failedStepIds: [] },
+      }));
+      expect(JSON.stringify(audit.log.mock.calls)).not.toContain('shh-secret');
+    });
+
+    it('fails the credentials step without calling Google when nothing is saved', async () => {
+      const { service, diagnose } = checkSetup(null);
+      await expect(service.check(actor, 'google', meta)).resolves.toMatchObject({
+        ok: false, failures: [{ stepId: 'credentials' }],
+      });
+      expect(diagnose).not.toHaveBeenCalled();
+    });
+
+    it('returns the driver setup guide with the app view', async () => {
+      const { service } = checkSetup(null);
+      await expect(service.get('google')).resolves.toMatchObject({ setupGuide: guide });
+    });
+  });
 });

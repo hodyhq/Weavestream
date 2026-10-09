@@ -120,4 +120,31 @@ describe('IntegrationOAuthAppCard', () => {
     expect(screen.getByText(/Could not load the Google OAuth app/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Client ID')).not.toBeInTheDocument();
   });
+
+  it('renders the setup guide and runs Check setup, turning passed steps green', async () => {
+    const guide = [
+      { id: 'client', title: 'Create the OAuth client', body: 'Create it.' },
+      { id: 'credentials', title: 'Paste the client', body: 'Paste it.' },
+    ];
+    apiFetch.mockResolvedValue({
+      ok: true, status: 200,
+      data: { ok: false, passedStepIds: ['client'], failures: [{ stepId: 'credentials', message: 'Copy both again.' }] },
+    });
+    renderCard(app({ configured: true, clientId: 'client-1', secretFingerprint: 'abc', setupGuide: guide }));
+    // Configured: the guide starts collapsed.
+    fireEvent.click(screen.getByRole('button', { name: /Setup guide/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Check setup/ }));
+    });
+    expect(apiFetch).toHaveBeenCalledWith('/settings/integration-oauth-apps/google/check', { method: 'POST', body: '{}' });
+    expect(screen.getByText('Copy both again.')).toBeInTheDocument();
+    const states = screen.getAllByRole('listitem').map((li) => li.getAttribute('data-state'));
+    expect(states).toEqual(['passed', 'failed']);
+  });
+
+  it('disables Check setup until the app is saved', () => {
+    renderCard(app({ setupGuide: [{ id: 'project', title: 'Create a project', body: 'Do it.' }] }));
+    expect(screen.getByText('Create a project')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Check setup/ })).toBeDisabled();
+  });
 });

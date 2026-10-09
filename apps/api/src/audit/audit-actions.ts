@@ -53,6 +53,8 @@ export const AUDIT_ACTIONS = {
     // Instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`).
     // `after` carries the provider, client id and secret fingerprint only.
     integrationOAuthAppUpdate: 'settings.integration_oauth_app.update',
+    // Check setup on the OAuth app: outcome and failed step ids only.
+    integrationOAuthAppCheck: 'settings.integration_oauth_app.check',
   },
   domain: {
     create: 'domain.create',
@@ -148,6 +150,7 @@ export const AUDIT_ACTIONS = {
     delete: 'integration.delete',
     secretUpdate: 'integration.secret.update',
     testConnection: 'integration.test_connection',
+    setupCheck: 'integration.setup_check',
     companyMappingCreate: 'integration.company_mapping.create',
     companyMappingUpdate: 'integration.company_mapping.update',
     companyMappingDelete: 'integration.company_mapping.delete',

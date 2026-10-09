@@ -24,6 +24,7 @@ describe('IntegrationsController security contract', () => {
     ['list', 'integration.manage'],
     ['get', 'integration.manage'],
     ['testConnection', 'integration.manage'],
+    ['checkSetup', 'integration.manage'],
     ['listSourceOrgs', 'integration.manage'],
     ['listMappings', 'integration.manage'],
     ['createMapping', 'integration.manage'],
@@ -58,6 +59,29 @@ describe('IntegrationsController security contract', () => {
     );
 
     await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs });
+  });
+
+  it('runs the driver connection check and audits only the outcome and step ids', async () => {
+    const diagnose = jest.fn().mockResolvedValue({
+      ok: false, passedStepIds: ['project'], failures: [{ stepId: 'apis', message: 'Enable it.' }],
+    });
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const controller = new IntegrationsController(
+      { loadDriverContext: jest.fn().mockResolvedValue({ integrationId: 'i-1', driver: 'google-workspace', config: {}, secret: { refreshToken: 'r' } }) } as never,
+      {} as never,
+      {} as never,
+      { get: jest.fn().mockReturnValue({ diagnose }) } as never,
+      { values: { INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
+      audit as never,
+      {} as never,
+      {} as never,
+    );
+    const result = await controller.checkSetup({ id: 'actor' } as never, '00000000-0000-4000-8000-000000000001', { ip: '127.0.0.1', headers: {} } as never);
+    expect(result.failures[0]!.stepId).toBe('apis');
+    expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ mode: 'connection', ctx: expect.objectContaining({ integrationId: 'i-1' }) }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.setup_check', after: { ok: false, failedStepIds: ['apis'] },
+    }));
   });
 
   it.each([true, false])('propagates dryRun=%s through the existing sync route', async (dryRun) => {

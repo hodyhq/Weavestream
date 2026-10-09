@@ -319,6 +319,7 @@ describe('IntegrationOAuthService.disconnect and status', () => {
     expect(status).toEqual({
       provider: 'google',
       appConfigured: true,
+      redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
       connection: {
         connectedAs: 'admin@example.test',
         connectedAt: '2026-01-01T00:00:00.000Z',

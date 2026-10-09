@@ -1,8 +1,10 @@
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type {
   IntegrationOAuthApp,
   IntegrationOAuthProvider,
+  IntegrationSetupCheck,
+  SetupGuideStep,
   UpdateIntegrationOAuthAppInput,
 } from '@weavestream/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -55,8 +57,14 @@ export class IntegrationOAuthAppService {
     return [...new Set(scopes)];
   }
 
+  /** Setup guide of the first registered driver of `provider` that ships one. */
+  setupGuideFor(provider: IntegrationOAuthProvider): SetupGuideStep[] | undefined {
+    return this.drivers.list().find((d) => d.oauth?.provider === provider && d.setupGuide)?.setupGuide;
+  }
+
   async get(provider: IntegrationOAuthProvider): Promise<IntegrationOAuthApp> {
     const row = await this.prisma.integrationOAuthApp.findUnique({ where: { provider } });
+    const setupGuide = this.setupGuideFor(provider);
     let secretFingerprint: string | null = null;
     if (row) {
       try {
@@ -80,6 +88,7 @@ export class IntegrationOAuthAppService {
       redirectUri: this.redirectUri(),
       scopes: this.scopesFor(provider),
       updatedAt: row ? row.updatedAt.toISOString() : null,
+      ...(setupGuide ? { setupGuide } : {}),
     };
   }
 
@@ -130,6 +139,46 @@ export class IntegrationOAuthAppService {
       },
     });
     return this.get(provider);
+  }
+
+  /**
+   * Check setup for the instance OAuth app (no customer token): the first
+   * driver of `provider` with a `diagnose()` verifies the client against
+   * the provider. Audited by outcome and failed step ids only.
+   */
+  async check(actor: AuthedUser, provider: IntegrationOAuthProvider, meta: RequestMeta): Promise<IntegrationSetupCheck> {
+    const descriptor = this.drivers.list().find((d) => d.oauth?.provider === provider);
+    const driver = descriptor && this.drivers.kindOf(descriptor.key) === 'pull' ? this.drivers.get(descriptor.key) : null;
+    if (!driver?.diagnose) throw new BadRequestException('This provider has no setup check.');
+    const client = await this.getClient(provider);
+    const result: IntegrationSetupCheck = client
+      ? await driver.diagnose({
+          mode: 'client',
+          oauthClient: client,
+          redirectUri: this.redirectUri(),
+          http: {
+            timeoutMs: this.env.values.INTEGRATION_HTTP_TIMEOUT_MS,
+            maxRetries: this.env.values.INTEGRATION_HTTP_MAX_RETRIES,
+            backoffMs: this.env.values.INTEGRATION_HTTP_BACKOFF_MS,
+          },
+          correlationId: randomUUID(),
+        })
+      : {
+          ok: false,
+          passedStepIds: [],
+          failures: [{ stepId: 'credentials', message: 'Save the client ID and client secret first, then check again.' }],
+        };
+    await this.audit.log({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.settings.integrationOAuthAppCheck,
+      entityType: 'IntegrationOAuthApp',
+      entityId: provider,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: null,
+      after: { provider, ok: result.ok, failedStepIds: result.failures.map((f) => f.stepId) },
+    });
+    return result;
   }
 
   /**

@@ -33,7 +33,10 @@ import {
   type UpdateIntegrationResourceInput,
   type IntegrationCompletenessQuery,
   type IntegrationGapsQuery,
+  type IntegrationSetupCheck,
 } from '@weavestream/shared';
+import { Throttle } from '@nestjs/throttler';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import {
   CurrentUser,
@@ -284,6 +287,48 @@ export class IntegrationsController {
       }
       throw new BadRequestException(`Connection test failed: ${message}`);
     }
+  }
+
+  /**
+   * Check setup for a connected OAuth integration: the driver probes each
+   * provider API once (read-only) and maps failures to setup guide steps.
+   * Audited like Test connection; only step ids and the outcome are kept.
+   */
+  @Post(':id/check')
+  @RequirePermission('integration.manage')
+  @InteractiveOnly()
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  @HttpCode(200)
+  async checkSetup(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ): Promise<IntegrationSetupCheck> {
+    const ctx = await this.integrations.loadDriverContext(id);
+    const driver = this.drivers.get(ctx.driver);
+    if (!driver.diagnose) throw new BadRequestException('This integration has no setup check.');
+    const result = await driver.diagnose({
+      mode: 'connection',
+      ctx: {
+        config: ctx.config,
+        secret: ctx.secret,
+        integrationId: ctx.integrationId,
+        oauthClient: ctx.oauthClient,
+        http: this.httpDefaults(),
+        correlationId: randomUUID(),
+      },
+    });
+    await this.audit.log({
+      actorId: user.id,
+      action: AUDIT_ACTIONS.integration.setupCheck,
+      entityType: 'Integration',
+      entityId: id,
+      ip: meta(req).ip,
+      userAgent: meta(req).userAgent,
+      before: null,
+      after: { ok: result.ok, failedStepIds: result.failures.map((f) => f.stepId) },
+    });
+    return result;
   }
 
   @Get(':id/source-orgs')

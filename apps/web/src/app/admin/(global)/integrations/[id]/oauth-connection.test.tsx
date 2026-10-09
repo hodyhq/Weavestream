@@ -25,7 +25,7 @@ const oauth: DriverOAuthDescriptor = {
 };
 
 function status(over: Record<string, unknown> = {}) {
-  return { ok: true, status: 200, data: { provider: 'google', appConfigured: true, connection: null, ...over } };
+  return { ok: true, status: 200, data: { provider: 'google', appConfigured: true, redirectUri: 'https://ws.example.test/cb', connection: null, ...over } };
 }
 
 async function renderIt() {
@@ -121,5 +121,24 @@ describe('OAuthConnection', () => {
     apiFetch.mockResolvedValueOnce(status());
     await renderIt();
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('shows the setup guide and runs the connection check once connected', async () => {
+    apiFetch
+      .mockResolvedValueOnce(status({ connection: { connectedAs: 'admin@example.test', connectedAt: '2026-10-01T00:00:00.000Z', grantedScopes: [] } }))
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { ok: true, passedStepIds: ['connect'], failures: [] } });
+    await act(async () => {
+      render(
+        <ToastProvider>
+          <OAuthConnection integrationId="int-1" oauth={oauth} setupGuide={[{ id: 'connect', title: 'Connect a customer', body: 'Sign in.' }]} />
+        </ToastProvider>,
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Setup guide/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Check setup/ }));
+    });
+    expect(apiFetch).toHaveBeenLastCalledWith('/admin/integrations/int-1/check', { method: 'POST', body: '{}' });
+    expect(screen.getByText('Setup check passed.')).toBeInTheDocument();
   });
 });

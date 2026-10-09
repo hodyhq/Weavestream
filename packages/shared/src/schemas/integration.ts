@@ -325,6 +325,62 @@ export const driverOAuthDescriptorSchema = z
   .strict();
 export type DriverOAuthDescriptor = z.infer<typeof driverOAuthDescriptorSchema>;
 
+// ---------------------------------------------------------------------
+// Setup guide (step-by-step provider setup shown in the UI)
+// ---------------------------------------------------------------------
+
+/** Values the UI fills in at render time (they depend on the install). */
+export const setupGuideComputedValueSchema = z.enum(['redirectUri', 'scopes', 'authorizedOrigin']);
+export type SetupGuideComputedValue = z.infer<typeof setupGuideComputedValueSchema>;
+
+const setupGuideLabelSchema = z.string().min(1).max(80);
+
+/**
+ * One numbered setup step. `body` is plain text with a tiny markdown
+ * subset (blank-line paragraphs, `- ` bullets, `**bold**`) that the UI
+ * renders as React elements, never as HTML. Links are https only.
+ */
+export const setupGuideStepSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{1,48}$/),
+    title: z.string().min(1).max(120),
+    body: z.string().min(1).max(3000),
+    copyValues: z
+      .array(
+        z.union([
+          z.object({ label: setupGuideLabelSchema, value: z.string().min(1).max(2048) }).strict(),
+          z.object({ label: setupGuideLabelSchema, computed: setupGuideComputedValueSchema }).strict(),
+        ]),
+      )
+      .max(6)
+      .optional(),
+    links: z
+      .array(z.object({ label: setupGuideLabelSchema, href: httpsUrlSchema }).strict())
+      .max(6)
+      .optional(),
+  })
+  .strict();
+export type SetupGuideStep = z.infer<typeof setupGuideStepSchema>;
+
+export const setupGuideSchema = z
+  .array(setupGuideStepSchema)
+  .min(1)
+  .max(20)
+  .refine((steps) => new Set(steps.map((s) => s.id)).size === steps.length, 'Setup guide step ids must be unique');
+
+/**
+ * Result of a "Check setup" run. `passedStepIds` turn green in the guide;
+ * each failure names the step to revisit with a fixed message (provider
+ * error text is never passed through).
+ */
+export const integrationSetupCheckSchema = z.object({
+  ok: z.boolean(),
+  passedStepIds: z.array(z.string()),
+  /** `stepId` null: a problem not tied to one step (e.g. rate limited, try again). */
+  failures: z.array(z.object({ stepId: z.string().nullable(), message: z.string() })),
+});
+export type IntegrationSetupCheck = z.infer<typeof integrationSetupCheckSchema>;
+
 export const driverDescriptorSchema = z
   .object({
   /** Stable id used as `Integration.driver` and in registry lookups. */
@@ -346,6 +402,8 @@ export const driverDescriptorSchema = z
   resources: z.array(driverResourceDescriptorSchema).default([]),
   /** Present when the driver connects with the OAuth authorization-code flow. */
   oauth: driverOAuthDescriptorSchema.optional(),
+  /** Optional step-by-step provider setup guide rendered in the UI. */
+  setupGuide: setupGuideSchema.optional(),
   /** Driver capabilities surfaced to the UI. */
   capabilities: z.object({
     /**
@@ -1157,6 +1215,8 @@ export const integrationOAuthAppSchema = z.object({
   /** Union of the scopes every registered driver of this provider requests. */
   scopes: z.array(z.string()),
   updatedAt: z.string().nullable(),
+  /** Setup guide of the first registered driver of this provider, if any. */
+  setupGuide: z.array(setupGuideStepSchema).optional(),
 });
 export type IntegrationOAuthApp = z.infer<typeof integrationOAuthAppSchema>;
 
@@ -1177,6 +1237,8 @@ export type UpdateIntegrationOAuthAppInput = z.infer<typeof updateIntegrationOAu
 export const integrationOAuthStatusSchema = z.object({
   provider: integrationOAuthProviderSchema,
   appConfigured: z.boolean(),
+  /** Callback URL registered with the provider (shown in the setup guide). */
+  redirectUri: z.string(),
   connection: z
     .object({
       connectedAs: z.string().nullable(),

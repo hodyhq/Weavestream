@@ -7,11 +7,14 @@ import type {
   DriverOAuthDescriptor,
   IntegrationOAuthStartResponse,
   IntegrationOAuthStatus,
+  IntegrationSetupCheck,
+  SetupGuideStep,
 } from '@weavestream/shared';
 import { INTEGRATION_OAUTH_PROVIDER_LABELS, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { FormattedDate } from '../../../../../lib/timezone-context';
 import { Btn, Icon, Tag, useToast } from '../../../../../components/ui';
+import { SetupGuide } from '../../../../../components/integrations/setup-guide';
 
 /**
  * Connect / Reconnect / Disconnect for drivers whose descriptor declares
@@ -22,9 +25,11 @@ import { Btn, Icon, Tag, useToast } from '../../../../../components/ui';
 export function OAuthConnection({
   integrationId,
   oauth,
+  setupGuide,
 }: {
   integrationId: string;
   oauth: DriverOAuthDescriptor;
+  setupGuide?: SetupGuideStep[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -33,6 +38,8 @@ export function OAuthConnection({
   const [status, setStatus] = useState<IntegrationOAuthStatus | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState<'connect' | 'disconnect' | null>(null);
+  const [check, setCheck] = useState<IntegrationSetupCheck | null>(null);
+  const [checking, setChecking] = useState(false);
   const label = INTEGRATION_OAUTH_PROVIDER_LABELS[oauth.provider];
 
   const load = useCallback(async () => {
@@ -81,6 +88,20 @@ export function OAuthConnection({
     }
     // Same-tab navigation to the provider; `open` rather than `location` so it is testable.
     window.open(res.data.authorizeUrl, '_self');
+  }
+
+  async function runCheck() {
+    setChecking(true);
+    const res = await apiFetch<IntegrationSetupCheck>(`/admin/integrations/${integrationId}/check`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    setChecking(false);
+    if (!res.ok || !res.data) {
+      toast.push(problemMessage(res.problem) ?? 'Could not run the setup check.', 'danger');
+      return;
+    }
+    setCheck(res.data);
   }
 
   async function disconnect() {
@@ -171,6 +192,18 @@ export function OAuthConnection({
               </Btn>
             )}
           </div>
+          {setupGuide && setupGuide.length > 0 && (
+            <SetupGuide
+              steps={setupGuide}
+              redirectUri={status.redirectUri}
+              scopes={oauth.scopes}
+              check={check}
+              onCheck={() => void runCheck()}
+              checking={checking}
+              checkDisabledReason={connection ? null : `Connect with ${label} first, then press Check setup.`}
+              defaultOpen={!connection}
+            />
+          )}
         </>
       )}
     </section>

@@ -10,7 +10,7 @@ import type {
   ReconstructionGapDetails,
   ReconstructionInput,
 } from '../reconstruction/reconstruction-target.js';
-import type { ReconstructionGapKind } from '@weavestream/shared';
+import type { IntegrationSetupCheck, ReconstructionGapKind } from '@weavestream/shared';
 import type { FieldType } from '@prisma/client';
 import type { OAuthClientCredentials } from '../oauth/oauth-token.js';
 
@@ -278,7 +278,25 @@ export interface IntegrationDriver {
   ): Promise<TicketListResponse>;
 
   getTicket?(ctx: TicketContext, ticketId: string): Promise<TicketDetailDto>;
+
+  /**
+   * Optional "Check setup" for drivers that ship a `setupGuide`. `client`
+   * verifies the instance OAuth app without a customer token; `connection`
+   * probes a connected integration. Read-only, and failures carry fixed
+   * messages naming a guide step (never provider error text).
+   */
+  diagnose?(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck>;
 }
+
+export type DriverDiagnoseInput =
+  | {
+      mode: 'client';
+      oauthClient: OAuthClientCredentials;
+      redirectUri: string;
+      http: IntegrationContext['http'];
+      correlationId: string;
+    }
+  | { mode: 'connection'; ctx: IntegrationContext };
 
 /**
  * Type guard for drivers that advertise the optional ticket surface.

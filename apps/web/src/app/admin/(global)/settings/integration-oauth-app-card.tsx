@@ -1,11 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import type { IntegrationOAuthApp } from '@weavestream/shared';
+import type { IntegrationOAuthApp, IntegrationSetupCheck } from '@weavestream/shared';
 import { INTEGRATION_OAUTH_PROVIDER_LABELS, problemMessage } from '@weavestream/shared';
 import { copyToClipboard } from '@weavestream/shared/browser';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Field, Icon, Input, Tag, useToast } from '../../../../components/ui';
+import { SetupGuide } from '../../../../components/integrations/setup-guide';
 import { SectionHeader } from './settings-form';
 
 /**
@@ -27,6 +28,8 @@ export function IntegrationOAuthAppCard({
   const [clientId, setClientId] = useState(initial?.clientId ?? '');
   const [clientSecret, setClientSecret] = useState('');
   const [pending, setPending] = useState(false);
+  const [check, setCheck] = useState<IntegrationSetupCheck | null>(null);
+  const [checking, setChecking] = useState(false);
   const label = INTEGRATION_OAUTH_PROVIDER_LABELS[provider];
 
   if (!app) {
@@ -62,7 +65,22 @@ export function IntegrationOAuthAppCard({
     setApp(res.data);
     setClientId(res.data.clientId ?? '');
     setClientSecret('');
+    setCheck(null);
     toast.push(`${label} OAuth app saved.`, 'ok');
+  }
+
+  async function runCheck() {
+    setChecking(true);
+    const res = await apiFetch<IntegrationSetupCheck>(`/settings/integration-oauth-apps/${provider}/check`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    setChecking(false);
+    if (!res.ok || !res.data) {
+      toast.push(problemMessage(res.problem) ?? 'Could not run the setup check.', 'danger');
+      return;
+    }
+    setCheck(res.data);
   }
 
   async function copy(value: string, what: string) {
@@ -135,6 +153,19 @@ export function IntegrationOAuthAppCard({
           Save OAuth app
         </Btn>
       </div>
+
+      {app.setupGuide && app.setupGuide.length > 0 && (
+        <SetupGuide
+          steps={app.setupGuide}
+          redirectUri={app.redirectUri}
+          scopes={app.scopes}
+          check={check}
+          onCheck={() => void runCheck()}
+          checking={checking}
+          checkDisabledReason={app.configured ? null : 'Save the client ID and secret first, then press Check setup.'}
+          defaultOpen={!app.configured}
+        />
+      )}
     </section>
   );
 }

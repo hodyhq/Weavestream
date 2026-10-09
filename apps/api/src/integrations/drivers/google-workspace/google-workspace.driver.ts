@@ -18,6 +18,10 @@ import {
 } from '../integration-driver.js';
 import { assertRecommendedDestinations, parseRetryAfter } from '../driver-utils.js';
 import { oauthFetch } from '../../oauth/oauth-token.js';
+import type { IntegrationSetupCheck } from '@weavestream/shared';
+import type { DriverDiagnoseInput } from '../integration-driver.js';
+import { diagnoseGoogleClient, diagnoseGoogleConnection } from './google-workspace.diagnose.js';
+import { GOOGLE_WORKSPACE_SETUP_GUIDE } from './google-workspace.setup-guide.js';
 import {
   buildAlertSection,
   buildChromeSection,
@@ -50,10 +54,10 @@ import {
  * with a note in place of the missing data.
  */
 
-const DIRECTORY = 'https://admin.googleapis.com/admin/directory/v1';
-const REPORTS = 'https://admin.googleapis.com/admin/reports/v1';
-const LICENSING = 'https://licensing.googleapis.com/apps/licensing/v1';
-const ALERT_CENTER = 'https://alertcenter.googleapis.com/v1beta1';
+export const DIRECTORY = 'https://admin.googleapis.com/admin/directory/v1';
+export const REPORTS = 'https://admin.googleapis.com/admin/reports/v1';
+export const LICENSING = 'https://licensing.googleapis.com/apps/licensing/v1';
+export const ALERT_CENTER = 'https://alertcenter.googleapis.com/v1beta1';
 const SCOPE = 'https://www.googleapis.com/auth/';
 
 export const GOOGLE_WORKSPACE_OAUTH: DriverOAuthDescriptor = {
@@ -222,10 +226,10 @@ export class GoogleAccessError extends DriverAuthError {
   }
 }
 
-const RATE_LIMIT_REASONS = new Set(['userRateLimitExceeded', 'quotaExceeded', 'rateLimitExceeded', 'RATE_LIMIT_EXCEEDED']);
-const API_DISABLED_REASONS = new Set(['accessNotConfigured', 'SERVICE_DISABLED']);
+export const RATE_LIMIT_REASONS = new Set(['userRateLimitExceeded', 'quotaExceeded', 'rateLimitExceeded', 'RATE_LIMIT_EXCEEDED']);
+export const API_DISABLED_REASONS = new Set(['accessNotConfigured', 'SERVICE_DISABLED']);
 
-function apiName(url: string): string {
+export function apiName(url: string): string {
   if (url.startsWith(LICENSING)) return 'Enterprise License Manager API';
   if (url.startsWith(ALERT_CENTER)) return 'Google Workspace Alert Center API';
   if (url.startsWith(REPORTS)) return 'Admin SDK API (Reports)';
@@ -233,7 +237,7 @@ function apiName(url: string): string {
 }
 
 /** Google error `reason` values from both the v1 (`errors[]`) and v2 (`details[]`) shapes. */
-async function errorReasons(res: Response): Promise<Set<string>> {
+export async function errorReasons(res: Response): Promise<Set<string>> {
   const body = (await res.json().catch(() => null)) as {
     error?: { status?: string; errors?: Array<{ reason?: string }>; details?: Array<{ reason?: string }> };
   } | null;
@@ -503,6 +507,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
     configFields: [],
     secretFields: [],
     oauth: GOOGLE_WORKSPACE_OAUTH,
+    setupGuide: GOOGLE_WORKSPACE_SETUP_GUIDE,
     resources: RESOURCE_KEYS.map((key) => {
       const spec = RESOURCES[key];
       return {
@@ -525,6 +530,10 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
       reconstructionCompleteness: false,
     },
   };
+
+  diagnose(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck> {
+    return input.mode === 'client' ? diagnoseGoogleClient(input) : diagnoseGoogleConnection(input.ctx);
+  }
 
   async testConnection(ctx: IntegrationContext): Promise<{ ok: true; details?: string }> {
     const customer = await getCustomer(ctx);
