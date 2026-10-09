@@ -66,7 +66,7 @@ The **Level RMM** section on each device keeps only what a layout does not have:
 - **A field someone changed** is not overwritten. When it differs from Level, it is listed under **Differences** at the bottom of the Level RMM section, with the Weavestream value and the Level RMM value:
   - **Use Level RMM value** writes the Level value now, and the field follows Level again.
   - **Keep ours** keeps your value and stops flagging that field on that device until the Level value changes again.
-- Every open difference across all companies is also listed on the integration's **Differences** tab (**Admin > Integrations > your Level integration**), filterable by company, with the same two buttons. Resolving a difference needs permission to edit assets in that company and is recorded in the audit log. Differences are never shown to client users.
+- Every open difference across all companies is also listed on the integration's **Differences** tab (**Admin > Integrations > your Level integration**), filterable by company, with the same two buttons. Tick several rows (or **Select all** matching the company filter) to resolve them in one go; the tab confirms first and then lists what was applied, skipped or failed. Resolving a difference needs permission to edit assets in that company and is recorded in the audit log. Differences are never shown to client users.
 
 Devices **without a serial number** (common for virtual machines) are created as new assets on the first sync and stay linked by their Level device id afterwards; they cannot match an existing asset.
 
@@ -135,6 +135,6 @@ An adopted asset keeps the name you gave it. Assets that Level created follow th
 - **Tenant isolation.** A company only receives devices of the top-level group mapped to it, and only when that group is a top-level group of the connected account.
 - **No raw Level errors.** Errors shown in Weavestream are fixed messages; Level's own error text is never passed through.
 - **Hidden from client users.** Level sections and differences are never shown to client users, even on assets they can see.
-- **Audited choices.** Resolving a difference needs permission to edit that asset's company and writes an `integration.difference.resolve` audit row (ids and the choice, never the values).
+- **Audited choices.** Resolving a difference needs permission to edit that asset's company and writes an `integration.difference.resolve` audit row (ids and the choice, never the values). A bulk action on the **Differences** tab writes one such row per difference plus an `integration.difference.resolve_bulk` summary row (counts only); differences in companies you cannot edit are skipped and listed.
 
 Reference: [Level public API, getting started](https://docs.level.io/en/articles/12152745-public-api-getting-started) and the [Level API reference](https://developers.level.io).

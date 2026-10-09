@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { resolveIntegrationDifferencesBulkSchema } from '@weavestream/shared';
 import { REQUIRE_PERMISSION_KEY } from '../rbac/require-permission.decorator.js';
 import {
   AssetIntegrationDifferencesController,
@@ -54,8 +55,9 @@ function setup(found: unknown = record()) {
   const audit = { log: jest.fn().mockResolvedValue(undefined) };
   const assets = { update: jest.fn().mockResolvedValue({}) };
   const provenance = { lockScope: jest.fn().mockResolvedValue(undefined) };
-  const service = new IntegrationDifferencesService(prisma as never, audit as never, assets as never, provenance as never);
-  return { service, prisma, audit, assets, provenance };
+  const permissions = { can: jest.fn().mockResolvedValue({ allowed: true }) };
+  const service = new IntegrationDifferencesService(prisma as never, audit as never, assets as never, provenance as never, permissions as never);
+  return { service, prisma, audit, assets, provenance, permissions };
 }
 
 const input = (choice: 'source' | 'local') => ({ syncRecordId: RECORD, assetFieldId: FIELD, choice });
@@ -198,5 +200,137 @@ describe('IntegrationDifferencesService.list', () => {
       action: 'integration.manage',
       companyIdFrom: undefined,
     });
+  });
+});
+
+describe('IntegrationDifferencesService.resolveBulk', () => {
+  const OTHER = '00000000-0000-4000-8000-0000000000c2';
+  const ASSET_2 = '00000000-0000-4000-8000-0000000000a2';
+  const FIELD_2 = '00000000-0000-4000-8000-0000000000f2';
+  const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const diff = { sourceValue: 'host-b', sourceFingerprint: checksum('host-b'), localFingerprint: checksum('mine'), detectedAt: '2026-10-01T00:00:00.000Z' };
+  const row = (recordId: string, companyId = COMPANY, fields = [FIELD]) => ({
+    id: recordId, companyId, assetId: companyId === COMPANY ? ASSET : ASSET_2,
+    fieldDiffs: Object.fromEntries(fields.map((f) => [f, diff])),
+    asset: { name: `Asset ${recordId.slice(-2)}` },
+  });
+
+  /** `rows` answer the selection; `resolve` then re-reads each record by id. */
+  function bulkSetup(rows: Array<ReturnType<typeof row>>, mapped = [COMPANY, OTHER]) {
+    const ctx = setup();
+    ctx.prisma.integration.findUnique.mockResolvedValue({ companyMappings: mapped.map((companyId) => ({ companyId })) });
+    ctx.prisma.integrationSyncRecord.findMany.mockResolvedValue(rows);
+    ctx.prisma.integrationSyncRecord.findFirst.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      const found = rows.find((r) => r.id === where.id);
+      return found ? record({ id: found.id, fieldDiffs: found.fieldDiffs }) : null;
+    });
+    return ctx;
+  }
+
+  it('resolves ticked rows, checks asset.write once per company and skips the ones the actor cannot edit', async () => {
+    const rows = [row(id(1), COMPANY, [FIELD, FIELD_2]), row(id(2), OTHER)];
+    const { service, prisma, permissions, audit, assets } = bulkSetup(rows);
+    permissions.can.mockImplementation(async (_user: unknown, _action: string, target: { companyId: string }) => ({ allowed: target.companyId === COMPANY }));
+    const result = await service.resolveBulk(ADMIN, 'int-1', {
+      choice: 'local',
+      items: [
+        { syncRecordId: id(1), assetFieldId: FIELD },
+        { syncRecordId: id(1), assetFieldId: FIELD_2 },
+        { syncRecordId: id(1), assetFieldId: FIELD }, // duplicate: once
+        { syncRecordId: id(2), assetFieldId: FIELD },
+        { syncRecordId: id(9), assetFieldId: FIELD }, // another integration's record: not returned
+      ],
+    }, META);
+    expect(result.applied).toBe(2);
+    expect(result.failed).toEqual([]);
+    expect(result.nextCursor).toBeNull();
+    expect(result.skipped).toEqual([
+      { syncRecordId: id(9), assetFieldId: FIELD, assetName: null, reason: 'This difference is no longer open.' },
+      { syncRecordId: id(2), assetFieldId: FIELD, assetName: 'Asset 02', reason: 'You cannot edit assets in this company.' },
+    ]);
+    expect(permissions.can).toHaveBeenCalledTimes(2);
+    expect(permissions.can).toHaveBeenCalledWith(ADMIN, 'asset.write', { companyId: OTHER });
+    // Selection is scoped to this integration's mapped companies.
+    expect(prisma.integrationSyncRecord.findMany.mock.calls[0]![0].where).toMatchObject({
+      companyId: { in: [COMPANY, OTHER] }, companyMapping: { integrationId: 'int-1' },
+    });
+    // The skipped company's record is never read or written.
+    expect(prisma.integrationSyncRecord.findFirst).not.toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ companyId: OTHER }) }));
+    expect(assets.update).not.toHaveBeenCalled();
+    // One row per resolved item plus one summary row.
+    expect(audit.log).toHaveBeenCalledTimes(3);
+    expect(audit.log).toHaveBeenLastCalledWith(expect.objectContaining({
+      action: 'integration.difference.resolve_bulk',
+      entityType: 'Integration',
+      entityId: 'int-1',
+      after: { choice: 'local', mode: 'items', companyId: null, applied: 2, skipped: 2, failed: 0 },
+    }));
+  });
+
+  it('selects by the company filter after the cursor, capped at 500 without splitting a record', async () => {
+    const rows = [row(id(1), COMPANY, [FIELD, FIELD_2]), ...Array.from({ length: 500 }, (_, i) => row(id(i + 2)))];
+    const { service, prisma } = bulkSetup(rows);
+    const result = await service.resolveBulk(ADMIN, 'int-1', { choice: 'local', filter: { companyId: COMPANY, cursor: id(0) } }, META);
+    // 2 + 498 = 500; the next record would pass the cap, so the batch ends before it.
+    expect(result.applied).toBe(500);
+    expect(result.nextCursor).toBe(id(499));
+    const query = prisma.integrationSyncRecord.findMany.mock.calls[0]![0];
+    expect(query.where).toMatchObject({ companyId: { in: [COMPANY] }, id: { gt: id(0) }, companyMapping: { integrationId: 'int-1' } });
+    expect(query.take).toBe(501);
+    expect(query.orderBy).toEqual({ id: 'asc' });
+  });
+
+  it('ends the filter walk when the last batch fits', async () => {
+    const { service } = bulkSetup([row(id(1)), row(id(2), OTHER)]);
+    const result = await service.resolveBulk(ADMIN, 'int-1', { choice: 'local', filter: {} }, META);
+    expect(result).toMatchObject({ applied: 2, nextCursor: null });
+  });
+
+  it('404s a filter company that is not mapped, and an unknown integration', async () => {
+    const { service, prisma } = bulkSetup([], [COMPANY]);
+    await expect(service.resolveBulk(ADMIN, 'int-1', { choice: 'local', filter: { companyId: OTHER } }, META))
+      .rejects.toBeInstanceOf(NotFoundException);
+    prisma.integration.findUnique.mockResolvedValue(null);
+    await expect(service.resolveBulk(ADMIN, 'nope', { choice: 'local', filter: {} }, META)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('reports partial failures with fixed reasons and keeps going', async () => {
+    const rows = [row(id(1)), row(id(2)), row(id(3)), row(id(4))];
+    const { service, prisma, assets } = bulkSetup(rows);
+    prisma.integrationSyncRecord.updateMany
+      .mockResolvedValueOnce({ count: 0 }) // a sync rewrote record 1
+      .mockResolvedValue({ count: 1 });
+    assets.update
+      .mockRejectedValueOnce(new BadRequestException({ error: 'ValidationError' })) // record 2
+      .mockRejectedValueOnce(new Error('db down: internal detail')) // record 3
+      .mockResolvedValue({});
+    const result = await service.resolveBulk(ADMIN, 'int-1', { choice: 'source', items: rows.map((r) => ({ syncRecordId: r.id, assetFieldId: FIELD })) }, META);
+    expect(result.applied).toBe(1);
+    expect(result.failed.map((f) => [f.syncRecordId, f.reason])).toEqual([
+      [id(1), 'The integration synced this asset just now. Try again.'],
+      [id(2), 'The source value does not fit this field.'],
+      [id(3), 'Could not resolve this difference.'],
+    ]);
+    expect(JSON.stringify(result)).not.toContain('internal detail');
+  });
+
+  it('denies client users before reading anything', async () => {
+    const { service, prisma } = bulkSetup([row(id(1))]);
+    await expect(service.resolveBulk({ id: 'u', role: 'CLIENT_USER' } as never, 'int-1', { choice: 'local', filter: {} }, META))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.integration.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('is gated by integration.manage, and the body takes items or a filter, at most 500 items', () => {
+    expect(Reflect.getMetadata(REQUIRE_PERMISSION_KEY, IntegrationDifferencesController.prototype.resolveBulk)).toEqual({
+      action: 'integration.manage',
+      companyIdFrom: undefined,
+    });
+    const item = { syncRecordId: RECORD, assetFieldId: FIELD };
+    expect(resolveIntegrationDifferencesBulkSchema.safeParse({ choice: 'source', items: [item] }).success).toBe(true);
+    expect(resolveIntegrationDifferencesBulkSchema.safeParse({ choice: 'local', filter: { companyId: COMPANY } }).success).toBe(true);
+    expect(resolveIntegrationDifferencesBulkSchema.safeParse({ choice: 'local' }).success).toBe(false);
+    expect(resolveIntegrationDifferencesBulkSchema.safeParse({ choice: 'local', items: [item], filter: {} }).success).toBe(false);
+    expect(resolveIntegrationDifferencesBulkSchema.safeParse({ choice: 'local', items: Array(501).fill(item) }).success).toBe(false);
   });
 });

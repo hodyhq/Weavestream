@@ -179,6 +179,9 @@ export const AUDIT_ACTIONS = {
     // A person chose the source value or kept theirs for a standard-field
     // difference. Rows carry ids and the choice, never field values.
     differenceResolve: 'integration.difference.resolve',
+    // Summary of a Differences tab bulk action (counts only); each item
+    // also writes its own differenceResolve row.
+    differenceResolveBulk: 'integration.difference.resolve_bulk',
     assetArchived: 'integration.asset.archived',
     assetReleased: 'integration.asset.released',
     matchAmbiguous: 'integration.match.ambiguous',
