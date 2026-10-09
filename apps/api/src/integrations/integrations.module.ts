@@ -20,6 +20,8 @@ import {
   IntegrationDifferencesController,
 } from './integration-differences.controller.js';
 import { IntegrationDifferencesService } from './integration-differences.service.js';
+import { IntegrationPriorityController } from './integration-priority.controller.js';
+import { IntegrationPriorityService } from './integration-priority.service.js';
 
 /**
  * Phase 11 — universal integration framework module (API side).
@@ -43,6 +45,7 @@ import { IntegrationDifferencesService } from './integration-differences.service
     IntegrationMatchFieldController,
     IntegrationDifferencesController,
     AssetIntegrationDifferencesController,
+    IntegrationPriorityController,
   ],
   providers: [
     IntegrationSyncQueueRegistrar,
@@ -50,6 +53,7 @@ import { IntegrationDifferencesService } from './integration-differences.service
     MicrosoftReportNamesService,
     IntegrationMatchFieldService,
     IntegrationDifferencesService,
+    IntegrationPriorityService,
   ],
   exports: [IntegrationsCoreModule],
 })

@@ -1020,6 +1020,10 @@ model SystemSetting {
   // off. While off, AuthGuard refuses every key and no key can be created;
   // keys are not revoked, so turning it back on restores them.
   apiKeysEnabled            Boolean  @default(false) @map("api_keys_enabled")
+  // Which integration's values win when several are bound to one asset:
+  // driver keys, highest priority first. NULL = the shared default order
+  // (DEFAULT_INTEGRATION_PRIORITY); read through resolveIntegrationPriority.
+  integrationPriority       Json?    @map("integration_priority")
   updatedAt                 DateTime @updatedAt @map("updated_at")
   updatedBy                 String?  @map("updated_by") @db.Uuid
 

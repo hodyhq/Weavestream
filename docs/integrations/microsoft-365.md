@@ -40,7 +40,7 @@ Some data needs a licence the customer may not have. The record still syncs; the
 | Data | Needs | Without it |
 |---|---|---|
 | Last sign-in, MFA registered, MFA coverage | Microsoft Entra ID P1 (included in Microsoft 365 Business Premium, E3, E5) | "Not available (needs Entra ID P1)"; the wasted-licence rule then ignores sign-ins |
-| Computers and Mobile devices | Microsoft Intune | Nothing syncs for those two resources; the run shows a warning, and the integration is not paused |
+| Computers and Mobile devices | Microsoft Intune and `DeviceManagementManagedDevices.Read.All` | Both resources are skipped with a run warning: "Intune is not licensed in this tenant" when the permission is granted, otherwise which permission is missing. The run still succeeds, users, groups and the tenant sync, and devices already linked are left untouched. The integration is not paused. |
 | Recent security alerts | A Microsoft Defender or other security licence | "Not available (needs Microsoft Defender ...)" |
 | Mailbox and OneDrive storage per user | Real names in usage reports (see below) | "Hidden by the tenant's report privacy setting" |
 
@@ -59,6 +59,8 @@ On every sync of a mapped tenant, its **verified** custom domains go to the comp
 ### How Microsoft updates your fields
 
 The same rules as the other integrations: the first sync of a record writes every mapped field; later syncs fill empty fields and follow Microsoft while a field still holds the value Microsoft wrote last; a field someone changed is listed under **Differences** (on the asset and on the integration's **Differences** tab) with **Use Microsoft 365 value** and **Keep ours**. A value Microsoft does not report is never cleared.
+
+**Match-first also links to assets other integrations created.** A user whose email (or a device whose serial number) equals **exactly one** asset another integration already syncs, such as the same person from Google Workspace or a laptop from Level RMM, joins that asset instead of creating a second one. The integration priority order (**Admin > Settings > Integrations**) decides whose values fill each field; when Microsoft is lower and its value differs, the difference is listed in the Microsoft 365 section. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
 
 ### What Microsoft cannot provide
 

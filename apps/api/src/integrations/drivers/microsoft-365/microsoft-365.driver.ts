@@ -8,6 +8,7 @@ import type {
 } from '@weavestream/shared';
 import {
   DriverAuthError,
+  DriverResourceUnavailableError,
   type DriverDiagnoseInput,
   type FetchRecordsContext,
   type IntegrationContext,
@@ -34,6 +35,7 @@ import {
   graphGet,
   graphListAll,
   graphReportCsv,
+  intuneUnavailableMessage,
   type GraphPage,
   type MicrosoftOrganization,
 } from './microsoft-365.graph.js';
@@ -527,7 +529,6 @@ export class Microsoft365Driver implements IntegrationDriver {
       hasMore: next !== null,
       cursor: next,
       snapshotAt,
-      ...(page.blocked ? { blockedInputs: [{ kind: 'validation' as const, externalId: null, message: page.blocked }] } : {}),
     };
   }
 
@@ -537,7 +538,7 @@ export class Microsoft365Driver implements IntegrationDriver {
     org: MicrosoftOrganization & { id: string },
     snapshotAt: string,
     nextLink: string | undefined,
-  ): Promise<{ records: LegacyDriverRecord[]; nextLink?: string; blocked?: string }> {
+  ): Promise<{ records: LegacyDriverRecord[]; nextLink?: string }> {
     const nowMs = Date.parse(snapshotAt);
     const cached = <T>(name: string, load: () => Promise<T>) => runCached(ctx, snapshotAt, name, load);
     const skus = () => cached('skus', () => optional(() => getSkus(ctx), 'Licence data is not available.'));
@@ -654,11 +655,14 @@ export class Microsoft365Driver implements IntegrationDriver {
         try {
           body = await graphGet<GraphPage<ManagedDevice>>(ctx, url, 'Intune devices');
         } catch (e) {
-          // No Intune licence (403, or 400 "not applicable to target tenant"):
-          // nothing to sync, with a run note, never a paused integration.
+          // No Intune licence or permission (403, or 400 "not applicable to
+          // target tenant"): the resource is skipped with a run warning,
+          // never a failed run or a paused integration.
           const intuneMissing = e instanceof GraphAccessError || (e instanceof GraphRequestError && e.status === 400);
           if (!nextLink && intuneMissing) {
-            return { records: [], blocked: 'Intune devices are not available (needs Microsoft Intune and DeviceManagementManagedDevices.Read.All).' };
+            throw new DriverResourceUnavailableError(
+              intuneUnavailableMessage(requireAdminConsent(ctx).grantedRoles),
+            );
           }
           throw e;
         }

@@ -17,6 +17,7 @@ import {
   canReadReportSettings,
   getOrganization,
   graphGet,
+  intuneUnavailableMessage,
   readReportConcealment,
 } from './microsoft-365.graph.js';
 import { MICROSOFT_SETUP_STEP as S } from './microsoft-365.setup-guide.js';
@@ -167,7 +168,7 @@ export async function diagnoseMicrosoftConnection(ctx: IntegrationContext): Prom
 
   const devices = await probe(() => graphGet(ctx, `${GRAPH}/deviceManagement/managedDevices?$select=id&$top=1`, 'Intune devices'));
   if (!devices.ok) {
-    notes.push({ stepId: S.layouts, message: 'Intune devices are not available (needs Microsoft Intune and DeviceManagementManagedDevices.Read.All); Computers and Mobile devices sync nothing.' });
+    notes.push({ stepId: S.layouts, message: intuneUnavailableMessage(roles) });
   }
 
   const readable = roles === null || canReadReportSettings(roles);

@@ -26,6 +26,7 @@ import { EnvService } from '../config/env.service.js';
 import { IntegrationsService } from './integrations.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import {
+  DriverResourceUnavailableError,
   type DriverFetchPage,
   type DriverBlockedInput,
   type DriverRecord,
@@ -45,6 +46,7 @@ import {
   type ReconstructionWriter,
 } from './reconstruction/reconstruction-target.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
+import { loadIntegrationPriority } from './integration-priority.service.js';
 import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
 import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
 import { scanSensitiveMaterial } from './sensitive-material.js';
@@ -304,6 +306,18 @@ export class IntegrationSyncRunnerService {
     ) ?? false;
     // One lowercased match-first index per run, shared by every record.
     const matchFirstIndexes: MatchFirstIndexCache = new Map();
+    // Several integrations on one asset: match-first may co-bind to assets
+    // owned by drivers that also fill standard fields (legacy drivers keep
+    // their own assets), and the priority order, read once per run, decides
+    // who owns each field.
+    const coBindSources = claimUnboundMatches && recordFieldDiffs
+      ? this.drivers.list()
+        .filter((d) => d.key !== 'breeze' && d.resources.some((r) => (r.standardFields?.length ?? 0) > 0))
+        .map((d) => d.key)
+      : [];
+    const integrationPriority = recordFieldDiffs
+      ? { driver: mapping.integration.driver, order: await loadIntegrationPriority(this.prisma, this.drivers) }
+      : undefined;
     const loaded = await this.integrations.loadDriverContext(mapping.integrationId);
     const traversalStartedAt = new Date().toISOString();
     const fetchCtx: FetchRecordsContext = {
@@ -365,10 +379,24 @@ export class IntegrationSyncRunnerService {
     };
     try {
       while (true) {
-        const rawPage = await driver.fetchRecords(
-          { ...fetchCtx, snapshotAt },
-          cursor,
-        );
+        let rawPage: Awaited<ReturnType<typeof driver.fetchRecords>>;
+        try {
+          rawPage = await driver.fetchRecords({ ...fetchCtx, snapshotAt }, cursor);
+        } catch (error) {
+          // The tenant cannot provide this resource at all (not licensed, an
+          // optional permission not granted): skip it with a run warning,
+          // like a resource the driver no longer declares. Nothing is
+          // reconciled, so existing bindings are neither staled nor archived.
+          if (error instanceof DriverResourceUnavailableError && pages === 0) {
+            conflicts.push({
+              kind: 'validation_error',
+              externalId: '',
+              message: `Skipped resource "${resource.resourceKey}": ${error.message}`.slice(0, 500),
+            });
+            return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
+          }
+          throw error;
+        }
         const page = validateDriverFetchPage(rawPage, {
           traversalStartedAt,
           previousCursor: cursor,
@@ -575,6 +603,8 @@ export class IntegrationSyncRunnerService {
               previousAdopted: existing?.adopted === true,
               matchFirstIndexes,
               ...(recordFieldDiffs ? { recordFieldDiffs: true } : {}),
+              ...(coBindSources.length > 0 ? { coBindSources } : {}),
+              ...(integrationPriority ? { integrationPriority } : {}),
               resolveBinding: (ref) => this.resolveBinding(tx, mapping.id, mapping.companyId, mapping.integrationId, ref),
             };
             const writer = this.writers.get(reconstruction.targetKind) as ReconstructionWriter<ReconstructionInput>;

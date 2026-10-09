@@ -38,6 +38,8 @@ export interface AssetIntegrationWriteInput {
   assetLayoutId: string;
   matchKeyFieldIds: string[];
   claimUnboundMatch?: boolean;
+  coBindSources?: readonly string[];
+  priority?: { driver: string; order: readonly string[] };
   fieldValues: Array<{
     targetFieldId: string;
     value: unknown;
@@ -153,6 +155,8 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         ...(ctx.previousAdopted === true ? { keepTargetName: true } : {}),
         ...(ctx.matchFirstIndexes ? { matchFirstIndexes: ctx.matchFirstIndexes } : {}),
         ...(ctx.recordFieldDiffs === true ? { recordFieldDiffs: true } : {}),
+        ...(ctx.claimUnboundMatches === true && ctx.coBindSources?.length ? { coBindSources: ctx.coBindSources } : {}),
+        ...(ctx.integrationPriority ? { priority: ctx.integrationPriority } : {}),
         fieldValues: input.fieldValues.map((field) => ({
           targetFieldId: field.targetFieldId,
           value: field.value,

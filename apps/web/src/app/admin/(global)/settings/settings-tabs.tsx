@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import type { AiSettings, EmailSettings, IntegrationOAuthApp } from '@weavestream/shared';
+import type { AiSettings, EmailSettings, IntegrationOAuthApp, IntegrationPriorityDto } from '@weavestream/shared';
 import type { Settings } from '../../../../lib/server-api/settings';
 import {
   ArticleSettingsForm,
@@ -13,6 +13,7 @@ import { EmailSettingsForm } from './email-settings-form';
 import { AiSettingsForm } from './ai-settings-form';
 import { ApiKeysSwitch } from './api-keys-switch';
 import { IntegrationOAuthAppCard } from './integration-oauth-app-card';
+import { IntegrationPriorityList } from './integration-priority-list';
 
 export type TabId = 'general' | 'security' | 'articles' | 'email' | 'ai' | 'integrations';
 
@@ -45,7 +46,7 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
     id: 'integrations',
     label: 'Integrations',
-    help: 'OAuth apps that integrations connect through.',
+    help: 'OAuth apps that integrations connect through, and which integration wins when several fill one asset.',
   },
 ];
 
@@ -56,6 +57,7 @@ export function SettingsTabs({
   aiSettings,
   googleOAuthApp,
   microsoftOAuthApp,
+  integrationPriority = null,
   currentUserEmail,
 }: {
   initialTab: TabId;
@@ -64,6 +66,7 @@ export function SettingsTabs({
   aiSettings: AiSettings;
   googleOAuthApp: IntegrationOAuthApp | null;
   microsoftOAuthApp: IntegrationOAuthApp | null;
+  integrationPriority?: IntegrationPriorityDto | null;
   currentUserEmail: string;
 }) {
   const router = useRouter();
@@ -142,6 +145,7 @@ export function SettingsTabs({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
             <IntegrationOAuthAppCard initial={googleOAuthApp} provider="google" />
             <IntegrationOAuthAppCard initial={microsoftOAuthApp} provider="microsoft" />
+            {integrationPriority && <IntegrationPriorityList initial={integrationPriority.order} />}
           </div>
         )}
       </div>

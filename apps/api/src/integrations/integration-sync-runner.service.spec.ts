@@ -10,6 +10,7 @@ import type {
 import { AssetTargetWriter } from './reconstruction/asset-target.writer.js';
 import { hasEligibleNativeBinding } from './reconstruction/native-binding-ownership.js';
 import { BreezeDriver } from './drivers/breeze/breeze.driver.js';
+import { DriverResourceUnavailableError } from './drivers/integration-driver.js';
 import { buildResourceExecutionStages } from './integration-sync.service.js';
 import type { AssetReconstructionInput } from './reconstruction/reconstruction-target.js';
 import { z } from 'zod';
@@ -133,6 +134,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         id: 'mapping', integrationId: 'integration', companyId: 'company', externalOrgId: 'org-1',
         filter: {}, integration: { id: 'integration', driver: 'typed' },
       }) },
+      systemSetting: { findUnique: jest.fn().mockResolvedValue({ integrationPriority: ['google-workspace', 'typed'] }) },
       integrationResource: { findFirst: jest.fn().mockResolvedValue({
         id: 'resource', integrationId: 'integration', resourceKey: 'subnets', enabled: true,
         targetKind: 'subnet', targetConfig: { normalization: 'cidr' }, dependsOnResourceKeys: [],
@@ -216,7 +218,10 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       { values: { INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
       audit as never,
       { loadDriverContext: jest.fn().mockResolvedValue({ config: {}, secret: {} }) } as never,
-      { get: jest.fn().mockReturnValue(driver) } as never,
+      {
+        get: jest.fn().mockReturnValue(driver),
+        list: () => [{ key: 'typed', resources: [], ...driver.descriptor }, { key: 'legacy-rmm', resources: [{ key: 'devices' }] }],
+      } as never,
       {} as never,
       writerRegistry as never,
       provenance as never,
@@ -706,6 +711,20 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       expect(data.fieldResolutions).toEqual({ kept: { choice: 'local', sourceFingerprint: 'src-k' } });
     });
 
+    it('passes co-bind sources and the priority order only to standard-field match-first resources', async () => {
+      const plain = arrange(validSection, true);
+      await run(plain.service);
+      expect(plain.writer.write.mock.calls[0]![0].coBindSources).toBeUndefined();
+      expect(plain.writer.write.mock.calls[0]![0].integrationPriority).toBeUndefined();
+
+      const { service, writer } = arrange(validSection, true, true);
+      await run(service);
+      const ctx = writer.write.mock.calls[0]![0];
+      // Drivers without standardFields (legacy) are never co-bound.
+      expect(ctx.coBindSources).toEqual(['typed']);
+      expect(ctx.integrationPriority).toEqual({ driver: 'typed', order: ['typed', 'legacy-rmm'] });
+    });
+
     it('never clears adopted and passes it back to the writer on later syncs', async () => {
       const { service, tx, writer } = arrange(validSection, true);
       tx.integrationSyncRecord.findUnique.mockResolvedValue({ id: 'binding', adopted: true, state: 'active', assetId: 'asset-id', targetKind: 'asset', lastSyncedFieldChecksums: {} });
@@ -713,6 +732,36 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       expect(writer.write.mock.calls[0]![0].previousAdopted).toBe(true);
       expect(upsertData(tx).update).not.toHaveProperty('adopted');
     });
+  });
+
+  it('skips a resource the source cannot provide with a warning and leaves its bindings alone', async () => {
+    const { service, writer, driver, provenance, tx, prisma } = setup();
+    driver.fetchRecords.mockRejectedValueOnce(
+      new DriverResourceUnavailableError('Intune is not licensed in this tenant, so computers and mobile devices are skipped.'),
+    );
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({
+      status: 'succeeded',
+      error: null,
+      conflicts: [{ kind: 'validation_error', message: 'Skipped resource "subnets": Intune is not licensed in this tenant, so computers and mobile devices are skipped.' }],
+    });
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(provenance.staleUnseen).not.toHaveBeenCalled();
+    expect(tx.integrationSyncCheckpoint.upsert).not.toHaveBeenCalled();
+  });
+
+  it('still fails when a resource becomes unavailable after its first page', async () => {
+    const { service, driver } = setup();
+    driver.fetchRecords
+      .mockResolvedValueOnce({ records: [], hasMore: true, cursor: 'c2', terminal: false, snapshotAt: '2026-07-14T10:00:00.000Z' })
+      .mockRejectedValueOnce(new DriverResourceUnavailableError('gone'));
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed' });
   });
 
   it('dispatches typed input and commits its binding before the page checkpoint', async () => {

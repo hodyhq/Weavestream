@@ -1570,3 +1570,52 @@ export interface IntegrationDifferencesPage {
   total: number | null;
   nextCursor: string | null;
 }
+
+/**
+ * Default "whose values win" order when several integrations are bound to
+ * one asset (driver keys, highest priority first). Drivers missing here
+ * follow in alphabetical order.
+ */
+export const DEFAULT_INTEGRATION_PRIORITY: readonly string[] = [
+  'level',
+  'ninjaone',
+  'action1',
+  'breeze',
+  'microsoft-365',
+  'google-workspace',
+  'unifi',
+  'cloudflare',
+];
+
+/** `PUT /settings/integration-priority`: the full order, driver keys only. */
+export const updateIntegrationPrioritySchema = z
+  .object({
+    order: z
+      .array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/))
+      .min(1)
+      .max(50)
+      .refine((keys) => new Set(keys).size === keys.length, 'Each integration may appear once.'),
+  })
+  .strict();
+export type UpdateIntegrationPriorityInput = z.infer<typeof updateIntegrationPrioritySchema>;
+
+export interface IntegrationPriorityDto {
+  order: Array<{ key: string; label: string }>;
+}
+
+/**
+ * The effective priority order: the stored keys that are still registered,
+ * then the defaults, then any other registered driver alphabetically. A
+ * malformed stored value falls back to the defaults.
+ */
+export function resolveIntegrationPriority(stored: unknown, registered: readonly string[]): string[] {
+  const known = new Set(registered);
+  const out: string[] = [];
+  const add = (key: unknown): void => {
+    if (typeof key === 'string' && known.has(key) && !out.includes(key)) out.push(key);
+  };
+  if (Array.isArray(stored)) stored.forEach(add);
+  DEFAULT_INTEGRATION_PRIORITY.forEach(add);
+  [...registered].sort().forEach(add);
+  return out;
+}

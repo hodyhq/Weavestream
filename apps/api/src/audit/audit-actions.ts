@@ -55,6 +55,9 @@ export const AUDIT_ACTIONS = {
     integrationOAuthAppUpdate: 'settings.integration_oauth_app.update',
     // Check setup on the OAuth app: outcome and failed step ids only.
     integrationOAuthAppCheck: 'settings.integration_oauth_app.check',
+    // Integration priority order (`PUT /settings/integration-priority`).
+    // `before` and `after` carry `{ order }` (driver keys only).
+    integrationPriorityUpdate: 'settings.integration_priority.update',
   },
   domain: {
     create: 'domain.create',

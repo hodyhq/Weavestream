@@ -53,6 +53,23 @@ export const MICROSOFT_PERMISSIONS = MICROSOFT_PERMISSION_GROUPS.flatMap((g) => 
 
 export const MICROSOFT_REQUIRED_PERMISSIONS = MICROSOFT_PERMISSIONS.filter((p) => !MICROSOFT_OPTIONAL_PERMISSIONS.includes(p));
 
+/** Reads Intune managed devices (the Computers and Mobile devices resources). */
+export const INTUNE_PERMISSION = 'DeviceManagementManagedDevices.Read.All';
+
+/**
+ * Why Intune devices cannot be read, from the roles granted to the app
+ * (null when unknown): with the permission granted, Intune is not licensed.
+ */
+export function intuneUnavailableMessage(roles: readonly string[] | null): string {
+  if (roles?.includes(INTUNE_PERMISSION)) {
+    return 'Intune is not licensed in this tenant, so computers and mobile devices are skipped.';
+  }
+  if (roles) {
+    return `${INTUNE_PERMISSION} is not granted in this tenant, so computers and mobile devices are skipped. Add it on the app, then a Global Administrator presses Reconnect.`;
+  }
+  return `Intune devices are not available (needs Microsoft Intune and ${INTUNE_PERMISSION}), so computers and mobile devices are skipped.`;
+}
+
 /** True when the granted roles can read the report concealment setting. */
 export function canReadReportSettings(roles: readonly string[]): boolean {
   return roles.includes(REPORT_SETTINGS_READ) || roles.includes(REPORT_SETTINGS_WRITE);

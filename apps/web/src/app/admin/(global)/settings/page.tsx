@@ -4,6 +4,7 @@ import {
   getAiSettings,
   getEmailSettings,
   getIntegrationOAuthApp,
+  getIntegrationPriority,
   getSettings,
 } from '../../../../lib/server-api/settings';
 import { hasCapability } from '../../../../lib/roles';
@@ -26,12 +27,13 @@ export default async function SettingsPage({
   const me = await requireMe();
   if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
-  const [settings, emailSettings, aiSettings, googleOAuthApp, microsoftOAuthApp] = await Promise.all([
+  const [settings, emailSettings, aiSettings, googleOAuthApp, microsoftOAuthApp, integrationPriority] = await Promise.all([
     getSettings(),
     getEmailSettings(),
     getAiSettings(),
     getIntegrationOAuthApp('google'),
     getIntegrationOAuthApp('microsoft'),
+    getIntegrationPriority(),
   ]);
 
   return (
@@ -53,6 +55,7 @@ export default async function SettingsPage({
             aiSettings={aiSettings}
             googleOAuthApp={googleOAuthApp}
             microsoftOAuthApp={microsoftOAuthApp}
+            integrationPriority={integrationPriority}
             currentUserEmail={me.email}
           />
         </Panel>

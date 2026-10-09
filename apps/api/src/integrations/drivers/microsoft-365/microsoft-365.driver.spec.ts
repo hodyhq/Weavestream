@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { driverDescriptorSchema, integrationSectionSchema, type IntegrationSection } from '@weavestream/shared';
-import { DriverAuthError, type FetchRecordsContext, type IntegrationContext, type LegacyDriverRecord } from '../integration-driver.js';
+import { DriverAuthError, DriverResourceUnavailableError, type FetchRecordsContext, type IntegrationContext, type LegacyDriverRecord } from '../integration-driver.js';
 import { setDefaultFetchForTests, setDefaultResolveForTests } from '../../../common/egress/safe-fetch.js';
 import { __resetOAuthAccessTokenCacheForTests } from '../../oauth/oauth-token.js';
 import { __resetRunCacheForTests, __runCacheSizeForTests } from '../run-cache.js';
@@ -398,12 +398,20 @@ describe('Microsoft365Driver devices', () => {
     expect(mobile[0]!.fields).toMatchObject({ imei: '351234567890123', phone_number: '+14255550111', operating_system: 'iOS 18.1' });
   });
 
-  it('syncs nothing with a run note when the tenant has no Intune, without pausing the integration', async () => {
+  it('skips the resource as unlicensed when the Intune permission is granted', async () => {
     installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: { status: 400, body: { error: { code: 'BadRequest' } } } }));
-    const page = await driver.fetchRecords(fetchCtx(makeCtx(), 'computers'), null);
-    expect(page.records).toEqual([]);
-    expect(page.hasMore).toBe(false);
-    expect(page.blockedInputs).toEqual([expect.objectContaining({ kind: 'validation', externalId: null, message: expect.stringContaining('needs Microsoft Intune') })]);
+    const fetched = driver.fetchRecords(fetchCtx(makeCtx(), 'computers'), null);
+    await expect(fetched).rejects.toBeInstanceOf(DriverResourceUnavailableError);
+    await expect(fetched).rejects.toThrow('Intune is not licensed in this tenant, so computers and mobile devices are skipped.');
+  });
+
+  it('names the missing permission when the Intune permission is not granted', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: { status: 403, body: { error: { code: 'Forbidden' } } } }));
+    const base = makeCtx();
+    const ctx = { ...base, secret: { ...(base.secret as object), grantedRoles: MICROSOFT_PERMISSIONS.filter((p) => p !== 'DeviceManagementManagedDevices.Read.All') } };
+    const fetched = driver.fetchRecords(fetchCtx(ctx, 'mobile_devices'), null);
+    await expect(fetched).rejects.toBeInstanceOf(DriverResourceUnavailableError);
+    await expect(fetched).rejects.toThrow(/DeviceManagementManagedDevices\.Read\.All is not granted in this tenant/);
   });
 });
 
@@ -612,7 +620,7 @@ describe('Check setup', () => {
     expect(result.passedStepIds).toEqual(expect.arrayContaining(['register', 'secret', 'credentials', 'permissions', 'connect']));
     const notes = (result.notes ?? []).map((n) => n.message).join(' | ');
     expect(notes).toContain('Entra ID P1');
-    expect(notes).toContain('needs Microsoft Intune');
+    expect(notes).toMatch(/Intune is not licensed in this tenant|needs Microsoft Intune/);
     expect(notes).toContain('"Conceal user, group, and site names in all reports" is on');
   });
 });
