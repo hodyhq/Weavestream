@@ -8,7 +8,6 @@ import { CloudflareDriver } from './cloudflare/cloudflare.driver.js';
 import { CloudflareApiClient } from './cloudflare/cloudflare-api.client.js';
 import { BreezeDriver } from './breeze/breeze.driver.js';
 import { GoogleWorkspaceDriver } from './google-workspace/google-workspace.driver.js';
-import { GoogleWorkspaceResellerDriver } from './google-workspace-reseller/google-workspace-reseller.driver.js';
 
 /**
  * Phase 11 — global registry of every available integration driver.
@@ -40,7 +39,6 @@ export class IntegrationDriverRegistry {
       new NinjaOneDriver(),
       new UniFiSiteManagerDriver(),
       new GoogleWorkspaceDriver(),
-      new GoogleWorkspaceResellerDriver(),
     ];
     const securityDrivers: CloudflareDriver[] = [new CloudflareDriver(new CloudflareApiClient())];
 

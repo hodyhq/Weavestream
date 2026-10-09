@@ -91,6 +91,23 @@ export class IntegrationOAuthAppService {
     return [...new Set(scopes)];
   }
 
+  /**
+   * Scopes grouped by driver in registry order. A later driver's group only
+   * lists scopes no earlier group covers; a driver adding none is skipped.
+   */
+  scopeGroupsFor(provider: IntegrationOAuthProvider): { label: string; scopes: string[] }[] {
+    const seen = new Set<string>();
+    const groups: { label: string; scopes: string[] }[] = [];
+    for (const d of this.drivers.list().filter((x) => x.oauth?.provider === provider)) {
+      const fresh = d.oauth!.scopes.filter((s) => !seen.has(s));
+      fresh.forEach((s) => seen.add(s));
+      if (fresh.length > 0) {
+        groups.push({ label: groups.length === 0 ? 'Required' : `Only if you use ${d.label}`, scopes: fresh });
+      }
+    }
+    return groups;
+  }
+
   /** Setup guide of the first registered driver of `provider` that ships one. */
   setupGuideFor(provider: IntegrationOAuthProvider): SetupGuideStep[] | undefined {
     return this.drivers.list().find((d) => d.oauth?.provider === provider && d.setupGuide)?.setupGuide;
@@ -122,6 +139,7 @@ export class IntegrationOAuthAppService {
       redirectUri: this.redirectUri(),
       callbackHostWarning: this.callbackHostWarning(),
       scopes: this.scopesFor(provider),
+      scopeGroups: this.scopeGroupsFor(provider),
       updatedAt: row ? row.updatedAt.toISOString() : null,
       ...(setupGuide ? { setupGuide } : {}),
     };

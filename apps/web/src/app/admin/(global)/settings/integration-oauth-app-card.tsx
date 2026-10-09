@@ -6,7 +6,7 @@ import { INTEGRATION_OAUTH_PROVIDER_LABELS, problemMessage } from '@weavestream/
 import { copyToClipboard } from '@weavestream/shared/browser';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Field, Icon, Input, Tag, useToast } from '../../../../components/ui';
-import { SetupGuide } from '../../../../components/integrations/setup-guide';
+import { ScopeList, SetupGuide } from '../../../../components/integrations/setup-guide';
 import { SectionHeader } from './settings-form';
 
 /**
@@ -106,14 +106,10 @@ export function IntegrationOAuthAppCard({
         value={app.redirectUri}
         onCopy={() => void copy(app.redirectUri, 'Redirect URI')}
       />
-      {app.scopes.length > 0 ? (
-        <CopyRow
-          label="Scopes"
-          help="Add these scopes to the consent screen."
-          value={app.scopes.join('\n')}
-          onCopy={() => void copy(app.scopes.join(' '), 'Scopes')}
-          multiline
-        />
+      {app.scopeGroups.length > 0 ? (
+        <Field label="Scopes" help="Add each scope to the consent screen (Data Access > Manually add scopes).">
+          <ScopeList groups={app.scopeGroups} />
+        </Field>
       ) : (
         <p style={mutedStyle}>Scopes appear here once an integration that uses this app is available.</p>
       )}
@@ -160,7 +156,7 @@ export function IntegrationOAuthAppCard({
         <SetupGuide
           steps={app.setupGuide}
           redirectUri={app.redirectUri}
-          scopes={app.scopes}
+          scopeGroups={app.scopeGroups}
           check={check}
           onCheck={() => void runCheck()}
           checking={checking}
@@ -177,18 +173,16 @@ function CopyRow({
   help,
   value,
   onCopy,
-  multiline = false,
 }: {
   label: string;
   help: string;
   value: string;
   onCopy: () => void;
-  multiline?: boolean;
 }) {
   return (
     <Field label={label} help={help}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <code style={{ ...codeStyle, whiteSpace: multiline ? 'pre-wrap' : 'normal' }}>{value}</code>
+        <code style={codeStyle}>{value}</code>
         <Btn kind="outline" size="sm" icon={Icon.copy} onClick={onCopy} aria-label={`Copy ${label.toLowerCase()}`}>
           Copy
         </Btn>

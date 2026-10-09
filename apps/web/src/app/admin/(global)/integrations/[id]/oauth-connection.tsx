@@ -204,7 +204,7 @@ export function OAuthConnection({
             <SetupGuide
               steps={setupGuide}
               redirectUri={status.redirectUri}
-              scopes={oauth.scopes}
+              scopeGroups={[{ scopes: oauth.scopes }]}
               check={check}
               onCheck={() => void runCheck()}
               checking={checking}

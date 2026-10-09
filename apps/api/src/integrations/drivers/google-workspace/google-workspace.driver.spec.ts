@@ -19,7 +19,6 @@ import { setDefaultFetchForTests, setDefaultResolveForTests } from '../../../com
 const DIR = 'https://admin.googleapis.com/admin/directory/v1';
 const REPORTS = 'https://admin.googleapis.com/admin/reports/v1';
 const LICENSING = 'https://licensing.googleapis.com/apps/licensing/v1';
-const ALERTS = 'https://alertcenter.googleapis.com/v1beta1';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const CUSTOMER_ID = 'C0example1';
 const SNAPSHOT = '2026-10-08T12:00:00.000Z';
@@ -160,7 +159,7 @@ describe('GoogleWorkspaceDriver descriptor', () => {
     expect(parsed.oauth?.provider).toBe('google');
     expect(parsed.oauth?.extraAuthorizeParams).toEqual({ access_type: 'offline', prompt: 'consent' });
     expect(parsed.resources.map((r) => r.key)).toEqual([
-      'tenant', 'users', 'groups', 'domains', 'chrome_devices', 'mobile_devices', 'alerts',
+      'tenant', 'users', 'groups', 'domains', 'chrome_devices', 'mobile_devices',
     ]);
     for (const resource of parsed.resources) {
       expect(resource.matchSuggestions).toBeDefined();
@@ -456,7 +455,7 @@ describe('GoogleWorkspaceDriver tenant', () => {
   });
 });
 
-describe('GoogleWorkspaceDriver groups, domains, devices and alerts', () => {
+describe('GoogleWorkspaceDriver groups, domains and devices', () => {
   const table: Record<string, Reply> = {
     ...BASE_TABLE,
     [`${DIR}/groups?`]: {
@@ -488,14 +487,6 @@ describe('GoogleWorkspaceDriver groups, domains, devices and alerts', () => {
           resourceId: 'm-1', serialNumber: 'PH1', model: 'Example Phone', os: 'Android 15', type: 'ANDROID',
           email: ['bob@example.com'], status: 'APPROVED', lastSync: '2026-10-06T09:00:00.000Z',
           deviceCompromisedStatus: 'No compromise detected',
-        }],
-      },
-    },
-    [`${ALERTS}/alerts?`]: {
-      body: {
-        alerts: [{
-          alertId: 'a-1', createTime: '2026-10-01T00:00:00.000Z', type: 'Suspicious login', source: 'Google identity',
-          metadata: { status: 'NOT_STARTED' }, securityInvestigationToolLink: 'https://admin.google.com/ac/sc/investigation?x=1',
         }],
       },
     },
@@ -543,16 +534,6 @@ describe('GoogleWorkspaceDriver groups, domains, devices and alerts', () => {
     expect(d!.fields).toEqual({ name: 'Example Phone PH1', serialNumber: 'PH1' });
     expect(row(sectionOf(d!), 'device', 'Compromised')).toMatchObject({ tone: 'success' });
   });
-
-  it('alerts: last 90 days, newest first, console link', async () => {
-    const calls = installFetchTable(table);
-    const [a] = await only('alerts');
-    expect(a!.fields).toEqual({ name: 'Suspicious login 2026-10-01', alertId: 'a-1' });
-    expect(row(sectionOf(a!), 'alert', 'Admin console')).toMatchObject({ kind: 'link' });
-    const url = new URL(calls.find((c) => c.url.startsWith(`${ALERTS}/alerts`))!.url);
-    expect(url.searchParams.get('orderBy')).toBe('createTime desc');
-    expect(url.searchParams.get('filter')).toBe('createTime >= "2026-07-10T12:00:00.000Z"');
-  });
 });
 
 describe('GoogleWorkspaceDriver is read-only', () => {
@@ -565,7 +546,6 @@ describe('GoogleWorkspaceDriver is read-only', () => {
       [`${DIR}/groups?`]: { body: { groups: [{ id: 'g1', email: 'staff@example.com' }] } },
       [`${DIR}/groups/g1/members`]: { body: { members: [] } },
       [`${DIR}/customer/my_customer/`]: { body: {} },
-      [`${ALERTS}/`]: { body: {} },
     });
     const driver = new GoogleWorkspaceDriver();
     const ctx = makeCtx();

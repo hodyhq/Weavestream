@@ -2,7 +2,6 @@ import type { IntegrationSetupCheck } from '@weavestream/shared';
 import { DriverAuthError, type DriverDiagnoseInput, type IntegrationContext } from '../integration-driver.js';
 import { OAuthTokenError, exchangeAuthorizationCode, oauthFetch } from '../../oauth/oauth-token.js';
 import {
-  ALERT_CENTER,
   API_DISABLED_REASONS,
   DIRECTORY,
   GOOGLE_WORKSPACE_OAUTH,
@@ -130,7 +129,6 @@ export async function diagnoseGoogleConnection(ctx: IntegrationContext): Promise
     { url: `${DIRECTORY}/customers/my_customer`, customer: true },
     { url: `${LICENSING}/product/Google-Apps/users?maxResults=1` },
     { url: `${REPORTS}/usage/dates/${reportDate()}?parameters=accounts:used_quota_in_mb` },
-    { url: `${ALERT_CENTER}/alerts?pageSize=1` },
   ];
   let customerId: string | null = null;
   let answered = 0;

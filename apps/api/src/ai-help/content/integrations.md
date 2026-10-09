@@ -67,17 +67,11 @@ Configure **Devices fields** for switches, access points, and gateways (recommen
 
 Google Workspace is read-only and connects with OAuth. One integration is one customer tenant.
 
-Once per Weavestream install, an administrator creates a Google Cloud project, enables the Admin SDK API, Enterprise License Manager API and Alert Center API, sets up the consent screen (Branding, then Audience **External** and **Publish app** so it is **In production**), adds the scopes under **Data Access**, and creates a **Web application** OAuth client with the redirect URI shown in Weavestream. Paste the Client ID and Client secret into **Admin → Settings → Integrations**, Google OAuth app card, select **Save OAuth app**, then **Check setup**. The card shows a numbered setup guide with copy buttons; passed steps turn green and a failed step shows what to fix.
+Once per Weavestream install, an administrator creates a Google Cloud project, enables the Admin SDK API and Enterprise License Manager API, sets up the consent screen (Branding, then Audience **External** and **Publish app** so it is **In production**), adds the scopes under **Data Access**, and creates a **Web application** OAuth client with the redirect URI shown in Weavestream. Paste the Client ID and Client secret into **Admin → Settings → Integrations**, Google OAuth app card, select **Save OAuth app**, then **Check setup**. The card shows a numbered setup guide with copy buttons; passed steps turn green and a failed step shows what to fix.
 
 Per customer: **New integration → Google Workspace**, then on **Credentials & schedule** select **Connect with Google** and sign in with the customer's super admin (or a delegated admin with read access). On "Google hasn't verified this app", select **Advanced**, then **Go to Weavestream (unsafe)**: expected for a self-hosted app. If the customer blocks third-party apps, they mark the Client ID **Trusted** under **Security → Access and data control → API controls**. Then map the tenant under **Organizations**, choose layouts and match fields under **Map layouts**, and run a dry run.
 
 Do not leave the app in **Testing**: connections expire after 7 days. **Reconnect** appears when access was revoked or unused for 6 months. Google gives no invoices, purchased seats or renewal dates for direct customers, and usage figures lag 1 to 3 days.
-
-## Configure Google Workspace reseller subscriptions
-<!-- aliases: google reseller | google workspace reseller | partner sales console | google subscriptions | google renewal dates | not a google workspace reseller -->
-<!-- requires: integration.manage -->
-
-Only for Google Workspace resellers. Uses the same Google OAuth app; also enable the **Google Workspace Reseller API** in the Cloud project. Create **New integration → Google Workspace (reseller)** once and **Connect with Google** as an admin of the reseller domain (a Partner Sales Console admin). Every customer with a subscription appears under **Organizations**; map each to its company. Each subscription syncs read-only with edition, plan, seats (licensed of purchased or of maximum) and dates. To see renewals in **Expiring soon**, map **Commitment end (renewal)** or **Trial end** to a date field flagged as an expiry under **Map layouts**. "This Google account is not a Google Workspace reseller" means the connected account is not a reseller admin.
 
 ## Configure Breeze reconstruction sync
 <!-- aliases: configure Breeze reconstruction | Breeze RMM setup | Breeze Partner API | Breeze disaster recovery sync | Breeze documentation sync -->

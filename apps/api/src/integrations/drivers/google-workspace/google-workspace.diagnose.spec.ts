@@ -9,7 +9,6 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const DIR = 'https://admin.googleapis.com/admin/directory/v1';
 const LICENSING = 'https://licensing.googleapis.com/apps/licensing/v1';
 const REPORTS = 'https://admin.googleapis.com/admin/reports/v1';
-const ALERTS = 'https://alertcenter.googleapis.com/v1beta1';
 const RAW = 'raw Google text that must never reach the client';
 
 type Reply = { status?: number; body: unknown };
@@ -67,7 +66,6 @@ const OK_TABLE: Record<string, Reply> = {
   [`${DIR}/customers/my_customer`]: { body: { id: 'C0example1', customerDomain: 'example.com' } },
   [`${LICENSING}/product/Google-Apps/users`]: { body: { items: [] } },
   [`${REPORTS}/usage/dates/`]: { body: { usageReports: [] } },
-  [`${ALERTS}/alerts`]: { body: { alerts: [] } },
 };
 
 function noRawText(result: unknown) {
@@ -140,15 +138,14 @@ describe('diagnose: connection check', () => {
     expect(result.ok).toBe(true);
     expect(new Set(result.passedStepIds)).toEqual(new Set(['project', 'consent', 'client', 'credentials', 'apis', 'connect', 'scopes', 'trust']));
     const api = calls.filter((c) => c.url !== TOKEN_URL);
-    expect(api.map((c) => c.method)).toEqual(['GET', 'GET', 'GET', 'GET']);
+    expect(api.map((c) => c.method)).toEqual(['GET', 'GET', 'GET']);
     expect(api[1]!.url).toContain('customerId=C0example1');
     expect(api[1]!.url).toContain('maxResults=1');
-    expect(api[3]!.url).toContain('pageSize=1');
   });
 
   it.each([
     ['accessNotConfigured (v1 shape)', `${LICENSING}/product/Google-Apps/users`, googleError(403, 'accessNotConfigured'), 'Enterprise License Manager API'],
-    ['SERVICE_DISABLED (v2 shape)', `${ALERTS}/alerts`, googleError(403, 'SERVICE_DISABLED', true), 'Alert Center API'],
+    ['SERVICE_DISABLED (v2 shape)', `${REPORTS}/usage/dates/`, googleError(403, 'SERVICE_DISABLED', true), 'Admin SDK API (Reports)'],
   ])('maps %s to step 2 naming the API', async (_label, url, reply, api) => {
     install({ ...OK_TABLE, [url]: reply });
     const result = await connectionCheck();
@@ -169,7 +166,7 @@ describe('diagnose: connection check', () => {
   });
 
   it('maps a missing scope to step 7 with a reconnect hint', async () => {
-    install({ ...OK_TABLE, [`${ALERTS}/alerts`]: googleError(403, 'ACCESS_TOKEN_SCOPE_INSUFFICIENT', true) });
+    install({ ...OK_TABLE, [`${REPORTS}/usage/dates/`]: googleError(403, 'ACCESS_TOKEN_SCOPE_INSUFFICIENT', true) });
     const result = await connectionCheck();
     expect(result.failures).toEqual([expect.objectContaining({ stepId: 'connect', message: expect.stringMatching(/tick every permission/) })]);
   });
@@ -207,7 +204,7 @@ describe('diagnose: connection check', () => {
   });
 
   it('reports rate limiting without a step', async () => {
-    install({ ...OK_TABLE, [`${ALERTS}/alerts`]: googleError(429, 'rateLimitExceeded') });
+    install({ ...OK_TABLE, [`${REPORTS}/usage/dates/`]: googleError(429, 'rateLimitExceeded') });
     const result = await connectionCheck();
     expect(result.failures).toEqual([expect.objectContaining({ stepId: null })]);
     expect(result.passedStepIds).not.toContain('scopes');
@@ -226,7 +223,6 @@ describe('diagnose: connection check', () => {
       [TOKEN_URL]: OK_TABLE[TOKEN_URL]!,
       [`${DIR}/customers/my_customer`]: disabled,
       [`${REPORTS}/usage/dates/`]: disabled,
-      [`${ALERTS}/alerts`]: disabled,
     });
     const result = await connectionCheck();
     expect(result.passedStepIds).not.toContain('trust');
