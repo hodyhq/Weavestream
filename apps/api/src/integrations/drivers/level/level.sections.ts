@@ -1,14 +1,15 @@
 import type { IntegrationSection, IntegrationSectionGroup } from '@weavestream/shared';
-import { badge, bool, clean, date, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
+import { badge, bool, clean, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
 
 /**
- * Pure builders for the Level integration section. Records carry only the
- * name and the serial number as layout fields; everything below is shown
- * read-only on the asset page (integrationSectionSchema). Every Level
- * field is optional and unknown shapes are ignored.
+ * Pure builders for Level device records. Standard facts (hostname, OS,
+ * CPU, RAM, ...) go into layout fields through `deviceStandardFields`; the
+ * section shown read-only on the asset page (integrationSectionSchema)
+ * keeps only the extras a layout does not have. Every Level field is
+ * optional and unknown shapes are ignored.
  */
 
-export const SECTION_TITLE = 'Level';
+export const SECTION_TITLE = 'Level RMM';
 /** Available updates and active alerts listed per device (the count covers all). */
 export const LIST_PREVIEW = 20;
 
@@ -87,26 +88,18 @@ function riskTone(risk: string): 'neutral' | 'success' | 'warning' | 'danger' {
 }
 
 function statusRows(d: LevelDevice): Row[] {
-  const location = [str(d.city), str(d.country)].filter(Boolean).join(', ');
   return [
     typeof d.online === 'boolean' ? badge('Status', d.online ? 'Online' : 'Offline', d.online ? 'success' : 'neutral') : null,
     datetime('Last seen', str(d.last_seen_at)),
     datetime('Last reboot', str(d.last_reboot_time)),
     text('Logged-in user', str(d.last_logged_in_user)),
     bool('Maintenance mode', typeof d.maintenance_mode === 'boolean' ? d.maintenance_mode : undefined),
-    typeof d.flag === 'boolean' ? bool('Flagged', d.flag) : null,
-    text('Role', humanize(str(d.role))),
     text('Platform', str(d.platform)),
-    text('Group', str(d.group_name)),
-    text('Location', location),
   ];
 }
 
+/** Detail the layout fields summarize: each memory module and each disk model. */
 function hardwareRows(d: LevelDevice): Row[] {
-  const cpus = arr(d.cpus);
-  const cpuModel = str(cpus[0]?.model);
-  const board = obj(d.motherboard);
-  const totalMemory = fin(d.total_memory);
   const dimms = arr(d.memory).map((m) => {
     const size = fin(m.size);
     return [size !== undefined ? formatBytes(size) : undefined, str(m.memory_type), str(m.form_factor), str(m.location) && `(${str(m.location)})`]
@@ -118,18 +111,8 @@ function hardwareRows(d: LevelDevice): Row[] {
     return [str(disk.model), str(disk.disk_type), size !== undefined ? formatBytes(size) : undefined].filter(Boolean).join(', ');
   }).filter(Boolean);
   return [
-    text('Manufacturer', str(d.manufacturer)),
-    text('Model', str(d.model)),
-    text('Serial number', str(d.serial_number)),
-    text('CPU', cpuModel && (cpus.length > 1 ? `${cpus.length} x ${cpuModel}` : cpuModel)),
-    num('CPU cores', fin(d.cpu_cores)),
-    totalMemory !== undefined && totalMemory >= 0 ? { kind: 'bytes', label: 'Memory', value: totalMemory } : null,
-    num('Memory slots', fin(d.memory_slots)),
     dimms.length > 0 ? list('Memory modules', dimms) : null,
     disks.length > 0 ? list('Disks', disks) : null,
-    text('Motherboard', [str(board?.manufacturer), str(board?.model)].filter(Boolean).join(' ')),
-    text('BIOS version', str(board?.bios_version)),
-    text('Architecture', str(d.architecture)),
   ];
 }
 
@@ -149,20 +132,12 @@ function storageRows(d: LevelDevice): Row[] {
   });
 }
 
-function osRows(d: LevelDevice): Row[] {
+/** OS end of life, from the OS object or the security block. */
+function osEndOfLife(d: LevelDevice): boolean | undefined {
   const os = obj(d.operating_system);
-  const major = fin(os?.major_version) ?? str(os?.major_version);
-  const minor = fin(os?.minor_version) ?? str(os?.minor_version);
-  const version = str(os?.version) ?? (major !== undefined ? [major, minor].filter((v) => v !== undefined).join('.') : undefined);
-  const eol = typeof os?.end_of_life === 'boolean'
-    ? os.end_of_life
-    : typeof obj(d.security)?.os_end_of_life === 'boolean' ? (obj(d.security)!.os_end_of_life as boolean) : undefined;
-  return [
-    text('Name', str(os?.full_operating_system) ?? str(d.full_operating_system) ?? str(os?.name)),
-    text('Version', version),
-    eol === undefined ? null : eol ? badge('End of life', 'Yes', 'danger') : badge('End of life', 'No', 'success'),
-    date('Installed', str(os?.install_date)),
-  ];
+  if (typeof os?.end_of_life === 'boolean') return os.end_of_life;
+  const flag = obj(d.security)?.os_end_of_life;
+  return typeof flag === 'boolean' ? flag : undefined;
 }
 
 function networkRows(d: LevelDevice): Row[] {
@@ -187,8 +162,10 @@ function securityRows(d: LevelDevice): Row[] {
   const risk = str(s.risk);
   const compliance = fin(s.patch_compliance);
   const join = (...parts: unknown[]) => parts.map(str).filter(Boolean).join(', ');
+  const eol = osEndOfLife(d);
   return [
     risk ? badge('Risk', humanize(risk)!, riskTone(risk)) : null,
+    eol === undefined ? null : eol ? badge('OS end of life', 'Yes', 'danger') : badge('OS end of life', 'No', 'success'),
     num('Security score', fin(d.security_score) ?? fin(s.score)),
     compliance !== undefined && compliance >= 0 && compliance <= 100
       ? { kind: 'meter', label: 'Patch compliance', used: compliance, total: 100, unit: 'count', value: `${compliance}%`, higherIsBetter: true }
@@ -242,15 +219,105 @@ export function buildDeviceSection({ device, alerts, updates }: DeviceSectionInp
   const tags = strings(device.tags);
   const groups: IntegrationSectionGroup[] = [
     group('status', 'Status', 'level', statusRows(device)),
-    group('hardware', 'Hardware', undefined, hardwareRows(device)),
     group('storage', 'Storage', undefined, storageRows(device)),
-    group('os', 'Operating system', undefined, osRows(device)),
     group('network', 'Network', undefined, networkRows(device)),
     group('security', 'Security', undefined, securityRows(device)),
     group('patches', 'Patches', undefined, patchRows(updates, id)),
     group('alerts', 'Alerts', undefined, alertRows(alerts, id)),
+    group('hardware', 'Hardware detail', undefined, hardwareRows(device)),
     group('tags', 'Tags', undefined, [tags.length > 0 ? list('Tags', tags) : null]),
     group('notes', 'Notes', undefined, [text('Notes', str(device.notes))]),
   ];
   return { title: SECTION_TITLE, groups: groups.filter((g) => g.rows.length > 0) };
+}
+
+// ---------------------------------------------------------------------
+// Standard fields (layout fields, not the section)
+// ---------------------------------------------------------------------
+
+const PRIVATE_V4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/** An RFC 1918 IPv4 address (a "/prefix" suffix is dropped). */
+export function privateIpv4(value: string): string | undefined {
+  const ip = value.trim().split('/')[0]!;
+  return IPV4.test(ip) && PRIVATE_V4.test(ip) ? ip : undefined;
+}
+
+/** "16 GB": installed memory rounded to whole binary gigabytes. */
+export function formatRam(bytes: number): string {
+  const gb = Math.round(bytes / 2 ** 30);
+  return gb >= 1 ? `${gb} GB` : formatBytes(bytes);
+}
+
+/** Disk capacity as sold (decimal): "512 GB", "2 TB", "1.9 TB". */
+export function formatDiskSize(bytes: number): string {
+  if (bytes >= 1e12) return `${Number((bytes / 1e12).toFixed(1))} TB`;
+  return `${Math.round(bytes / 1e9)} GB`;
+}
+
+function cpuSummary(d: LevelDevice): string | undefined {
+  const cpus = arr(d.cpus);
+  const model = str(cpus[0]?.model);
+  if (!model) return undefined;
+  const perCpu = cpus.map((cpu) => fin(cpu.cores) ?? fin(cpu.number_of_cores)).filter((n): n is number => n !== undefined);
+  const cores = fin(d.cpu_cores) ?? (perCpu.length > 0 ? perCpu.reduce((a, b) => a + b, 0) : undefined);
+  const sockets = cpus.length > 1 ? `${cpus.length}x ` : '';
+  return `${sockets}${model}${cores !== undefined && cores > 0 ? ` (${cores} cores)` : ''}`;
+}
+
+function storageSummary(d: LevelDevice): string | undefined {
+  const disks = arr(d.disks).map((disk) => {
+    const size = fin(disk.size);
+    const model = str(disk.model);
+    const head = [size !== undefined && size > 0 ? formatDiskSize(size) : undefined, str(disk.disk_type)].filter(Boolean).join(' ');
+    if (!head) return model;
+    return model ? `${head} (${model})` : head;
+  }).filter((entry): entry is string => !!entry);
+  return disks.length > 0 ? disks.join(', ') : undefined;
+}
+
+/** The NIC that carries a private IP and has a gateway, else the first with a MAC. */
+function primaryNic(d: LevelDevice): Obj | undefined {
+  const nics = arr(d.network_interfaces);
+  const hasGateway = (nic: Obj) => !!str(nic.gateway) || strings(nic.gateways).length > 0;
+  return (
+    nics.find((nic) => hasGateway(nic) && strings(nic.ip_addresses).some((ip) => privateIpv4(ip))) ??
+    nics.find((nic) => str(nic.mac_address))
+  );
+}
+
+function primaryIp(d: LevelDevice, nic: Obj | undefined): string | undefined {
+  const candidates = [...strings(nic?.ip_addresses), ...strings(d.private_ip_addresses)];
+  for (const candidate of candidates) {
+    const ip = privateIpv4(candidate);
+    if (ip) return ip;
+  }
+  return undefined;
+}
+
+/**
+ * Standard facts for the layout fields, keyed by the descriptor's
+ * `standardFields` source keys. A missing value is left out, so the sync
+ * never clears a field Level did not report.
+ */
+export function deviceStandardFields(d: LevelDevice): Record<string, string> {
+  const os = obj(d.operating_system);
+  const nic = primaryNic(d);
+  const totalMemory = fin(d.total_memory);
+  const values: Record<string, string | undefined> = {
+    hostname: str(d.hostname),
+    manufacturer: str(d.manufacturer),
+    model: str(d.model),
+    operating_system: str(os?.full_operating_system) ?? str(d.full_operating_system) ?? str(os?.name),
+    cpu: cpuSummary(d),
+    ram: totalMemory !== undefined && totalMemory > 0 ? formatRam(totalMemory) : undefined,
+    storage: storageSummary(d),
+    mac_address: str(nic?.mac_address),
+    ip_address: primaryIp(d, nic),
+    role: humanize(str(d.role)),
+  };
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) if (value) out[key] = clean(value, 1_000);
+  return out;
 }

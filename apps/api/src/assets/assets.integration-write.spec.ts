@@ -1438,3 +1438,82 @@ describe('AssetsService interactive identity writes', () => {
     expect(prisma.asset.findFirst).toHaveBeenCalled();
   });
 });
+
+describe('AssetsService standard-field write policy (recordFieldDiffs)', () => {
+  const checksum = (value: unknown) =>
+    createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
+  const withValue = (value: unknown) => asset({
+    fieldValues: value === undefined
+      ? []
+      : [{ id: 'fv-1', companyId: ids.company, assetId: ids.asset, assetFieldId: ids.field, value }],
+  });
+  const standard = (value: string, previous: Record<string, string>) => ({
+    ...input,
+    existingTargetId: ids.asset,
+    recordFieldDiffs: true,
+    fieldValues: [{ targetFieldId: ids.field, value, syncDirection: 'preserve_manual' as const }],
+    previousFieldChecksums: previous,
+  });
+
+  it('first sync of a new asset writes every mapped field and records no difference', async () => {
+    const { service, tx } = setup();
+    await expect(service.writeFromIntegration({
+      ...standard('host-a', {}),
+      existingTargetId: null,
+    })).resolves.toMatchObject({ change: 'created', fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('host-a') } });
+    expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+  });
+
+  it('first sync of an adopted asset (no baseline) overwrites the person value', async () => {
+    const { service, tx } = setup({ target: withValue('typed-by-hand'), binding: binding() });
+    await expect(service.writeFromIntegration(standard('host-a', {})))
+      .resolves.toMatchObject({ change: 'updated', fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('host-a') } });
+    expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+  });
+
+  it('fills an empty field even after a baseline exists', async () => {
+    const { service, tx } = setup({ target: withValue(undefined), binding: binding() });
+    await expect(service.writeFromIntegration(standard('host-b', { [ids.field]: checksum('host-a') })))
+      .resolves.toMatchObject({ change: 'updated', fieldDiffs: {} });
+    expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+  });
+
+  it('follows the source while the field still holds the last integration value', async () => {
+    const { service, tx } = setup({ target: withValue('host-a'), binding: binding() });
+    await expect(service.writeFromIntegration(standard('host-b', { [ids.field]: checksum('host-a') })))
+      .resolves.toMatchObject({ change: 'updated', fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('host-b') } });
+    expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+  });
+
+  it('records a difference instead of overwriting a field a person changed', async () => {
+    const { service, tx } = setup({ target: withValue('typed-by-hand'), binding: binding() });
+    await expect(service.writeFromIntegration(standard('host-b', { [ids.field]: checksum('host-a') })))
+      .resolves.toMatchObject({
+        change: 'unchanged',
+        fieldChecksums: { [ids.field]: checksum('host-a') },
+        fieldDiffs: {
+          [ids.field]: {
+            sourceValue: 'host-b',
+            sourceFingerprint: checksum('host-b'),
+            localFingerprint: checksum('typed-by-hand'),
+          },
+        },
+      });
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+  });
+
+  it('a person value equal to the source is no difference and follows the source again', async () => {
+    const { service } = setup({ target: withValue('host-b'), binding: binding() });
+    await expect(service.writeFromIntegration(standard('host-b', { [ids.field]: checksum('host-a') })))
+      .resolves.toMatchObject({ fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('host-b') } });
+  });
+
+  it('leaves other drivers unchanged: no fieldDiffs without the flag', async () => {
+    const { service } = setup({ target: withValue('typed-by-hand'), binding: binding() });
+    const result = await service.writeFromIntegration({
+      ...standard('host-b', { [ids.field]: checksum('host-a') }),
+      recordFieldDiffs: undefined,
+    });
+    expect(result.fieldDiffs).toBeUndefined();
+  });
+});

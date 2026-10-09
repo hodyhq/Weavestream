@@ -48,6 +48,7 @@ import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
 import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
 import { scanSensitiveMaterial } from './sensitive-material.js';
+import { mergeFieldDiffs } from './field-diffs.js';
 import {
   integrationTargetAuditAction,
   integrationTargetAuditAfter,
@@ -280,6 +281,11 @@ export class IntegrationSyncRunnerService {
     const claimUnboundMatches = driver.descriptor?.resources?.some(
       (candidate) =>
         candidate.key === resource.resourceKey && candidate.matchSuggestions !== undefined,
+    ) ?? false;
+    // Opt-in difference tracking: resources that fill standard layout fields.
+    const recordFieldDiffs = driver.descriptor?.resources?.some(
+      (candidate) =>
+        candidate.key === resource.resourceKey && (candidate.standardFields?.length ?? 0) > 0,
     ) ?? false;
     // One lowercased match-first index per run, shared by every record.
     const matchFirstIndexes: MatchFirstIndexCache = new Map();
@@ -553,6 +559,7 @@ export class IntegrationSyncRunnerService {
               claimUnboundMatches: claimUnboundMatches,
               previousAdopted: existing?.adopted === true,
               matchFirstIndexes,
+              ...(recordFieldDiffs ? { recordFieldDiffs: true } : {}),
               resolveBinding: (ref) => this.resolveBinding(tx, mapping.id, mapping.companyId, mapping.integrationId, ref),
             };
             const writer = this.writers.get(reconstruction.targetKind) as ReconstructionWriter<ReconstructionInput>;
@@ -627,6 +634,9 @@ export class IntegrationSyncRunnerService {
               });
               continue;
             }
+            const diffs = recordFieldDiffs && outcome.targetKind === 'asset'
+              ? mergeFieldDiffs(outcome.fieldDiffs ?? {}, existing?.fieldDiffs, existing?.fieldResolutions, writeNow)
+              : undefined;
             const binding = await tx.integrationSyncRecord.upsert({
               where: {
                 integrationCompanyMappingId_resourceId_externalId: {
@@ -635,8 +645,8 @@ export class IntegrationSyncRunnerService {
                   externalId: reconstruction.externalId,
                 },
               },
-              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section),
-              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section),
+              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section, diffs),
+              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section, diffs),
             });
             for (const gap of outcome.gaps) observeGap({
               externalId: reconstruction.externalId,
@@ -1161,8 +1171,15 @@ function bindingData(
   observedAt: Date,
   syncedAt: Date,
   section?: IntegrationSection | 'invalid' | null,
+  diffs?: ReturnType<typeof mergeFieldDiffs>,
 ) {
   return {
+    ...(diffs
+      ? {
+          fieldDiffs: diffs.fieldDiffs as unknown as Prisma.InputJsonValue,
+          fieldResolutions: diffs.fieldResolutions as unknown as Prisma.InputJsonValue,
+        }
+      : {}),
     ...(section === undefined || outcome.targetKind !== 'asset'
       ? {}
       : {

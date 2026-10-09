@@ -563,7 +563,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       }],
     };
 
-    function arrange(section: unknown, matchSuggestions = false) {
+    function arrange(section: unknown, matchSuggestions = false, standardFields = false) {
       const ctx = setup();
       ctx.prisma.integrationResource.findFirst.mockResolvedValueOnce({
         id: 'resource', integrationId: 'integration', resourceKey: 'users', enabled: true,
@@ -577,7 +577,11 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         }],
       });
       (ctx.driver.descriptor as Record<string, unknown>).resources = [
-        { key: 'users', ...(matchSuggestions ? { matchSuggestions: { sourceField: 'email', layoutHints: ['people'], fieldHints: ['email'] } } : {}) },
+        {
+          key: 'users',
+          ...(matchSuggestions ? { matchSuggestions: { sourceField: 'email', layoutHints: ['people'], fieldHints: ['email'] } } : {}),
+          ...(standardFields ? { standardFields: [{ sourceField: 'title', label: 'Title', fieldType: 'TEXT', fieldHints: ['title'] }] } : {}),
+        },
       ];
       ctx.driver.fetchRecords.mockResolvedValueOnce({
         records: [{
@@ -656,6 +660,35 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       expect(upsertData(tx).create.adopted).toBe(true);
       expect(upsertData(tx).update.adopted).toBe(true);
       expect(writer.write.mock.calls[0]![0].matchFirstIndexes).toBeInstanceOf(Map);
+    });
+
+    it('tracks differences only for resources declaring standardFields, honouring Keep ours', async () => {
+      const plain = arrange(validSection, true);
+      await run(plain.service);
+      expect(plain.writer.write.mock.calls[0]![0].recordFieldDiffs).toBeUndefined();
+      expect(upsertData(plain.tx).update).not.toHaveProperty('fieldDiffs');
+
+      const { service, tx, writer } = arrange(validSection, true, true);
+      tx.integrationSyncRecord.findUnique.mockResolvedValue({
+        id: 'binding', state: 'active', assetId: 'asset-id', targetKind: 'asset', lastSyncedFieldChecksums: {},
+        fieldDiffs: {},
+        fieldResolutions: { kept: { choice: 'local', sourceFingerprint: 'src-k' } },
+      });
+      const base = writer.write.getMockImplementation()!;
+      writer.write.mockImplementation(async (c, r) => ({
+        ...(await base(c, r)),
+        change: 'unchanged',
+        fieldDiffs: {
+          open: { sourceValue: 'Engineer', sourceFingerprint: 'src-o', localFingerprint: 'loc-o' },
+          kept: { sourceValue: 'Lead', sourceFingerprint: 'src-k', localFingerprint: 'loc-k' },
+        },
+      }));
+      await run(service);
+      expect(writer.write.mock.calls[0]![0].recordFieldDiffs).toBe(true);
+      const data = upsertData(tx).update;
+      expect(Object.keys(data.fieldDiffs as object)).toEqual(['open']);
+      expect(data.fieldDiffs).toMatchObject({ open: { sourceValue: 'Engineer', detectedAt: expect.any(String) } });
+      expect(data.fieldResolutions).toEqual({ kept: { choice: 'local', sourceFingerprint: 'src-k' } });
     });
 
     it('never clears adopted and passes it back to the writer on later syncs', async () => {

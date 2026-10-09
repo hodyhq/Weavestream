@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import type {
   DriverDescriptor,
   DriverResourceDescriptor,
+  DriverStandardField,
   EnsureResourceMatchFieldResult,
   IntegrationDto,
   IntegrationFieldMappingDto,
@@ -12,9 +13,18 @@ import type {
   LayoutFieldSummary,
   LayoutSummary,
 } from '@weavestream/shared';
-import { problemMessage } from '@weavestream/shared';
+import { problemMessage, standardFieldTargetCompatible } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
-import { Btn, Field, Select, Tag, useToast } from '../../../../../components/ui';
+import {
+  Btn,
+  DataTable,
+  Field,
+  MobileCardRow,
+  Select,
+  Tag,
+  useToast,
+  type DataColumn,
+} from '../../../../../components/ui';
 
 /** Resources that opt into the guided matcher (asset target + match suggestions). */
 export type MatchableResource = DriverResourceDescriptor & {
@@ -64,13 +74,94 @@ export function suggestField(fields: LayoutFieldSummary[], hints: string[]): Lay
   return suggest(fields.filter((field) => !field.archivedAt), hints);
 }
 
-type Choice = { layout: string; matchFieldId: string };
+/** Standard-field row choice: leave this fact out of the layout. */
+export const DONT_SYNC = '__dont_sync__';
+
+/** The resource's standard fields minus its match key (that one has its own picker). */
+export function standardFieldsOf(resource: MatchableResource): DriverStandardField[] {
+  return (resource.standardFields ?? []).filter((field) => field.sourceField !== resource.matchSuggestions.sourceField);
+}
+
+const tokens = (value: string) => norm(value).split(/[^a-z0-9]+/).filter(Boolean);
+
+/**
+ * Existing layout field for a standard fact: a compatible type whose slug or
+ * name equals a hint, else holds every word of one ("ip" finds "IP address",
+ * never "description"). Fields in `taken` are already used by another row.
+ */
+export function suggestStandardField(
+  fields: LayoutFieldSummary[],
+  spec: DriverStandardField,
+  taken: ReadonlySet<string> = new Set(),
+): LayoutFieldSummary | null {
+  const usable = fields.filter(
+    (field) => !field.archivedAt && !taken.has(field.id) && standardFieldTargetCompatible(spec.fieldType, field.fieldType),
+  );
+  const hints = [spec.sourceField, ...spec.fieldHints];
+  for (const exact of [true, false]) {
+    for (const hint of hints) {
+      const wanted = tokens(hint);
+      const hit = usable.find((field) =>
+        [field.slug, field.name].some((key) =>
+          exact ? tokens(key).join('_') === wanted.join('_') : wanted.every((word) => tokens(key).includes(word)),
+        ),
+      );
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/** Pre-selection per standard field: the saved mapping, else a hinted field, else Create field / Don't sync. */
+export function initialStandardChoices(
+  resource: MatchableResource,
+  fields: LayoutFieldSummary[],
+  matchFieldId: string,
+  saved: Readonly<Record<string, string>>,
+  canCreate: boolean,
+): Record<string, string> {
+  const taken = new Set<string>(matchFieldId ? [matchFieldId] : []);
+  for (const fieldId of Object.values(saved)) taken.add(fieldId);
+  const out: Record<string, string> = {};
+  for (const spec of standardFieldsOf(resource)) {
+    const savedId = saved[spec.sourceField];
+    if (savedId && fields.some((field) => field.id === savedId && !field.archivedAt)) {
+      out[spec.sourceField] = savedId;
+      continue;
+    }
+    const hit = suggestStandardField(fields, spec, taken);
+    if (hit) taken.add(hit.id);
+    out[spec.sourceField] = hit?.id ?? (canCreate ? CREATE_FIELD : DONT_SYNC);
+  }
+  return out;
+}
+
+type Choice = { layout: string; matchFieldId: string; standard: Record<string, string> };
 
 /** What is saved today, or null when the resource has never been mapped. */
-function persistedChoice(row: IntegrationResourceDto | undefined): Choice | null {
-  if (row && !row.enabled) return { layout: SKIP, matchFieldId: '' };
-  if (row?.assetLayoutId) return { layout: row.assetLayoutId, matchFieldId: row.matchKeyFieldIds[0] ?? '' };
+function persistedChoice(row: IntegrationResourceDto | undefined, saved: Record<string, string>): Choice | null {
+  if (row && !row.enabled) return { layout: SKIP, matchFieldId: '', standard: {} };
+  if (row?.assetLayoutId) return { layout: row.assetLayoutId, matchFieldId: row.matchKeyFieldIds[0] ?? '', standard: saved };
   return null;
+}
+
+/** Standard choices for a new layout: every fact gets a field when the user may create them. */
+function newLayoutStandard(resource: MatchableResource, canCreate: boolean): Record<string, string> {
+  return Object.fromEntries(standardFieldsOf(resource).map((spec) => [spec.sourceField, canCreate ? CREATE_FIELD : DONT_SYNC]));
+}
+
+function choiceForLayout(
+  resource: MatchableResource,
+  layout: LayoutSummary,
+  matchFieldId: string,
+  saved: Record<string, string>,
+  canCreate: boolean,
+): Choice {
+  return {
+    layout: layout.id,
+    matchFieldId,
+    standard: initialStandardChoices(resource, layout.fields, matchFieldId, saved, canCreate),
+  };
 }
 
 function initialChoice(
@@ -78,24 +169,35 @@ function initialChoice(
   row: IntegrationResourceDto | undefined,
   layouts: LayoutSummary[],
   canCreate: boolean,
+  saved: Record<string, string>,
 ): Choice {
   const createField = canCreate ? CREATE_FIELD : '';
+  if (row && !row.enabled) return { layout: SKIP, matchFieldId: '', standard: {} };
   if (row?.assetLayoutId) {
-    if (!row.enabled) return { layout: SKIP, matchFieldId: '' };
     const layout = layouts.find((candidate) => candidate.id === row.assetLayoutId);
     const matchFieldId =
       row.matchKeyFieldIds[0] ??
       (layout ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id : undefined) ??
       createField;
-    return { layout: row.assetLayoutId, matchFieldId };
+    return layout
+      ? choiceForLayout(resource, layout, matchFieldId, saved, canCreate)
+      : { layout: row.assetLayoutId, matchFieldId, standard: saved };
   }
-  if (row && !row.enabled) return { layout: SKIP, matchFieldId: '' };
   const layout = suggestLayout(layouts, resource.matchSuggestions.layoutHints);
-  if (!layout) return { layout: canCreate ? NEW_LAYOUT : SKIP, matchFieldId: '' };
-  return {
-    layout: layout.id,
-    matchFieldId: suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? createField,
-  };
+  if (!layout) {
+    return canCreate
+      ? { layout: NEW_LAYOUT, matchFieldId: '', standard: newLayoutStandard(resource, true) }
+      : { layout: SKIP, matchFieldId: '', standard: {} };
+  }
+  const matchFieldId = suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? createField;
+  return choiceForLayout(resource, layout, matchFieldId, {}, canCreate);
+}
+
+function sameChoice(a: Choice | null | undefined, b: Choice): boolean {
+  if (!a || a.layout !== b.layout || a.matchFieldId !== b.matchFieldId) return false;
+  const keys = new Set([...Object.keys(a.standard), ...Object.keys(b.standard)]);
+  // An unsaved "Don't sync" equals no mapping.
+  return [...keys].every((key) => (a.standard[key] ?? DONT_SYNC) === (b.standard[key] ?? DONT_SYNC));
 }
 
 /**
@@ -140,8 +242,14 @@ export function MapLayoutsTab({
       const saved: Record<string, Choice | null> = {};
       for (const resource of resources) {
         const row = integration.resources.find((candidate) => candidate.resourceKey === resource.key);
-        next[resource.key] = initialChoice(resource, row, active, canManageLayouts);
-        saved[resource.key] = persistedChoice(row);
+        const standardSaved = await savedStandardMappings(integration.id, resource, row);
+        if (cancelled) return;
+        if (standardSaved === null) {
+          setLoadError('Could not load the field mappings.');
+          return;
+        }
+        next[resource.key] = initialChoice(resource, row, active, canManageLayouts, standardSaved);
+        saved[resource.key] = persistedChoice(row, standardSaved);
       }
       setLayouts(active);
       setPersisted(saved);
@@ -150,21 +258,33 @@ export function MapLayoutsTab({
     return () => {
       cancelled = true;
     };
-  }, [integration.resources, resources, canManageLayouts]);
+  }, [integration.id, integration.resources, resources, canManageLayouts]);
 
   function choose(key: string, layoutValue: string) {
     const resource = resources.find((candidate) => candidate.key === key)!;
     const layout = layouts?.find((candidate) => candidate.id === layoutValue);
+    const matchFieldId = layout
+      ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? (canManageLayouts ? CREATE_FIELD : '')
+      : '';
     setChoices((prev) => ({
       ...prev,
-      [key]: {
-        layout: layoutValue,
-        matchFieldId: layout
-          ? suggestField(layout.fields, resource.matchSuggestions.fieldHints)?.id ?? (canManageLayouts ? CREATE_FIELD : '')
-          : '',
-      },
+      [key]: layout
+        ? choiceForLayout(resource, layout, matchFieldId, {}, canManageLayouts)
+        : {
+            layout: layoutValue,
+            matchFieldId: '',
+            standard: layoutValue === NEW_LAYOUT ? newLayoutStandard(resource, canManageLayouts) : {},
+          },
     }));
     setErrors((prev) => ({ ...prev, [key]: '' }));
+  }
+
+  function chooseStandard(key: string, sourceField: string, value: string) {
+    setChoices((prev) => {
+      const current = prev[key];
+      if (!current) return prev;
+      return { ...prev, [key]: { ...current, standard: { ...current.standard, [sourceField]: value } } };
+    });
   }
 
   async function saveResource(resource: MatchableResource, choice: Choice): Promise<string | null> {
@@ -187,13 +307,63 @@ export function MapLayoutsTab({
       if (!cleared.ok) return problemMessage(cleared.problem) ?? 'Could not clear the old field mappings.';
     }
 
+    const standard = standardFieldsOf(resource);
+    const picked = standard.flatMap((spec) => {
+      const value = choice.standard[spec.sourceField] ?? DONT_SYNC;
+      return value === DONT_SYNC ? [] : [{ spec, value }];
+    });
+    const pickedIds = picked.map(({ value }) => value).filter((value) => value !== CREATE_FIELD);
+    if (new Set(pickedIds).size !== pickedIds.length || pickedIds.includes(choice.matchFieldId)) {
+      return 'Each layout field can take only one value. Pick another field or Don\'t sync.';
+    }
+    /** Creates the "Create field" picks on the layout; returns the mappings to add. */
+    const standardMappings = async (assetLayoutId: string): Promise<{ sourceField: string; targetFieldId: string }[] | string> => {
+      const out: { sourceField: string; targetFieldId: string }[] = [];
+      for (const { spec, value } of picked) {
+        let targetFieldId = value;
+        if (value === CREATE_FIELD) {
+          const ensured = await apiFetch<EnsureResourceMatchFieldResult>(`${base}/match-field`, {
+            method: 'POST',
+            body: JSON.stringify({ assetLayoutId, sourceField: spec.sourceField }),
+          });
+          if (!ensured.ok || !ensured.data) return problemMessage(ensured.problem) ?? `Could not create the field "${spec.label}".`;
+          targetFieldId = ensured.data.fieldId;
+        }
+        out.push({ sourceField: spec.sourceField, targetFieldId });
+      }
+      return out;
+    };
+    const standardSources = new Set(standard.map((spec) => spec.sourceField));
+    const toBody = (mapping: IntegrationFieldMappingDto) => ({
+      sourceField: mapping.sourceField,
+      targetFieldId: mapping.targetFieldId,
+      syncDirection: mapping.syncDirection,
+      transform: mapping.transform,
+    });
+    // Standard fields never overwrite a value a person changed (see the Differences tab).
+    const standardBody = (mappings: { sourceField: string; targetFieldId: string }[]) =>
+      mappings.map((m) => ({ ...m, syncDirection: 'preserve_manual', transform: null }));
+
     if (choice.layout === NEW_LAYOUT) {
       if (row?.assetLayoutId) {
         const detached = await patch({ assetLayoutId: null, matchKeyFieldIds: [] });
         if (!detached.ok) return problemMessage(detached.problem) ?? 'Could not detach the old layout.';
       }
       const created = await apiFetch<IntegrationResourceDto>(`${base}/destination`, { method: 'POST' });
-      return created.ok ? null : problemMessage(created.problem) ?? 'Could not create the layout.';
+      if (!created.ok || !created.data?.assetLayoutId) return problemMessage(created.problem) ?? 'Could not create the layout.';
+      if (picked.length === 0) return null;
+      const added = await standardMappings(created.data.assetLayoutId);
+      if (typeof added === 'string') return added;
+      const current = await apiFetch<IntegrationFieldMappingDto[]>(`${base}/field-mappings`);
+      if (!current.ok || !current.data) return problemMessage(current.problem) ?? 'Could not read field mappings.';
+      const addedIds = new Set(added.map((m) => m.targetFieldId));
+      const saved = await putMappings([
+        ...current.data
+          .filter((m) => m.targetFieldId !== null && !standardSources.has(m.sourceField) && !addedIds.has(m.targetFieldId))
+          .map(toBody),
+        ...standardBody(added),
+      ]);
+      return saved.ok ? null : problemMessage(saved.problem) ?? 'Could not save the field mappings.';
     }
 
     if (!choice.matchFieldId) return 'Pick the field to match on.';
@@ -213,6 +383,9 @@ export function MapLayoutsTab({
     });
     if (!updated.ok) return problemMessage(updated.problem) ?? 'Could not save the layout.';
 
+    const added = await standardMappings(choice.layout);
+    if (typeof added === 'string') return added;
+    const addedIds = new Set(added.map((m) => m.targetFieldId));
     const sourceField = resource.matchSuggestions.sourceField;
     let kept: IntegrationFieldMappingDto[] = [];
     if (!layoutChanges) {
@@ -222,19 +395,17 @@ export function MapLayoutsTab({
         (mapping) =>
           mapping.targetFieldId !== null &&
           mapping.sourceField !== sourceField &&
-          mapping.targetFieldId !== matchFieldId,
+          mapping.targetFieldId !== matchFieldId &&
+          !standardSources.has(mapping.sourceField) &&
+          !addedIds.has(mapping.targetFieldId),
       );
     }
     const saved = await putMappings([
-      ...kept.map((mapping) => ({
-        sourceField: mapping.sourceField,
-        targetFieldId: mapping.targetFieldId,
-        syncDirection: mapping.syncDirection,
-        transform: mapping.transform,
-      })),
+      ...kept.map(toBody),
       { sourceField, targetFieldId: matchFieldId, syncDirection: 'source_wins', transform: null },
+      ...standardBody(added),
     ]);
-    return saved.ok ? null : problemMessage(saved.problem) ?? 'Could not save the match-key mapping.';
+    return saved.ok ? null : problemMessage(saved.problem) ?? 'Could not save the field mappings.';
   }
 
   async function save() {
@@ -244,9 +415,7 @@ export function MapLayoutsTab({
       for (const resource of resources) {
         const choice = choices[resource.key];
         const before = persisted[resource.key];
-        if (!choice || (before && before.layout === choice.layout && before.matchFieldId === choice.matchFieldId)) {
-          continue;
-        }
+        if (!choice || sameChoice(before, choice)) continue;
         const error = await saveResource(resource, choice);
         if (error) nextErrors[resource.key] = error;
       }
@@ -273,9 +442,10 @@ export function MapLayoutsTab({
         </h3>
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)' }}>
           Pick the layout each kind of record belongs to and the field that identifies an existing
-          asset. Records that match an existing asset are linked to it; only unmatched records create
-          new assets, which get just their name and the match value. If a layout has no field for the
-          match value, pick Create field and it is added to the layout when you save. Everything else
+          asset. Records that match an existing asset are linked to it; unmatched records create new
+          assets. Standard facts (hostname, OS, RAM, ...) fill the layout fields you pick below; pick
+          Create field to add a missing one when you save, or Don&apos;t sync to leave it out. A value
+          a person changed is never overwritten: it shows as a difference instead. Everything else
           shows in the integration section on the asset page. Skipped resources are not synced.
         </p>
       </header>
@@ -288,7 +458,7 @@ export function MapLayoutsTab({
       {!layouts && !loadError && <Tag tone="default">Loading layouts…</Tag>}
       {layouts &&
         resources.map((resource) => {
-          const choice = choices[resource.key] ?? { layout: SKIP, matchFieldId: '' };
+          const choice: Choice = choices[resource.key] ?? { layout: SKIP, matchFieldId: '', standard: {} };
           const layout = layouts.find((candidate) => candidate.id === choice.layout);
           const fields = layout?.fields.filter((field) => !field.archivedAt) ?? [];
           const layoutId = `map-layout-${resource.key}`;
@@ -352,6 +522,17 @@ export function MapLayoutsTab({
                   </Select>
                 </Field>
               )}
+              {choice.layout !== SKIP && standardFieldsOf(resource).length > 0 && (
+                <div style={{ flexBasis: '100%', minWidth: 0 }}>
+                  <StandardFieldsTable
+                    resource={resource}
+                    fields={choice.layout === NEW_LAYOUT ? [] : fields}
+                    choice={choice}
+                    canCreate={canManageLayouts}
+                    onChange={(sourceField, value) => chooseStandard(resource.key, sourceField, value)}
+                  />
+                </div>
+              )}
               {errors[resource.key] && (
                 <div role="alert" style={{ flexBasis: '100%' }}>
                   <Tag tone="danger">{errors[resource.key]}</Tag>
@@ -368,5 +549,82 @@ export function MapLayoutsTab({
         </div>
       )}
     </div>
+  );
+}
+
+/** Saved standard-field mappings (source key to field id), {} when none, null on a read error. */
+async function savedStandardMappings(
+  integrationId: string,
+  resource: MatchableResource,
+  row: IntegrationResourceDto | undefined,
+): Promise<Record<string, string> | null> {
+  const standard = new Set(standardFieldsOf(resource).map((spec) => spec.sourceField));
+  if (standard.size === 0 || !row?.assetLayoutId || row.fieldMappingCount === 0) return {};
+  const res = await apiFetch<IntegrationFieldMappingDto[]>(
+    `/admin/integrations/${integrationId}/resources/${resource.key}/field-mappings`,
+  );
+  if (!res.ok || !res.data) return null;
+  return Object.fromEntries(
+    res.data
+      .filter((mapping) => standard.has(mapping.sourceField) && mapping.targetFieldId)
+      .map((mapping) => [mapping.sourceField, mapping.targetFieldId!]),
+  );
+}
+
+type StandardRow = DriverStandardField & { id: string };
+
+/** One row per standard fact: an existing layout field, Create field, or Don't sync. */
+function StandardFieldsTable({
+  resource,
+  fields,
+  choice,
+  canCreate,
+  onChange,
+}: {
+  resource: MatchableResource;
+  fields: LayoutFieldSummary[];
+  choice: Choice;
+  canCreate: boolean;
+  onChange: (sourceField: string, value: string) => void;
+}) {
+  const rows: StandardRow[] = standardFieldsOf(resource).map((spec) => ({ ...spec, id: spec.sourceField }));
+  const picker = (row: StandardRow) => {
+    const id = `map-standard-${resource.key}-${row.sourceField}`;
+    const usable = fields.filter((field) => !field.archivedAt && standardFieldTargetCompatible(row.fieldType, field.fieldType));
+    return (
+      <Select
+        id={id}
+        aria-label={`Layout field for ${row.label}`}
+        value={choice.standard[row.sourceField] ?? DONT_SYNC}
+        onChange={(e) => onChange(row.sourceField, e.target.value)}
+      >
+        {usable.map((field) => (
+          <option key={field.id} value={field.id}>
+            {field.name}
+          </option>
+        ))}
+        <option value={CREATE_FIELD} disabled={!canCreate}>
+          {`Create field "${row.label}"`}
+        </option>
+        <option value={DONT_SYNC}>Don&apos;t sync</option>
+      </Select>
+    );
+  };
+  const columns: DataColumn<StandardRow>[] = [
+    { id: 'fact', header: 'Fact', width: 200, render: (row) => row.label },
+    { id: 'field', header: 'Layout field', render: picker },
+  ];
+  return (
+    <DataTable
+      columns={columns}
+      rows={rows}
+      disableSort
+      renderMobileCard={(row) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <MobileCardRow label="Fact">{row.label}</MobileCardRow>
+          {picker(row)}
+        </div>
+      )}
+    />
   );
 }

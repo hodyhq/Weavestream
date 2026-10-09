@@ -69,6 +69,20 @@ describe('IntegrationMatchFieldService', () => {
     expect(layouts.addField).not.toHaveBeenCalled();
   });
 
+  it('creates a standard field by source key with its label, slug and type', async () => {
+    const { service, layouts } = setup('level', [field({})]);
+    await expect(service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META, 'ip_address')).resolves.toEqual({ fieldId: 'f-new', created: true });
+    expect(layouts.addField.mock.calls[0]![2]).toEqual(expect.objectContaining({ slug: 'ip_address', name: 'IP address', fieldType: 'IP_ADDRESS', showInTable: false }));
+  });
+
+  it('reuses a same-slug text field for a standard fact, refuses an incompatible one and unknown keys', async () => {
+    const text = setup('level', [field({}), field({ id: 'f-ip', name: 'IP', slug: 'ip_address', fieldType: 'TEXT', isPrimary: false })]);
+    await expect(text.service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META, 'ip_address')).resolves.toEqual({ fieldId: 'f-ip', created: false });
+    const dropdown = setup('level', [field({}), field({ id: 'f-role', name: 'Role', slug: 'role', fieldType: 'DROPDOWN', isPrimary: false })]);
+    await expect(dropdown.service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META, 'role')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(dropdown.service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META, 'asset_tag')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('is gated by integration.manage', () => {
     expect(Reflect.getMetadata(REQUIRE_PERMISSION_KEY, IntegrationMatchFieldController.prototype.ensureMatchField)).toEqual({
       action: 'integration.manage',

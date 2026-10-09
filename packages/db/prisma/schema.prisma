@@ -1676,6 +1676,15 @@ model IntegrationSyncRecord {
   /// The binding adopted an operator-created asset (match-first) instead of
   /// creating one, so later syncs keep the operator's asset name. Sticky.
   adopted                     Boolean               @default(false)
+  /// Standard fields a person changed that now differ from the source,
+  /// keyed by `AssetField.id`: { sourceValue, sourceFingerprint,
+  /// localFingerprint, detectedAt }. Recomputed on every sync of a
+  /// resource that declares `standardFields`; empty otherwise.
+  fieldDiffs                  Json                  @default("{}") @map("field_diffs")
+  /// "Keep ours" choices keyed by `AssetField.id`: { choice: 'local',
+  /// sourceFingerprint }. Suppresses the difference until the source
+  /// value changes.
+  fieldResolutions            Json                  @default("{}") @map("field_resolutions")
   createdAt                   DateTime              @default(now()) @map("created_at")
   updatedAt                   DateTime              @updatedAt @map("updated_at")
 

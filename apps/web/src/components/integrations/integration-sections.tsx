@@ -9,18 +9,45 @@ import { Icon, Tag, type TagTone } from '../ui';
 import { ExternalUrlValue } from '../assets/external-url-value';
 import { FormattedDateTime } from '../../lib/timezone-context';
 import { recentRelative } from '../../lib/relative-time';
+import { IntegrationDifferences } from './integration-differences';
 
 /**
  * Driver-supplied integration sections on the asset page (one collapsible
  * panel per binding, modelled on integration cards). The data is
  * schema-validated plain text; everything here renders as text nodes.
  */
-export function IntegrationSections({ sections }: { sections: AssetIntegrationSection[] }) {
+export function IntegrationSections({
+  sections,
+  companyId,
+  assetId,
+  canResolve = false,
+}: {
+  sections: AssetIntegrationSection[];
+  /** With `assetId`: the asset the panels belong to, for resolving differences. */
+  companyId?: string;
+  assetId?: string;
+  /** The viewer can write the asset: show the difference buttons. */
+  canResolve?: boolean;
+}) {
   if (sections.length === 0) return null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {sections.map((entry, index) => (
-        <IntegrationSectionPanel key={`${entry.integrationId}:${index}`} entry={entry} />
+        <IntegrationSectionPanel
+          key={`${entry.integrationId}:${index}`}
+          entry={entry}
+          differences={
+            companyId && assetId ? (
+              <IntegrationDifferences
+                companyId={companyId}
+                assetId={assetId}
+                sourceLabel={entry.section.title}
+                differences={entry.differences ?? []}
+                canResolve={canResolve}
+              />
+            ) : null
+          }
+        />
       ))}
     </div>
   );
@@ -36,7 +63,7 @@ function IconImg({ src, size }: { src: string | null; size: number }) {
   );
 }
 
-function IntegrationSectionPanel({ entry }: { entry: AssetIntegrationSection }) {
+function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrationSection; differences: ReactNode }) {
   const { section } = entry;
   const logo = section.icon
     ? `/integrations/icons/${section.icon}.svg`
@@ -120,6 +147,7 @@ function IntegrationSectionPanel({ entry }: { entry: AssetIntegrationSection }) 
               </div>
             </div>
           ))}
+          {differences}
         </div>
       </details>
     </section>

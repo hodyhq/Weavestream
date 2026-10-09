@@ -1,4 +1,4 @@
-import type { MatchFirstIndexCache } from '../../assets/assets.service.js';
+import type { IntegrationFieldDiff, MatchFirstIndexCache } from '../../assets/assets.service.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
@@ -209,6 +209,8 @@ export interface ReconstructionWriteContext {
   previousAdopted?: boolean;
   /** Per-run match-first index cache, created once by the runner per resource run. */
   matchFirstIndexes?: MatchFirstIndexCache;
+  /** Runner-set for resources that declare `standardFields`: report person-changed fields. */
+  recordFieldDiffs?: boolean;
   resolveBinding(
     ref: ReconstructionDependencyRef,
   ): Promise<ResolvedReconstructionTarget | null>;
@@ -222,6 +224,8 @@ export interface ReconstructionWriteOutcome {
   provenance: SafeIntegrationProvenance;
   gaps: ReconstructionGapInput[];
   fieldChecksums?: Record<string, string>;
+  /** Person-changed standard fields (only when `recordFieldDiffs` was set). */
+  fieldDiffs?: Record<string, IntegrationFieldDiff>;
   /** The write adopted an operator-created asset (match-first). */
   adopted?: boolean;
 }
@@ -238,6 +242,7 @@ export interface NativeIntegrationWriteResult {
   change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
   gap?: ReconstructionGapInput;
   fieldChecksums?: Record<string, string>;
+  fieldDiffs?: Record<string, IntegrationFieldDiff>;
   adopted?: boolean;
 }
 
@@ -500,6 +505,7 @@ export function completedOutcome(
     provenance: buildProvenance(ctx, input),
     gaps: [],
     ...(result.fieldChecksums ? { fieldChecksums: result.fieldChecksums } : {}),
+    ...(result.fieldDiffs ? { fieldDiffs: result.fieldDiffs } : {}),
     ...(result.adopted ? { adopted: true } : {}),
   };
 }

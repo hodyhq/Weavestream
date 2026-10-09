@@ -28,6 +28,7 @@ import {
   integrationGapsPageSchema,
   reconstructionCompletenessCountsSchema,
   driverResourceDescriptorSchema,
+  standardFieldTargetCompatible,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -1231,13 +1232,25 @@ export class IntegrationsService {
           assetLayoutId: resource.assetLayoutId,
           archivedAt: null,
         },
-        select: { id: true },
+        select: { id: true, fieldType: true },
       });
-      const validSet = new Set(valid.map((v) => v.id));
+      const typeById = new Map(valid.map((v) => [v.id, v.fieldType]));
+      const standardBySource = new Map(
+        (driver.descriptor.resources.find((r) => r.key === resourceKey)?.standardFields ?? []).map((f) => [f.sourceField, f]),
+      );
       for (const m of assetMappings) {
-        if (!validSet.has(m.targetFieldId)) {
+        const targetType = typeById.get(m.targetFieldId);
+        if (!targetType) {
           throw new BadRequestException(
             `Target field ${m.targetFieldId} does not belong to layout ${resource.assetLayoutId} or is archived.`,
+          );
+        }
+        // Standard facts never land in operator-owned field types (files,
+        // asset references, dropdowns) or a type that cannot hold them.
+        const standard = standardBySource.get(m.sourceField.trim());
+        if (standard && !standardFieldTargetCompatible(standard.fieldType, targetType)) {
+          throw new BadRequestException(
+            `"${standard.label}" cannot be mapped to a ${targetType} field.`,
           );
         }
       }

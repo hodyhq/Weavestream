@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FieldTypeValues, type FieldType } from './field-types.js';
 
 /**
  * Phase 11 — universal integration framework schemas.
@@ -135,6 +136,44 @@ const driverResourceKeySchema = z
 const sourceEndpointSchema = z.string().min(1).max(256).startsWith('/');
 const boundedTargetStringSchema = z.string().min(1).max(128);
 
+/**
+ * Field types an integration never writes as a standard field: files,
+ * asset references and dropdowns hold operator-owned choices, not source
+ * facts. Both the descriptor schema and the field-mapping save refuse them.
+ */
+export const UNMAPPABLE_STANDARD_FIELD_TYPES = ['FILE', 'ASSET_REFERENCE', 'DROPDOWN'] as const satisfies readonly FieldType[];
+
+function isUnmappableStandardType(type: string): boolean {
+  return (UNMAPPABLE_STANDARD_FIELD_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * Whether a layout field of `targetType` can hold a standard field of
+ * `sourceType`: the same type, or plain text (which takes any value).
+ */
+export function standardFieldTargetCompatible(sourceType: FieldType, targetType: string): boolean {
+  if (isUnmappableStandardType(targetType)) return false;
+  return targetType === sourceType || targetType === 'TEXT' || targetType === 'TEXTAREA';
+}
+
+/**
+ * A standard fact a resource fills into the layout's own fields
+ * (hostname, OS, RAM, ...), as opposed to the extras its section shows.
+ * `fieldHints` are lower-case slug/name hints Map layouts uses to
+ * pre-select an existing layout field.
+ */
+export const driverStandardFieldSchema = z
+  .object({
+    sourceField: z.string().min(1).max(60).regex(/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/),
+    label: z.string().min(1).max(80),
+    fieldType: z.enum(FieldTypeValues).refine((type) => !isUnmappableStandardType(type), {
+      message: 'Standard fields cannot be files, asset references or dropdowns',
+    }),
+    fieldHints: z.array(z.string().min(1).max(64)).max(16),
+  })
+  .strict();
+export type DriverStandardField = z.infer<typeof driverStandardFieldSchema>;
+
 const resourceDescriptorBaseShape = {
   key: driverResourceKeySchema,
   label: z.string().min(1),
@@ -180,6 +219,12 @@ const resourceDescriptorBaseShape = {
    * integration `section`. "Create new layout" only creates these fields.
    */
   minimalFields: z.array(z.string().min(1).max(128)).max(8).optional(),
+  /**
+   * Standard facts this resource fills into layout fields (opt-in). Map
+   * layouts offers one row per entry; a sync writes them under the
+   * difference-tracking write policy (see AssetsService.writeFromIntegration).
+   */
+  standardFields: z.array(driverStandardFieldSchema).max(32).optional(),
 } as const;
 
 const assetTargetConfigSchema = z
@@ -283,6 +328,14 @@ export const driverResourceDescriptorSchema = z
         code: z.ZodIssueCode.custom,
         path: ['dependsOnResourceKeys'],
         message: 'Dependency keys must be unique',
+      });
+    }
+    const standard = resource.standardFields?.map((field) => field.sourceField) ?? [];
+    if (new Set(standard).size !== standard.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['standardFields'],
+        message: 'Standard field source keys must be unique',
       });
     }
   });
@@ -584,7 +637,13 @@ export type UpdateIntegrationResourceInput = z.infer<typeof updateIntegrationRes
  * resource matches on (the driver's recommended match-key field), creating
  * it when missing. Only that one minimal field is ever created.
  */
-export const ensureResourceMatchFieldSchema = z.object({ assetLayoutId: z.string().uuid() }).strict();
+export const ensureResourceMatchFieldSchema = z
+  .object({
+    assetLayoutId: z.string().uuid(),
+    /** A standard field to create instead of the match field. */
+    sourceField: z.string().min(1).max(60).optional(),
+  })
+  .strict();
 export type EnsureResourceMatchFieldInput = z.infer<typeof ensureResourceMatchFieldSchema>;
 
 export interface EnsureResourceMatchFieldResult {
@@ -1287,3 +1346,53 @@ export const integrationOAuthStartResponseSchema = z.object({
   authorizeUrl: z.string().url(),
 });
 export type IntegrationOAuthStartResponse = z.infer<typeof integrationOAuthStartResponseSchema>;
+
+// ---------------------------------------------------------------------
+// Integration differences (standard fields a person changed)
+// ---------------------------------------------------------------------
+
+export const integrationDifferenceChoiceSchema = z.enum(['source', 'local']);
+export type IntegrationDifferenceChoice = z.infer<typeof integrationDifferenceChoiceSchema>;
+
+export const resolveIntegrationDifferenceSchema = z
+  .object({
+    syncRecordId: z.string().uuid(),
+    assetFieldId: z.string().uuid(),
+    choice: integrationDifferenceChoiceSchema,
+  })
+  .strict();
+export type ResolveIntegrationDifferenceInput = z.infer<typeof resolveIntegrationDifferenceSchema>;
+
+export const integrationDifferencesQuerySchema = z
+  .object({
+    companyId: z.string().uuid().optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    /** Last sync record id of the previous page. */
+    cursor: z.string().uuid().optional(),
+  })
+  .strict();
+export type IntegrationDifferencesQuery = z.infer<typeof integrationDifferencesQuerySchema>;
+
+/** One open difference: the value in Weavestream and the source value, as display text. */
+export interface IntegrationDifferenceDto {
+  syncRecordId: string;
+  assetFieldId: string;
+  fieldLabel: string;
+  localValue: string | null;
+  sourceValue: string | null;
+  detectedAt: string;
+}
+
+export interface IntegrationDifferenceRowDto extends IntegrationDifferenceDto {
+  companyId: string;
+  companyName: string;
+  assetId: string;
+  assetName: string;
+}
+
+export interface IntegrationDifferencesPage {
+  items: IntegrationDifferenceRowDto[];
+  /** Open differences across the whole filter (first page only). */
+  total: number | null;
+  nextCursor: string | null;
+}

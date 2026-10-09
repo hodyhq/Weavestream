@@ -44,6 +44,7 @@ export interface AssetIntegrationWriteInput {
     syncDirection: IntegrationSyncDirectionValue;
   }>;
   previousFieldChecksums: Readonly<Record<string, string>>;
+  recordFieldDiffs?: boolean;
 }
 
 export interface AssetIntegrationWritePort {
@@ -151,6 +152,7 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         ...(ctx.claimUnboundMatches === true ? { claimUnboundMatch: true } : {}),
         ...(ctx.previousAdopted === true ? { keepTargetName: true } : {}),
         ...(ctx.matchFirstIndexes ? { matchFirstIndexes: ctx.matchFirstIndexes } : {}),
+        ...(ctx.recordFieldDiffs === true ? { recordFieldDiffs: true } : {}),
         fieldValues: input.fieldValues.map((field) => ({
           targetFieldId: field.targetFieldId,
           value: field.value,
