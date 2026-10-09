@@ -42,6 +42,7 @@ Select an integration below for provider-specific setup guides, resource capabil
 [!card title="Cloudflare" text="Manage Zero Trust Gateway IP lists with drift repair, and sync every domain on the account into Domains." icon="plug" layout="compact"](/integrations/cloudflare/)
 
 [!card title="Google Workspace" text="One-click connect per customer to sync users, licences, storage, groups, domains, devices and security alerts (read-only)." icon="plug" layout="compact"](/integrations/google-workspace/)
+[!card title="Google Workspace (reseller)" text="For Google resellers: one connection syncs every customer's subscriptions, seats and renewal dates (read-only)." icon="plug" layout="compact"](/integrations/google-workspace/#reseller-subscriptions)
 
 [!card title="NinjaOne" text="Sync agent-managed workstations, servers, SNMP network gear, and guest VMs with dual-resource mapping." icon="plug" layout="compact"](/integrations/ninjaone/)
 

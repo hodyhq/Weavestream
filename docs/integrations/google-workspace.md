@@ -34,7 +34,7 @@ Chromebook **auto-update expiration** can optionally be mapped to a date field m
 
 ### What Google cannot provide
 
-- **No bill, purchased seat count or renewal date** for customers you do not resell. Google only exposes *assigned* licences. Invoices are only in the Admin console.
+- **No bill, purchased seat count or renewal date** for customers you do not resell. Google only exposes *assigned* licences. Invoices are only in the Admin console. Resellers get purchased seats and renewal dates for their customers through [Reseller Subscriptions](#reseller-subscriptions).
 - **No size per shared drive.** Only the tenant total for all shared drives is available.
 - **Usage data lags 1–3 days.** Storage figures come from Google's usage reports, which Google publishes with a delay. The section shows the date the figures are from.
 
@@ -113,6 +113,31 @@ On sync, a Google record whose match value equals **exactly one** unlinked asset
 
 An adopted asset keeps the name you gave it. Assets that Google created follow the Google name (for example when a user is renamed).
 
+## Reseller Subscriptions
+
+> [!NOTE]
+> Only for Google Workspace **resellers** (partners who buy Google Workspace for their customers through the Partner Sales Console). A direct Google customer cannot use it: Google answers with "This Google account is not a Google Workspace reseller".
+
+The **Google Workspace (reseller)** integration is a separate integration that uses the same Google Cloud project and OAuth app. One integration covers **all** your reseller customers: connect once with an admin of your reseller domain, and every customer that holds a subscription is listed under **Organizations** by its domain. Map each one to its Weavestream company.
+
+**Setup** follows the steps above with three differences:
+
+1. In step 2, also enable the **Google Workspace Reseller API**.
+2. In step 7, create **New integration > Google Workspace (reseller)** and sign in with your reseller admin, not a customer admin.
+3. The only scope requested is `https://www.googleapis.com/auth/apps.order.readonly` (plus `openid` and `email`). It is read-only.
+
+**What it syncs**: one record per subscription, named `<edition> - <customer domain>` and matched on the **Subscription ID**. Weavestream suggests a layout named like Licenses or Subscriptions. The integration section shows:
+
+| Group | Values |
+|---|---|
+| Plan | Edition and SKU, plan (annual paid monthly or yearly, Flexible, Trial, Free), commitment, renewal setting, status, trial, purchase order |
+| Seats | Licensed of purchased seats (annual plans) or licensed of maximum seats (Flexible and Trial) as a usage bar, plus each count |
+| Dates | Created, commitment start, commitment end (renewal), trial end |
+
+**Renewals in Expiring soon**: on **Map layouts**, add a date field flagged as an expiry to the subscriptions layout and map **Commitment end (renewal)** (or **Trial end**) to it. Renewal dates then appear in **Expiring soon** with reminders. These two fields are optional and not part of a new layout by default.
+
+Tenant isolation: each sync first asks Google whether the mapped customer belongs to the connected reseller and only requests that customer's subscriptions, so a company never receives another customer's data.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -130,11 +155,13 @@ An adopted asset keeps the name you gave it. Assets that Google created follow t
 | Google refuses new connections with a user cap message | An unverified app allows 100 approving admins over the project's life | Use a new Cloud project for the next customers, or submit the app for Google verification. |
 | Storage shows "not available" or an older date | Usage reports lag 1–3 days | Wait; the next sync picks up newer figures. |
 | A record was not linked and the run reports "multiple assets match" | Two or more of your assets share the match value | Remove or rename the duplicates, then sync again. |
+| Reseller: "This Google account is not a Google Workspace reseller" | The connected account is not an admin of a reseller domain (403) | Reconnect with an admin who can sign in to the Partner Sales Console. |
+| Reseller: "not one of the connected reseller's customers" | The mapped customer was transferred away or the mapping points at another customer | Remap the organization, or reconnect with the right reseller admin. |
 
 ## Security Model
 
 - **Read-only.** The driver only sends GET requests to Google. Check setup is read-only too.
-- **Scopes requested**: `openid`, `email`, and `admin.directory.user.readonly`, `admin.directory.group.readonly`, `admin.directory.group.member.readonly`, `admin.directory.domain.readonly`, `admin.directory.customer.readonly`, `admin.directory.device.chromeos.readonly`, `admin.directory.device.mobile.readonly`, `admin.reports.usage.readonly`, `apps.licensing`, `apps.alerts` (each prefixed with `https://www.googleapis.com/auth/`). Google offers no read-only variant of `apps.licensing` and `apps.alerts`; Weavestream only reads with them.
+- **Scopes requested**: `openid`, `email`, and `admin.directory.user.readonly`, `admin.directory.group.readonly`, `admin.directory.group.member.readonly`, `admin.directory.domain.readonly`, `admin.directory.customer.readonly`, `admin.directory.device.chromeos.readonly`, `admin.directory.device.mobile.readonly`, `admin.reports.usage.readonly`, `apps.licensing`, `apps.alerts` (each prefixed with `https://www.googleapis.com/auth/`). Google offers no read-only variant of `apps.licensing` and `apps.alerts`; Weavestream only reads with them. The reseller integration requests only `apps.order.readonly` (plus `openid` and `email`).
 - **Encrypted secrets.** The OAuth client secret and each customer's refresh token are encrypted at rest (AES-256-GCM) and never shown again or logged. Saving the client needs settings permission and an MFA step-up, and is audited.
 - **State and PKCE.** Every connect uses a single-use random state bound to the signed-in user and a PKCE code verifier.
 - **Tenant isolation.** A connection's tokens only ever feed the company its tenant is mapped to; a token for a different tenant stops the sync.
