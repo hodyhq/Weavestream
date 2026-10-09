@@ -58,7 +58,6 @@ export const DIRECTORY = 'https://admin.googleapis.com/admin/directory/v1';
 export const REPORTS = 'https://admin.googleapis.com/admin/reports/v1';
 export const LICENSING = 'https://licensing.googleapis.com/apps/licensing/v1';
 export const ALERT_CENTER = 'https://alertcenter.googleapis.com/v1beta1';
-export const RESELLER = 'https://reseller.googleapis.com/apps/reseller/v1';
 const SCOPE = 'https://www.googleapis.com/auth/';
 
 export const GOOGLE_WORKSPACE_OAUTH: DriverOAuthDescriptor = {
@@ -68,7 +67,7 @@ export const GOOGLE_WORKSPACE_OAUTH: DriverOAuthDescriptor = {
   revokeUrl: 'https://oauth2.googleapis.com/revoke',
   scopes: [
     'openid',
-    'email',
+    'https://www.googleapis.com/auth/userinfo.email',
     ...[
       'admin.directory.user.readonly',
       'admin.directory.group.readonly',
@@ -260,7 +259,6 @@ export const RATE_LIMIT_REASONS = new Set(['userRateLimitExceeded', 'quotaExceed
 export const API_DISABLED_REASONS = new Set(['accessNotConfigured', 'SERVICE_DISABLED']);
 
 export function apiName(url: string): string {
-  if (url.startsWith(RESELLER)) return 'Google Workspace Reseller API';
   if (url.startsWith(LICENSING)) return 'Enterprise License Manager API';
   if (url.startsWith(ALERT_CENTER)) return 'Google Workspace Alert Center API';
   if (url.startsWith(REPORTS)) return 'Admin SDK API (Reports)';

@@ -15,7 +15,7 @@ import { Btn, Icon, useToast } from '../ui';
 export function SetupGuide({
   steps,
   redirectUri,
-  scopes,
+  scopeGroups,
   check,
   onCheck,
   checking = false,
@@ -24,7 +24,8 @@ export function SetupGuide({
 }: {
   steps: SetupGuideStep[];
   redirectUri: string;
-  scopes: string[];
+  /** Scopes to register, grouped (e.g. required vs. one driver only). */
+  scopeGroups: ScopeGroup[];
   check: IntegrationSetupCheck | null;
   onCheck?: () => void;
   checking?: boolean;
@@ -43,7 +44,7 @@ export function SetupGuide({
 
   function computed(kind: SetupGuideComputedValue): string {
     if (kind === 'redirectUri') return redirectUri;
-    if (kind === 'scopes') return scopes.join(', ');
+    if (kind === 'scopes') return scopeGroups.flatMap((g) => g.scopes).join(' ');
     try {
       return new URL(redirectUri).origin;
     } catch {
@@ -112,12 +113,16 @@ export function SetupGuide({
                   ))}
                   <GuideBody body={step.body} />
                   {step.copyValues?.map((cv) => {
+                    // The provider console takes one scope at a time, so each gets its own copy button.
+                    if ('computed' in cv && cv.computed === 'scopes') {
+                      return <ScopeList key={cv.label} groups={scopeGroups} />;
+                    }
                     const value = 'computed' in cv ? computed(cv.computed) : cv.value;
                     return (
                       <div key={cv.label} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <span style={labelStyle}>{cv.label}</span>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                          <code style={codeStyle}>{'computed' in cv && cv.computed === 'scopes' ? scopes.join('\n') : value}</code>
+                          <code style={codeStyle}>{value}</code>
                           <Btn kind="outline" size="sm" icon={Icon.copy} onClick={() => void copy(value, cv.label)} aria-label={`Copy ${cv.label.toLowerCase()}`}>
                             Copy
                           </Btn>
@@ -143,6 +148,36 @@ export function SetupGuide({
         </ol>
       )}
     </section>
+  );
+}
+
+export type ScopeGroup = { label?: string; scopes: string[] };
+
+/** One row per scope with its own Copy button, under an optional group label. */
+export function ScopeList({ groups }: { groups: ScopeGroup[] }) {
+  const toast = useToast();
+  async function copy(scope: string) {
+    const ok = await copyToClipboard(scope);
+    toast.push(ok ? 'Scope copied.' : 'Could not copy the scope.', ok ? 'ok' : 'danger');
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {groups.map((group, gi) => (
+        <div key={group.label ?? gi} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {group.label && <span style={labelStyle}>{group.label}</span>}
+          <ul style={scopeListStyle} aria-label={group.label ?? 'Scopes'}>
+            {group.scopes.map((scope) => (
+              <li key={scope} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <code style={codeStyle}>{scope}</code>
+                <Btn kind="outline" size="sm" icon={Icon.copy} onClick={() => void copy(scope)} aria-label={`Copy scope ${scope}`}>
+                  Copy
+                </Btn>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -192,6 +227,7 @@ const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 
 const mutedStyle: React.CSSProperties = { margin: 0, fontSize: 12.5, color: 'var(--muted)' };
 const dangerStyle: React.CSSProperties = { margin: 0, fontSize: 12.5, color: 'var(--danger)', fontWeight: 500 };
 const linkStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12.5, color: 'var(--accent)', fontWeight: 600, textDecoration: 'none' };
+const scopeListStyle: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 };
 const codeStyle: React.CSSProperties = {
   flex: '1 1 240px', minWidth: 0, padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 6,
   background: 'var(--panel-2)', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text)',

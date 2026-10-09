@@ -73,12 +73,6 @@ Per customer: **New integration → Google Workspace**, then on **Credentials & 
 
 Do not leave the app in **Testing**: connections expire after 7 days. **Reconnect** appears when access was revoked or unused for 6 months. Google gives no invoices, purchased seats or renewal dates for direct customers, and usage figures lag 1 to 3 days.
 
-## Configure Google Workspace reseller subscriptions
-<!-- aliases: google reseller | google workspace reseller | partner sales console | google subscriptions | google renewal dates | not a google workspace reseller -->
-<!-- requires: integration.manage -->
-
-Only for Google Workspace resellers. Uses the same Google OAuth app; also enable the **Google Workspace Reseller API** in the Cloud project. Create **New integration → Google Workspace (reseller)** once and **Connect with Google** as an admin of the reseller domain (a Partner Sales Console admin). Every customer with a subscription appears under **Organizations**; map each to its company. Each subscription syncs read-only with edition, plan, seats (licensed of purchased or of maximum) and dates. To see renewals in **Expiring soon**, map **Commitment end (renewal)** or **Trial end** to a date field flagged as an expiry under **Map layouts**. "This Google account is not a Google Workspace reseller" means the connected account is not a reseller admin.
-
 ## Configure Breeze reconstruction sync
 <!-- aliases: configure Breeze reconstruction | Breeze RMM setup | Breeze Partner API | Breeze disaster recovery sync | Breeze documentation sync -->
 <!-- requires: integration.manage | sync.trigger -->

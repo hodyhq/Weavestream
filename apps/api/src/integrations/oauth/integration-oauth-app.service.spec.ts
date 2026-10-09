@@ -33,8 +33,9 @@ function setup(row: { id?: string; clientId: string; secretCiphertext: string; u
   const audit = { log: jest.fn(async () => undefined) };
   const drivers = {
     list: () => [
-      { key: 'a', oauth: { provider: 'google', scopes: ['openid', 'scope.a'] } },
-      { key: 'b', oauth: { provider: 'google', scopes: ['openid', 'scope.b'] } },
+      { key: 'a', label: 'Driver A', oauth: { provider: 'google', scopes: ['openid', 'scope.a'] } },
+      { key: 'b', label: 'Driver B', oauth: { provider: 'google', scopes: ['openid', 'scope.b'] } },
+      { key: 'd', label: 'Driver D', oauth: { provider: 'google', scopes: ['scope.a'] } },
       { key: 'c' },
     ],
   };
@@ -63,6 +64,10 @@ describe('IntegrationOAuthAppService', () => {
       redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
       callbackHostWarning: null,
       scopes: ['openid', 'scope.a', 'scope.b'],
+      scopeGroups: [
+        { label: 'Required', scopes: ['openid', 'scope.a'] },
+        { label: 'Only if you use Driver B', scopes: ['scope.b'] },
+      ],
       updatedAt: null,
     });
   });

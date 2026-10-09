@@ -37,7 +37,7 @@ const steps: SetupGuideStep[] = [
 function renderGuide(props: Partial<Parameters<typeof SetupGuide>[0]> = {}) {
   render(
     <ToastProvider>
-      <SetupGuide steps={steps} redirectUri={REDIRECT} scopes={['openid', 'email']} check={null} {...props} />
+      <SetupGuide steps={steps} redirectUri={REDIRECT} scopeGroups={[{ scopes: ['openid', 'email.read'] }]} check={null} {...props} />
     </ToastProvider>,
   );
 }
@@ -48,7 +48,7 @@ describe('SetupGuide', () => {
   it('renders numbered steps with bold, bullets and plain-text markup (never HTML)', () => {
     const { container } = render(
       <ToastProvider>
-        <SetupGuide steps={steps} redirectUri={REDIRECT} scopes={[]} check={null} />
+        <SetupGuide steps={steps} redirectUri={REDIRECT} scopeGroups={[]} check={null} />
       </ToastProvider>,
     );
     expect(screen.getByText('Enable').tagName).toBe('STRONG');
@@ -76,9 +76,13 @@ describe('SetupGuide', () => {
     });
     expect(copyToClipboard).toHaveBeenLastCalledWith('https://ws.example.test');
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Copy scopes' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Copy scope openid' }));
     });
-    expect(copyToClipboard).toHaveBeenLastCalledWith('openid, email');
+    expect(copyToClipboard).toHaveBeenLastCalledWith('openid');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy scope email.read' }));
+    });
+    expect(copyToClipboard).toHaveBeenLastCalledWith('email.read');
   });
 
   it('marks passed steps green and failed steps with their fixed message', () => {

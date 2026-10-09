@@ -1221,6 +1221,12 @@ export const integrationOAuthAppSchema = z.object({
   callbackHostWarning: z.string().nullable(),
   /** Union of the scopes every registered driver of this provider requests. */
   scopes: z.array(z.string()),
+  /**
+   * The same scopes grouped by driver, in registry order: the first group is
+   * what the first driver needs, later groups only list scopes an earlier
+   * group does not already cover.
+   */
+  scopeGroups: z.array(z.object({ label: z.string(), scopes: z.array(z.string()) })),
   updatedAt: z.string().nullable(),
   /** Setup guide of the first registered driver of this provider, if any. */
   setupGuide: z.array(setupGuideStepSchema).optional(),

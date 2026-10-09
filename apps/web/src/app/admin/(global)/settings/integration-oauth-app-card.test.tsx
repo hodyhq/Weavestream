@@ -23,7 +23,11 @@ function app(over: Partial<IntegrationOAuthApp> = {}): IntegrationOAuthApp {
     secretMask: null,
     callbackHostWarning: null,
     redirectUri: REDIRECT,
-    scopes: ['openid', 'scope.read'],
+    scopes: ['openid', 'scope.read', 'scope.extra'],
+    scopeGroups: [
+      { label: 'Required', scopes: ['openid', 'scope.read'] },
+      { label: 'Only if you use Example Tool', scopes: ['scope.extra'] },
+    ],
     updatedAt: null,
     ...over,
   };
@@ -43,7 +47,7 @@ beforeEach(() => {
 });
 
 describe('IntegrationOAuthAppCard', () => {
-  it('shows the redirect URI and scopes with copy buttons', async () => {
+  it('shows the redirect URI, and every scope with its own copy button, grouped', async () => {
     renderCard(app());
     expect(screen.getByText(REDIRECT)).toBeInTheDocument();
     expect(screen.getByText('not configured')).toBeInTheDocument();
@@ -52,9 +56,14 @@ describe('IntegrationOAuthAppCard', () => {
     });
     expect(copyToClipboard).toHaveBeenCalledWith(REDIRECT);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Copy scopes' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Copy scope scope.read' }));
     });
-    expect(copyToClipboard).toHaveBeenLastCalledWith('openid scope.read');
+    expect(copyToClipboard).toHaveBeenLastCalledWith('scope.read');
+    expect(screen.getByText('Only if you use Example Tool')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy scope scope.extra' }));
+    });
+    expect(copyToClipboard).toHaveBeenLastCalledWith('scope.extra');
   });
 
   it('saves through the step-up route and clears the write-only secret', async () => {
@@ -112,7 +121,7 @@ describe('IntegrationOAuthAppCard', () => {
   });
 
   it('explains when scopes are not known yet, and when loading failed', () => {
-    renderCard(app({ scopes: [] }));
+    renderCard(app({ scopes: [], scopeGroups: [] }));
     expect(screen.getByText(/Scopes appear here/)).toBeInTheDocument();
   });
 
@@ -139,7 +148,7 @@ describe('IntegrationOAuthAppCard', () => {
     });
     expect(apiFetch).toHaveBeenCalledWith('/settings/integration-oauth-apps/google/check', { method: 'POST', body: '{}' });
     expect(screen.getByText('Copy both again.')).toBeInTheDocument();
-    const states = screen.getAllByRole('listitem').map((li) => li.getAttribute('data-state'));
+    const states = screen.getAllByRole('listitem').filter((li) => li.hasAttribute('data-state')).map((li) => li.getAttribute('data-state'));
     expect(states).toEqual(['passed', 'failed']);
   });
 
