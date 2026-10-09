@@ -1,7 +1,7 @@
 ---
 label: Google Workspace
 icon: plug
-description: Connect Google Workspace tenants with one click to sync users, licences, storage, groups, domains, devices and security alerts.
+description: Connect Google Workspace tenants with one click to sync users, licences, storage, groups, domains and devices.
 ---
 
 # Google Workspace Integration
@@ -28,7 +28,6 @@ The Weavestream Google Workspace driver is **read-only**. One integration is one
 | **Domains** | Domains | Domain name | Domain (primary, verified, alias of, created) |
 | **Chrome devices** | Chromebooks, Laptops or Workstations | Serial number | Chrome OS (model, OS version, status, last sync, user, org unit, MAC, auto-update expiration) |
 | **Mobile devices** | Phones | Serial number | Device (model, OS, type, owner, status, last sync, compromised) |
-| **Security alerts** | Google Security Alerts (created) | Alert ID | Alert (type, source, times, status, console link). Alerts from the last 90 days. |
 
 Chromebook **auto-update expiration** can optionally be mapped to a date field marked as an expiry, so it shows up in **Expiring soon**.
 
@@ -38,6 +37,7 @@ Chromebook **auto-update expiration** can optionally be mapped to a date field m
 - **No size per shared drive.** Only the tenant total for all shared drives is available.
 - **Usage data lags 1–3 days.** Storage figures come from Google's usage reports, which Google publishes with a delay. The section shows the date the figures are from.
 - **Licences cover Google Workspace and Education only.** Weavestream reads the Google Workspace product (all business editions, Education Fundamentals), Education Standard and Plus, and the Teaching and Learning Upgrade. Other products (for example Cloud Identity Premium or Google Voice) are not listed.
+- **No security alerts.** Google's [Alert Center API](https://developers.google.com/workspace/admin/alertcenter/guides/authorizing) only works with a service account and domain-wide delegation, which this one-click integration does not use.
 - **Very large tenants.** Licence and storage lookups hold at most 50,000 entries per sync. Above that, the section says the data is not shown instead of showing a partial list.
 
 ## Setup Instructions
@@ -48,13 +48,12 @@ The same steps are shown in Weavestream under **Admin > Settings > Integrations*
 
 Open [console.cloud.google.com/projectcreate](https://console.cloud.google.com/projectcreate) and create a project. Any Google account works; your own company's Workspace admin account is a good choice. Name it, for example, **Weavestream**, and make sure it is selected at the top of the console.
 
-### Step 2: Turn on three Google APIs
+### Step 2: Turn on two Google APIs
 
 Open each API with the project selected and press **Enable**:
 
 - [Admin SDK API](https://console.cloud.google.com/apis/library/admin.googleapis.com) (users, groups, domains, devices, usage reports)
 - [Enterprise License Manager API](https://console.cloud.google.com/apis/library/licensing.googleapis.com) (licences)
-- [Google Workspace Alert Center API](https://console.cloud.google.com/apis/library/alertcenter.googleapis.com) (security alerts)
 
 ### Step 3: Set up the consent screen and publish it
 
@@ -91,7 +90,7 @@ In **Admin > Settings > Integrations**, paste the Client ID and Client secret in
 
 1. Go to **Admin > Integrations > New integration** and choose **Google Workspace**.
 2. On the **Credentials & schedule** tab, press **Connect with Google**.
-3. Sign in with that customer's **super admin**. A delegated admin also works if their role can read users, groups, reports, licences, alerts and devices.
+3. Sign in with that customer's **super admin**. A delegated admin also works if their role can read users, groups, reports, licences and devices.
 4. On the "Google hasn't verified this app" screen, press **Advanced**, then **Go to Weavestream (unsafe)**. This warning appears because the app is your own and not reviewed by Google; the data only goes to your own Weavestream server.
 5. Tick every permission and press **Continue**.
 
@@ -138,7 +137,7 @@ An adopted asset keeps the name you gave it. Assets that Google created follow t
 ## Security Model
 
 - **Read-only.** The driver only sends GET requests to Google. Check setup is read-only too.
-- **Scopes requested**: `openid`, `userinfo.email`, and `admin.directory.user.readonly`, `admin.directory.group.readonly`, `admin.directory.group.member.readonly`, `admin.directory.domain.readonly`, `admin.directory.customer.readonly`, `admin.directory.device.chromeos.readonly`, `admin.directory.device.mobile.readonly`, `admin.reports.usage.readonly`, `apps.licensing`, `apps.alerts` (each prefixed with `https://www.googleapis.com/auth/`). Google offers no read-only variant of `apps.licensing` and `apps.alerts`; Weavestream only reads with them.
+- **Scopes requested**: `openid`, `userinfo.email`, and `admin.directory.user.readonly`, `admin.directory.group.readonly`, `admin.directory.group.member.readonly`, `admin.directory.domain.readonly`, `admin.directory.customer.readonly`, `admin.directory.device.chromeos.readonly`, `admin.directory.device.mobile.readonly`, `admin.reports.usage.readonly`, `apps.licensing` (each prefixed with `https://www.googleapis.com/auth/`). Google offers no read-only variant of `apps.licensing`; Weavestream only reads with it.
 - **Encrypted secrets.** The OAuth client secret and each customer's refresh token are encrypted at rest (AES-256-GCM) and never shown again or logged. Saving the client needs settings permission and an MFA step-up, and is audited.
 - **State and PKCE.** Every connect uses a single-use random state bound to the signed-in user and a PKCE code verifier.
 - **Exact scopes only.** Weavestream never asks Google to add previously granted scopes to a connection. If Google returns a grant with a scope Weavestream did not request, the connect fails and is audited (`excess_scopes`); a grant missing some requested scopes still connects, and Check setup names what is missing. Credentials of a Google integration can only be set by Connect and removed by Disconnect.

@@ -360,32 +360,3 @@ export function buildMobileSection(d: MobileDevice): IntegrationSection {
     ]),
   ]);
 }
-
-export interface GoogleAlert {
-  alertId?: string;
-  createTime?: string;
-  startTime?: string;
-  endTime?: string;
-  type?: string;
-  source?: string;
-  metadata?: { status?: string };
-  securityInvestigationToolLink?: string;
-}
-
-export function buildAlertSection(a: GoogleAlert): IntegrationSection {
-  const link = a.securityInvestigationToolLink;
-  const status = a.metadata?.status;
-  return section([
-    group('alert', 'Alert', 'google-admin', [
-      text('Type', a.type),
-      text('Source', a.source),
-      status ? badge('Status', status, status === 'CLOSED' ? 'success' : 'warning') : null,
-      datetime('Created', a.createTime),
-      datetime('Started', a.startTime),
-      datetime('Ended', a.endTime),
-      link && /^https:\/\//i.test(link) && link.length <= 2048
-        ? { kind: 'link', label: 'Admin console', value: link, text: 'Open in the investigation tool' }
-        : null,
-    ]),
-  ]);
-}

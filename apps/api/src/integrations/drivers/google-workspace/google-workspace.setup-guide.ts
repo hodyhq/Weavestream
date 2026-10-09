@@ -37,15 +37,14 @@ export const GOOGLE_WORKSPACE_SETUP_GUIDE: SetupGuideStep[] = [
   },
   {
     id: S.apis,
-    title: 'Turn on three Google APIs',
+    title: 'Turn on two Google APIs',
     body: [
-      'Weavestream reads data through three Google APIs. Open each link below, check that your project is selected, and press **Enable**.',
-      '- Admin SDK API (users, groups, domains, devices and usage reports)\n- Enterprise License Manager API (licences)\n- Google Workspace Alert Center API (security alerts)',
-          ].join('\n\n'),
+      'Weavestream reads data through two Google APIs. Open each link below, check that your project is selected, and press **Enable**.',
+      '- Admin SDK API (users, groups, domains, devices and usage reports)\n- Enterprise License Manager API (licences)',
+    ].join('\n\n'),
     links: [
       { label: 'Admin SDK API', href: 'https://console.cloud.google.com/apis/library/admin.googleapis.com' },
       { label: 'Enterprise License Manager API', href: 'https://console.cloud.google.com/apis/library/licensing.googleapis.com' },
-      { label: 'Alert Center API', href: 'https://console.cloud.google.com/apis/library/alertcenter.googleapis.com' },
       { label: 'API library', href: 'https://console.cloud.google.com/apis/library' },
     ],
   },
@@ -69,7 +68,7 @@ export const GOOGLE_WORKSPACE_SETUP_GUIDE: SetupGuideStep[] = [
     title: 'Add the scopes',
     body: [
       'Open **Data Access** and press **Add or remove scopes**. Under **Manually add scopes**, paste the list below, press **Add to table**, then **Update** and **Save**.',
-      'All of them are read-only except licensing and alerts. Google has no read-only version of those two. Weavestream only ever reads.',
+      'All of them are read-only except licensing. Google has no read-only version of that one. Weavestream only ever reads.',
     ].join('\n\n'),
     copyValues: [{ label: 'Scopes', computed: 'scopes' }],
     links: [{ label: 'Data Access', href: 'https://console.cloud.google.com/auth/scopes' }],
@@ -98,7 +97,7 @@ export const GOOGLE_WORKSPACE_SETUP_GUIDE: SetupGuideStep[] = [
     title: 'Connect a customer',
     body: [
       'Do this once per customer. Go to **Integrations > New integration > Google Workspace**, then press **Connect with Google** on the **Credentials & schedule** tab.',
-      'Sign in with that customer\'s **super admin**. A delegated admin also works if their role can read users, groups, reports, licences, alerts and devices.',
+      'Sign in with that customer\'s **super admin**. A delegated admin also works if their role can read users, groups, reports, licences and devices.',
       'On the "Google hasn\'t verified this app" screen, press **Advanced**, then **Go to Weavestream (unsafe)**. The warning appears because the app is your own and not reviewed by Google. Your data only goes to your own Weavestream server.',
       'Tick every permission and press **Continue**. If a box is left unticked, that data is missing until you reconnect.',
     ].join('\n\n'),

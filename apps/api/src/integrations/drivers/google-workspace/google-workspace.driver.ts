@@ -23,7 +23,6 @@ import type { DriverDiagnoseInput } from '../integration-driver.js';
 import { diagnoseGoogleClient, diagnoseGoogleConnection } from './google-workspace.diagnose.js';
 import { GOOGLE_WORKSPACE_SETUP_GUIDE } from './google-workspace.setup-guide.js';
 import {
-  buildAlertSection,
   buildChromeSection,
   buildDomainSection,
   buildGroupSection,
@@ -32,7 +31,6 @@ import {
   buildUserSection,
   toIso,
   type ChromeDevice,
-  type GoogleAlert,
   type GoogleGroup,
   type GoogleUser,
   type Lookup,
@@ -57,7 +55,6 @@ import {
 export const DIRECTORY = 'https://admin.googleapis.com/admin/directory/v1';
 export const REPORTS = 'https://admin.googleapis.com/admin/reports/v1';
 export const LICENSING = 'https://licensing.googleapis.com/apps/licensing/v1';
-export const ALERT_CENTER = 'https://alertcenter.googleapis.com/v1beta1';
 const SCOPE = 'https://www.googleapis.com/auth/';
 
 export const GOOGLE_WORKSPACE_OAUTH: DriverOAuthDescriptor = {
@@ -77,9 +74,9 @@ export const GOOGLE_WORKSPACE_OAUTH: DriverOAuthDescriptor = {
       'admin.directory.device.chromeos.readonly',
       'admin.directory.device.mobile.readonly',
       'admin.reports.usage.readonly',
-      // No read-only variant exists for these two; the driver only GETs.
+      // No read-only variant exists for licensing; the driver only GETs.
+      // No apps.alerts: Alert Center requires a service account with domain-wide delegation.
       'apps.licensing',
-      'apps.alerts',
     ].map((scope) => `${SCOPE}${scope}`),
   ],
   // No include_granted_scopes: a grant must never pick up scopes from an earlier consent.
@@ -122,7 +119,7 @@ export const LICENCE_PRODUCT_IDS = ['Google-Apps', '101031', '101037'] as const;
 /** Max items held per lookup map (licences, usage) in one run. */
 export const LOOKUP_ITEM_CAP = 50_000;
 
-type ResourceKey = 'tenant' | 'users' | 'groups' | 'domains' | 'chrome_devices' | 'mobile_devices' | 'alerts';
+type ResourceKey = 'tenant' | 'users' | 'groups' | 'domains' | 'chrome_devices' | 'mobile_devices';
 
 interface ResourceSpec {
   label: string;
@@ -183,14 +180,6 @@ const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
     layoutHints: ['phones', 'mobile', 'mobile_devices', 'tablets'],
     fieldHints: ['serial_number', 'serial', 'serialnumber', 'imei'],
     layout: { name: 'Phones', slug: 'phones', icon: 'box', color: 'violet' },
-  },
-  alerts: {
-    label: 'Security alerts',
-    description: 'Alert Center alerts from the last 90 days.',
-    matchField: 'alertId', matchLabel: 'Alert ID', matchType: 'TEXT',
-    layoutHints: ['google_security_alerts', 'security_alerts', 'alerts'],
-    fieldHints: ['alert_id', 'alertid', 'id'],
-    layout: { name: 'Google Security Alerts', slug: 'google_security_alerts', icon: 'shield', color: 'red' },
   },
 };
 
@@ -260,7 +249,6 @@ export const API_DISABLED_REASONS = new Set(['accessNotConfigured', 'SERVICE_DIS
 
 export function apiName(url: string): string {
   if (url.startsWith(LICENSING)) return 'Enterprise License Manager API';
-  if (url.startsWith(ALERT_CENTER)) return 'Google Workspace Alert Center API';
   if (url.startsWith(REPORTS)) return 'Admin SDK API (Reports)';
   return 'Admin SDK API';
 }
@@ -575,7 +563,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
     key: 'google-workspace',
     label: 'Google Workspace',
     description:
-      'Read-only sync of a Google Workspace tenant: users, licences, storage, groups, domains, devices and security alerts.',
+      'Read-only sync of a Google Workspace tenant: users, licences, storage, groups, domains and devices.',
     iconKey: null,
     configFields: [],
     secretFields: [],
@@ -764,26 +752,6 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
           .map((d) => {
             const name = [d.model, d.serialNumber].filter(Boolean).join(' ') || d.resourceId!;
             return record(key, d.resourceId!, name, d.serialNumber, buildMobileSection(d));
-          });
-        return { records, nextPageToken: body.nextPageToken };
-      }
-      case 'alerts': {
-        const since = new Date(nowMs - 90 * 86_400_000).toISOString();
-        const body = await googleGet<{ alerts?: GoogleAlert[]; nextPageToken?: string }>(
-          ctx,
-          withQuery(`${ALERT_CENTER}/alerts`, {
-            pageSize: '100',
-            orderBy: 'createTime desc',
-            filter: `createTime >= "${since}"`,
-            pageToken,
-          }),
-        );
-        const records = (body.alerts ?? [])
-          .filter((a) => a.alertId)
-          .map((a) => {
-            const created = toIso(a.createTime)?.slice(0, 10);
-            const name = [a.type || 'Security alert', created].filter(Boolean).join(' ');
-            return record(key, a.alertId!, name, a.alertId, buildAlertSection(a));
           });
         return { records, nextPageToken: body.nextPageToken };
       }
