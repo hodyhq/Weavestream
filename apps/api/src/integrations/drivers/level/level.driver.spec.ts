@@ -169,7 +169,8 @@ describe('LevelDriver connection', () => {
     const calls = installFetchTable(GROUPS);
     await expect(new LevelDriver().testConnection(makeCtx())).resolves.toEqual({ ok: true, details: 'Connected to Level (2 top-level groups).' });
     expect(calls[0]!.headers).toMatchObject({ Authorization: KEY });
-    expect(new URL(calls[0]!.url).searchParams.get('parent_id')).toBe('null');
+    // Level reads parent_id=null as an id (404), so the filter must never be sent.
+    expect(new URL(calls[0]!.url).searchParams.has('parent_id')).toBe(false);
   });
 
   it('lists only root groups as source orgs', async () => {

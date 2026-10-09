@@ -158,8 +158,9 @@ function lastId(items: Array<{ id?: string }>): string {
 }
 
 async function rootGroups(ctx: IntegrationContext): Promise<SourceOrgDto[]> {
-  const groups = await listAll<LevelGroup>(ctx, '/groups', { parent_id: 'null' });
-  // The filter is applied server-side; re-check so a nested group never becomes an org.
+  // Level answers `parent_id=null` with 404 (it reads "null" as an id), so list
+  // every group and keep the roots here.
+  const groups = await listAll<LevelGroup>(ctx, '/groups', {});
   return groups
     .filter((g) => g.id && (g.parent_id === null || g.parent_id === undefined))
     .map((g) => ({ externalId: g.id!, name: g.name || g.id!, hint: null }));
