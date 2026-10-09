@@ -212,4 +212,11 @@ describe('OAuthConnection (Microsoft admin consent)', () => {
     expect(screen.getByText(/Could not connect with Microsoft/)).toBeInTheDocument();
     expect(screen.queryByText(/evil/)).not.toBeInTheDocument();
   });
+
+  it('ignores inherited object keys as a reason', async () => {
+    search = new URLSearchParams('oauth=failed&reason=constructor');
+    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
+    await renderMs();
+    expect(screen.getByText(/Could not connect with Microsoft/)).toBeInTheDocument();
+  });
 });

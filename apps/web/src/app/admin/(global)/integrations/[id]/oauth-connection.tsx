@@ -79,7 +79,7 @@ export function OAuthConnection({
     toast.push(
       flag === 'connected'
         ? `Connected with ${label}.`
-        : (reason ? OAUTH_FAILURE_REASONS[reason] : undefined) ??
+        : (reason && Object.hasOwn(OAUTH_FAILURE_REASONS, reason) ? OAUTH_FAILURE_REASONS[reason] : undefined) ??
             `Could not connect with ${label}. Try again, or check the OAuth app under Settings.`,
       flag === 'connected' ? 'ok' : 'danger',
     );
