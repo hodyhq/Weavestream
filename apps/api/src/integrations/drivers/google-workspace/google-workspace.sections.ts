@@ -254,7 +254,7 @@ export function buildTenantSection(input: TenantInput): IntegrationSection {
     group('storage', 'Storage', 'google-drive', storageRows),
     group('security', 'Security', 'google-admin', [
       active.length > 0
-        ? { kind: 'meter', label: '2-step verification coverage', used: enrolled, total: active.length, unit: 'count' }
+        ? { kind: 'meter', label: '2-step verification coverage', used: enrolled, total: active.length, unit: 'count', higherIsBetter: true }
         : null,
       num('Super admins', superAdmins),
       wasted === null ? null : num('Wasted licences', wasted),

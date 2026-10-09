@@ -98,6 +98,15 @@ describe('SetupGuide', () => {
     expect(screen.getByText('Google is rate limiting requests right now.')).toBeInTheDocument();
   });
 
+  it('leaves an unverified step neither passed nor failed and shows its note', () => {
+    renderGuide({
+      check: { ok: true, passedStepIds: ['apis'], failures: [], notes: [{ stepId: 'client', message: 'Redirect URI is confirmed on the first successful connect.' }] },
+    });
+    const items = screen.getAllByRole('listitem').filter((li) => li.hasAttribute('data-state'));
+    expect(items.map((li) => li.getAttribute('data-state'))).toEqual(['passed', 'todo']);
+    expect(screen.getByText('Redirect URI is confirmed on the first successful connect.')).toBeInTheDocument();
+  });
+
   it('runs Check setup, and disables it with a reason when not ready', () => {
     const onCheck = jest.fn();
     renderGuide({ onCheck });

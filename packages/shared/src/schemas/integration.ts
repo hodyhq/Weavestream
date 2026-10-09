@@ -378,6 +378,8 @@ export const integrationSetupCheckSchema = z.object({
   passedStepIds: z.array(z.string()),
   /** `stepId` null: a problem not tied to one step (e.g. rate limited, try again). */
   failures: z.array(z.object({ stepId: z.string().nullable(), message: z.string() })),
+  /** A step the check could not verify: neither passed nor failed, with a fixed note. */
+  notes: z.array(z.object({ stepId: z.string(), message: z.string() })).optional(),
 });
 export type IntegrationSetupCheck = z.infer<typeof integrationSetupCheckSchema>;
 

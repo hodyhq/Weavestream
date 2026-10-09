@@ -83,7 +83,8 @@ export const GOOGLE_WORKSPACE_OAUTH: DriverOAuthDescriptor = {
       'apps.alerts',
     ].map((scope) => `${SCOPE}${scope}`),
   ],
-  extraAuthorizeParams: { access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true' },
+  // No include_granted_scopes: a grant must never pick up scopes from an earlier consent.
+  extraAuthorizeParams: { access_type: 'offline', prompt: 'consent' },
 };
 
 /** Edition names for SKUs whose listing omits `skuName`. */
@@ -101,9 +102,26 @@ export const SKU_NAMES: Readonly<Record<string, string>> = {
   '1010020031': 'Frontline Standard',
   '1010020034': 'Frontline Plus',
   '1010070001': 'Education Fundamentals',
+  '1010070004': 'Education Gmail Only',
   '1010310005': 'Education Standard',
+  '1010310006': 'Education Standard (Staff)',
+  '1010310007': 'Education Standard (Extra Student)',
   '1010310008': 'Education Plus',
+  '1010310009': 'Education Plus (Staff)',
+  '1010310010': 'Education Plus (Extra Student)',
+  '1010370001': 'Education Teaching and Learning Upgrade',
 };
+
+/**
+ * Licensing product ids queried for assigned licences. Workspace editions
+ * and Education Fundamentals live under Google-Apps; Education Standard and
+ * Plus under 101031; the Teaching and Learning Upgrade under 101037
+ * (developers.google.com/workspace/admin/licensing/v1/how-tos/products).
+ */
+export const LICENCE_PRODUCT_IDS = ['Google-Apps', '101031', '101037'] as const;
+
+/** Max items held per lookup map (licences, usage) in one run. */
+export const LOOKUP_ITEM_CAP = 50_000;
 
 type ResourceKey = 'tenant' | 'users' | 'groups' | 'domains' | 'chrome_devices' | 'mobile_devices' | 'alerts';
 
@@ -227,6 +245,17 @@ export class GoogleAccessError extends DriverAuthError {
   }
 }
 
+/** Any other non-OK Google response; carries only the status. */
+export class GoogleRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'GoogleRequestError';
+  }
+}
+
+/** A lookup grew past LOOKUP_ITEM_CAP: reported as unavailable, never partial. */
+class LookupTooLargeError extends Error {}
+
 export const RATE_LIMIT_REASONS = new Set(['userRateLimitExceeded', 'quotaExceeded', 'rateLimitExceeded', 'RATE_LIMIT_EXCEEDED']);
 export const API_DISABLED_REASONS = new Set(['accessNotConfigured', 'SERVICE_DISABLED']);
 
@@ -278,7 +307,7 @@ async function googleGet<T>(ctx: IntegrationContext, url: string): Promise<T> {
       `Google denied access to the ${api} (HTTP ${res.status}). The connected account needs admin privileges for this data; reconnect with a suitable admin.`,
     );
   }
-  throw new Error(`Google Workspace request to the ${api} failed (HTTP ${res.status}).`);
+  throw new GoogleRequestError(`Google Workspace request to the ${api} failed (HTTP ${res.status}).`, res.status);
 }
 
 export function withQuery(base: string, params: Record<string, string | undefined>): string {
@@ -292,12 +321,14 @@ async function listAll<T>(
   ctx: IntegrationContext,
   url: (pageToken: string | undefined) => string,
   items: (body: Record<string, unknown>) => T[] | undefined,
+  maxItems = Infinity,
 ): Promise<T[]> {
   const out: T[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < 1_000; page += 1) {
     const body = await googleGet<Record<string, unknown>>(ctx, url(pageToken));
     out.push(...(items(body) ?? []));
+    assertWithinCap(out.length, maxItems);
     pageToken = typeof body.nextPageToken === 'string' && body.nextPageToken ? body.nextPageToken : undefined;
     if (!pageToken) break;
   }
@@ -318,6 +349,25 @@ export function __resetGoogleWorkspaceRunCacheForTests(): void {
   runCache.clear();
 }
 
+/** Drops every cached lookup of one run (called when a resource finishes). */
+function evictRun(ctx: IntegrationContext, snapshotAt: string): void {
+  const prefix = `${ctx.integrationId ?? ctx.correlationId}\0${snapshotAt}\0`;
+  for (const key of runCache.keys()) if (key.startsWith(prefix)) runCache.delete(key);
+}
+
+/** @internal only `*.spec.ts` should call this. */
+export function __googleWorkspaceRunCacheSizeForTests(): number {
+  return runCache.size;
+}
+
+function assertWithinCap(count: number, maxItems: number): void {
+  if (count > maxItems) {
+    throw new LookupTooLargeError(
+      `Not shown: the tenant has more than ${maxItems.toLocaleString('en-US')} entries for this data, above what one sync holds.`,
+    );
+  }
+}
+
 function runCached<T>(ctx: IntegrationContext, snapshotAt: string, name: string, load: () => Promise<T>): Promise<T> {
   const now = Date.now();
   for (const [key, entry] of runCache) if (entry.expiresAt <= now) runCache.delete(key);
@@ -331,14 +381,19 @@ function runCached<T>(ctx: IntegrationContext, snapshotAt: string, name: string,
   return value;
 }
 
-/** Optional data: a privilege or API problem becomes a note, never a failed run. */
+/**
+ * Optional data: any failure becomes a note, never a failed run. Only a
+ * rate limit propagates, so the runner retries the page later.
+ */
 async function optional<T>(load: () => Promise<T | null>, unavailable: string): Promise<Lookup<T>> {
   try {
     const value = await load();
     return value === null ? { ok: false, reason: unavailable } : { ok: true, value };
   } catch (e) {
-    if (e instanceof GoogleAccessError) return { ok: false, reason: e.message };
-    throw e;
+    if (e instanceof DriverRateLimitError) throw e;
+    // Both messages are our own fixed text; anything else gets the generic note.
+    if (e instanceof GoogleAccessError || e instanceof LookupTooLargeError) return { ok: false, reason: e.message };
+    return { ok: false, reason: unavailable };
   }
 }
 
@@ -355,21 +410,31 @@ async function getCustomer(ctx: IntegrationContext): Promise<Customer> {
 }
 
 /** Licence editions assigned per user email (lowercased). Assigned only, never purchased totals. */
-function getLicences(ctx: IntegrationContext, customerId: string): Promise<Map<string, string[]>> {
-  return listAll<{ userId?: string; skuId?: string; skuName?: string }>(
-    ctx,
-    (pageToken) => withQuery(`${LICENSING}/product/Google-Apps/users`, { customerId, maxResults: '1000', pageToken }),
-    (body) => body.items as never,
-  ).then((items) => {
-    const byEmail = new Map<string, string[]>();
-    for (const item of items) {
-      if (!item.userId) continue;
-      const email = item.userId.toLowerCase();
-      const name = item.skuName || SKU_NAMES[item.skuId ?? ''] || item.skuId || 'Unknown edition';
-      byEmail.set(email, [...(byEmail.get(email) ?? []), name]);
+async function getLicences(ctx: IntegrationContext, customerId: string): Promise<Map<string, string[]>> {
+  type Item = { userId?: string; skuId?: string; skuName?: string };
+  const items: Item[] = [];
+  for (const productId of LICENCE_PRODUCT_IDS) {
+    try {
+      items.push(...await listAll<Item>(
+        ctx,
+        (pageToken) => withQuery(`${LICENSING}/product/${productId}/users`, { customerId, maxResults: '1000', pageToken }),
+        (body) => body.items as never,
+        LOOKUP_ITEM_CAP - items.length,
+      ));
+    } catch (e) {
+      // A product the tenant does not have answers 400 or 404: nothing assigned, no note.
+      if (e instanceof GoogleRequestError && (e.status === 400 || e.status === 404)) continue;
+      throw e;
     }
-    return byEmail;
-  });
+  }
+  const byEmail = new Map<string, string[]>();
+  for (const item of items) {
+    if (!item.userId) continue;
+    const email = item.userId.toLowerCase();
+    const name = item.skuName || SKU_NAMES[item.skuId ?? ''] || item.skuId || 'Unknown edition';
+    byEmail.set(email, [...(byEmail.get(email) ?? []), name]);
+  }
+  return byEmail;
 }
 
 interface UsageParameter {
@@ -414,8 +479,9 @@ function storageOf(params: UsageParameter[] | undefined): StorageUsage {
 
 /**
  * Reports lag 1 to 3 days: start at snapshot - 2 days (UTC) and step back
- * one day while Google warns the data is not available yet (at most 5
- * times). Null when no date in the window has data.
+ * one day while Google warns the data is not available yet or rejects the
+ * date with HTTP 400 (at most 5 times). Null when no date in the window
+ * has data.
  */
 async function latestReport(
   ctx: IntegrationContext,
@@ -429,17 +495,24 @@ async function latestReport(
     let unavailable = false;
     let pageToken: string | undefined;
     for (let page = 0; page < 1_000; page += 1) {
-      const body = await googleGet<{
-        usageReports?: UsageEntry[];
-        nextPageToken?: string;
-        warnings?: Array<{ code?: string; message?: string }>;
-      }>(ctx, url(date, pageToken));
+      let body: { usageReports?: UsageEntry[]; nextPageToken?: string; warnings?: Array<{ code?: string; message?: string }> };
+      try {
+        body = await googleGet(ctx, url(date, pageToken));
+      } catch (e) {
+        // Google answers 400 for a date it has no report for yet.
+        if (e instanceof GoogleRequestError && e.status === 400) {
+          unavailable = true;
+          break;
+        }
+        throw e;
+      }
       // PARTIAL_DATA_AVAILABLE is accepted; only a missing day steps back.
       if ((body.warnings ?? []).some((w) => w.code === 'DATA_NOT_AVAILABLE')) {
         unavailable = true;
         break;
       }
       entries.push(...(body.usageReports ?? []));
+      assertWithinCap(entries.length, LOOKUP_ITEM_CAP);
       pageToken = body.nextPageToken || undefined;
       if (!pageToken) break;
     }
@@ -583,6 +656,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
     const pageToken = decodeCursor(cursor);
     const page = await this.fetchPage(key, ctx, customer, snapshotAt, pageToken);
     const next = encodeCursor(page.nextPageToken);
+    if (next === null) evictRun(ctx, snapshotAt);
     return { records: page.records, hasMore: next !== null, cursor: next, snapshotAt };
   }
 

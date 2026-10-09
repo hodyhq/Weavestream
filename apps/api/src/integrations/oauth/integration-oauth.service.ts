@@ -64,7 +64,23 @@ type FailureReason =
   | 'not_oauth'
   | 'app_not_configured'
   | 'token_exchange'
-  | 'no_refresh_token';
+  | 'no_refresh_token'
+  | 'excess_scopes';
+
+/** Identity scopes and the names Google reports them under; never counted as excess. */
+const IDENTITY_SCOPES = new Set([
+  'openid',
+  'email',
+  'profile',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+]);
+
+/** Granted scopes outside what the descriptor requested (identity scopes ignored). */
+export function excessScopes(granted: readonly string[], requested: readonly string[]): string[] {
+  const allowed = new Set(requested);
+  return granted.filter((scope) => !allowed.has(scope) && !IDENTITY_SCOPES.has(scope));
+}
 
 /**
  * Authorization-code flow (with PKCE S256) for drivers whose descriptor
@@ -167,7 +183,7 @@ export class IntegrationOAuthService {
       return this.landing(null, false);
     }
     const { integrationId } = pending;
-    const fail = async (reason: FailureReason, provider: string | null) => {
+    const fail = async (reason: FailureReason, provider: string | null, extra: Record<string, unknown> = {}) => {
       await this.audit.log({
         actorId: actor.id,
         action: AUDIT_ACTIONS.integration.oauthConnectFailed,
@@ -176,7 +192,7 @@ export class IntegrationOAuthService {
         ip: meta.ip,
         userAgent: meta.userAgent,
         before: null,
-        after: { provider, reason },
+        after: { provider, reason, ...extra },
       });
       return this.landing(integrationId, false);
     };
@@ -223,6 +239,10 @@ export class IntegrationOAuthService {
     const grantedScopes = tokens.scope
       ? tokens.scope.split(/\s+/).filter(Boolean).slice(0, 100)
       : oauth.scopes;
+    // A grant wider than requested is never stored. A narrower one connects;
+    // Check setup then reports the missing permissions.
+    const excess = excessScopes(grantedScopes, oauth.scopes);
+    if (excess.length > 0) return fail('excess_scopes', oauth.provider, { excessScopes: excess.slice(0, 20) });
     const secret: StoredOAuthSecret = {
       refreshToken: tokens.refresh_token,
       grantedScopes,

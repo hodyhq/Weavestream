@@ -212,6 +212,7 @@ describe('GoogleWorkspaceResellerDriver subscriptions', () => {
     const [rec] = (await new GoogleWorkspaceResellerDriver().fetchRecords(fetchCtx(), null)).records;
     expect(rec!.fields).toEqual({ name: 'Business Standard - acme.example.com', subscriptionId: 'sub-annual', renewalDate: '2027-01-15', trialEndDate: null });
     const s = sectionOf(rec!);
+    expect(s.title).toBe('Google Workspace (reseller)');
     expect(s.groups.map((g) => g.key)).toEqual(['plan', 'seats', 'dates']);
     expect(row(s, 'plan', 'Plan')).toMatchObject({ value: 'Annual, paid yearly' });
     expect(row(s, 'plan', 'Commitment')).toMatchObject({ value: true });

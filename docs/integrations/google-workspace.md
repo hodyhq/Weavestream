@@ -37,6 +37,8 @@ Chromebook **auto-update expiration** can optionally be mapped to a date field m
 - **No bill, purchased seat count or renewal date** for customers you do not resell. Google only exposes *assigned* licences. Invoices are only in the Admin console. Resellers get purchased seats and renewal dates for their customers through [Reseller Subscriptions](#reseller-subscriptions).
 - **No size per shared drive.** Only the tenant total for all shared drives is available.
 - **Usage data lags 1–3 days.** Storage figures come from Google's usage reports, which Google publishes with a delay. The section shows the date the figures are from.
+- **Licences cover Google Workspace and Education only.** Weavestream reads the Google Workspace product (all business editions, Education Fundamentals), Education Standard and Plus, and the Teaching and Learning Upgrade. Other products (for example Cloud Identity Premium or Google Voice) are not listed.
+- **Very large tenants.** Licence and storage lookups hold at most 50,000 entries per sync. Above that, the section says the data is not shown instead of showing a partial list.
 
 ## Setup Instructions
 
@@ -83,7 +85,7 @@ Press **Create** and copy the **Client ID** and **Client secret**. Google shows 
 
 ### Step 6: Paste the client into Weavestream
 
-In **Admin > Settings > Integrations**, paste the Client ID and Client secret into the **Google OAuth app** card and press **Save OAuth app** (this asks you to confirm with MFA). Then press **Check setup**: steps that pass turn green, and a red step tells you what to fix.
+In **Admin > Settings > Integrations**, paste the Client ID and Client secret into the **Google OAuth app** card and press **Save OAuth app** (this asks you to confirm with MFA). Then press **Check setup**: steps that pass turn green, and a red step tells you what to fix. Check setup proves the client ID and secret only; the redirect URI step stays unconfirmed ("Redirect URI is confirmed on the first successful connect") until the first connect succeeds, after which the connected integration's Check setup shows it passed.
 
 ### Step 7: Connect a customer
 
@@ -164,6 +166,8 @@ Tenant isolation: each sync first asks Google whether the mapped customer belong
 - **Scopes requested**: `openid`, `email`, and `admin.directory.user.readonly`, `admin.directory.group.readonly`, `admin.directory.group.member.readonly`, `admin.directory.domain.readonly`, `admin.directory.customer.readonly`, `admin.directory.device.chromeos.readonly`, `admin.directory.device.mobile.readonly`, `admin.reports.usage.readonly`, `apps.licensing`, `apps.alerts` (each prefixed with `https://www.googleapis.com/auth/`). Google offers no read-only variant of `apps.licensing` and `apps.alerts`; Weavestream only reads with them. The reseller integration requests only `apps.order.readonly` (plus `openid` and `email`).
 - **Encrypted secrets.** The OAuth client secret and each customer's refresh token are encrypted at rest (AES-256-GCM) and never shown again or logged. Saving the client needs settings permission and an MFA step-up, and is audited.
 - **State and PKCE.** Every connect uses a single-use random state bound to the signed-in user and a PKCE code verifier.
+- **Exact scopes only.** Weavestream never asks Google to add previously granted scopes to a connection. If Google returns a grant with a scope Weavestream did not request, the connect fails and is audited (`excess_scopes`); a grant missing some requested scopes still connects, and Check setup names what is missing. Credentials of a Google integration can only be set by Connect and removed by Disconnect.
+- **Callback URLs stay out of logs.** Weavestream logs request paths without their query string, so the authorization code and state of `/oauth/callback` never reach its logs. Configure your reverse proxy the same way (log the path, not the query string, for `/v1/admin/integrations/oauth/callback`), or keep proxy access logs short-lived and access-controlled.
 - **Tenant isolation.** A connection's tokens only ever feed the company its tenant is mapped to; a token for a different tenant stops the sync.
 - **No raw Google errors.** Errors shown in Weavestream are fixed messages; Google's own error text is never passed through.
 - **Hidden from client users.** Google Workspace sections are never shown to client users, even on assets they can see.

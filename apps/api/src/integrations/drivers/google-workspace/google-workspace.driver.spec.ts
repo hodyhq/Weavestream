@@ -9,6 +9,8 @@ import {
 import {
   GoogleWorkspaceDriver,
   GOOGLE_WORKSPACE_RECOMMENDED_DESTINATIONS,
+  LOOKUP_ITEM_CAP,
+  __googleWorkspaceRunCacheSizeForTests,
   __resetGoogleWorkspaceRunCacheForTests,
 } from './google-workspace.driver.js';
 import { __resetOAuthAccessTokenCacheForTests } from '../../oauth/oauth-token.js';
@@ -59,6 +61,8 @@ const BASE_TABLE: Record<string, Reply> = {
   [`${DIR}/customers/my_customer`]: {
     body: { id: CUSTOMER_ID, customerDomain: 'example.com', customerCreationTime: '2020-01-02T03:04:05.000Z' },
   },
+  // Education licence products the example tenant does not have.
+  [`${LICENSING}/product/`]: { status: 404, body: { error: { code: 404 } } },
 };
 
 let integrationSeq = 0;
@@ -154,7 +158,7 @@ describe('GoogleWorkspaceDriver descriptor', () => {
   it('validates against the shared descriptor schema with OAuth and match hints on every resource', () => {
     const parsed = driverDescriptorSchema.parse(driver.descriptor);
     expect(parsed.oauth?.provider).toBe('google');
-    expect(parsed.oauth?.extraAuthorizeParams).toMatchObject({ access_type: 'offline', prompt: 'consent' });
+    expect(parsed.oauth?.extraAuthorizeParams).toEqual({ access_type: 'offline', prompt: 'consent' });
     expect(parsed.resources.map((r) => r.key)).toEqual([
       'tenant', 'users', 'groups', 'domains', 'chrome_devices', 'mobile_devices', 'alerts',
     ]);
@@ -295,7 +299,7 @@ describe('GoogleWorkspaceDriver users', () => {
     expect(row(carol, 'security', 'Wasted licence')).toMatchObject({ value: 'No' });
 
     // Per-run lookups are fetched once for both pages.
-    expect(calls.filter((c) => c.url.startsWith(LICENSING))).toHaveLength(1);
+    expect(calls.filter((c) => c.url.startsWith(LICENSING))).toHaveLength(3); // one per licence product
     expect(calls.filter((c) => c.url.includes('/usage/users/all/dates/2026-10-05'))).toHaveLength(1);
     expect(calls.filter((c) => c.url === `${DIR}/customers/my_customer`)).toHaveLength(1);
   });
@@ -339,6 +343,86 @@ describe('GoogleWorkspaceDriver users', () => {
     // Today - 2, then at most five steps back.
     expect(calls.filter((c) => c.url.startsWith(`${REPORTS}/usage/users/all/dates/`))).toHaveLength(6);
   });
+
+  it('steps back a day when Reports answers HTTP 400 for a date', async () => {
+    const calls = installFetchTable(usersTable({
+      [`${DIR}/users?`]: { body: { users: [ALICE] } },
+      [`${REPORTS}/usage/users/all/dates/2026-10-06`]: { status: 400, body: { error: { code: 400 } } },
+    }));
+    const page = await new GoogleWorkspaceDriver().fetchRecords(fetchCtx(makeCtx(), 'users'), null);
+    expect(row(sectionOf(page.records[0] as LegacyDriverRecord), 'storage', 'Data as of')).toMatchObject({ value: '2026-10-05' });
+    expect(calls.filter((c) => c.url.startsWith(`${REPORTS}/usage/users/all/dates/`))).toHaveLength(2);
+  });
+
+  it('turns any non-rate-limit failure of optional data into a note and still syncs users', async () => {
+    const table = usersTable({
+      [`${DIR}/users?`]: { body: { users: [ALICE] } },
+      [`${LICENSING}/product/Google-Apps/users?customerId=${CUSTOMER_ID}`]: { status: 500, body: { error: { code: 500, message: 'raw provider text' } } },
+    });
+    for (const day of ['06', '05', '04', '03', '02', '01']) table[`${REPORTS}/usage/users/all/dates/2026-10-${day}`] = { status: 400, body: {} };
+    installFetchTable(table);
+    const page = await new GoogleWorkspaceDriver().fetchRecords(fetchCtx(makeCtx(), 'users'), null);
+    expect(page.records).toHaveLength(1);
+    const s = sectionOf(page.records[0] as LegacyDriverRecord);
+    expect(row(s, 'licences', 'Licences')).toMatchObject({ value: 'Not available: Licence data is not available.' });
+    expect(row(s, 'storage', 'Storage')).toMatchObject({ value: expect.stringMatching(/^Not available: Google has not published usage reports/) });
+  });
+
+  it('still propagates a rate limit from optional data so the page is retried', async () => {
+    installFetchTable(usersTable({
+      [`${DIR}/users?`]: { body: { users: [ALICE] } },
+      [`${LICENSING}/product/Google-Apps/users?customerId=${CUSTOMER_ID}`]: { status: 429, body: {} },
+    }));
+    await expect(new GoogleWorkspaceDriver().fetchRecords(fetchCtx(makeCtx(), 'users'), null)).rejects.toBeInstanceOf(DriverRateLimitError);
+  });
+
+  it('merges Education licences and ignores products the tenant does not have', async () => {
+    const calls = installFetchTable(usersTable({
+      [`${DIR}/users?`]: { body: { users: [CAROL] } },
+      [`${LICENSING}/product/101031/users?customerId=${CUSTOMER_ID}`]: {
+        body: { items: [{ userId: 'carol@example.com', skuId: '1010310008', productId: '101031' }] },
+      },
+      [`${LICENSING}/product/101037/users?`]: { status: 400, body: { error: { code: 400 } } },
+    }));
+    const page = await new GoogleWorkspaceDriver().fetchRecords(fetchCtx(makeCtx(), 'users'), null);
+    expect(row(sectionOf(page.records[0] as LegacyDriverRecord), 'licences', 'Assigned')).toMatchObject({ value: ['Education Plus'] });
+    expect(calls.filter((c) => c.url.startsWith(LICENSING)).map((c) => new URL(c.url).pathname.split('/')[5]))
+      .toEqual(['Google-Apps', '101031', '101037']);
+  });
+
+  it('marks licences unavailable instead of partial when the lookup exceeds the cap', async () => {
+    const items = Array.from({ length: LOOKUP_ITEM_CAP + 1 }, (_, i) => ({ userId: `u${i}@example.com`, skuId: '1010020027' }));
+    installFetchTable(usersTable({
+      [`${DIR}/users?`]: { body: { users: [ALICE] } },
+      [`${LICENSING}/product/Google-Apps/users?customerId=${CUSTOMER_ID}`]: { body: { items } },
+    }));
+    const page = await new GoogleWorkspaceDriver().fetchRecords(fetchCtx(makeCtx(), 'users'), null);
+    expect(row(sectionOf(page.records[0] as LegacyDriverRecord), 'licences', 'Licences')).toMatchObject({
+      value: expect.stringMatching(/more than 50,000 entries/),
+    });
+  });
+
+  it('marks usage unavailable when the report exceeds the cap', async () => {
+    const usageReports = Array.from({ length: LOOKUP_ITEM_CAP + 1 }, (_, i) => ({ entity: { userEmail: `u${i}@example.com` } }));
+    installFetchTable(usersTable({
+      [`${DIR}/users?`]: { body: { users: [ALICE] } },
+      [`${REPORTS}/usage/users/all/dates/2026-10-06`]: { body: { usageReports } },
+    }));
+    const page = await new GoogleWorkspaceDriver().fetchRecords(fetchCtx(makeCtx(), 'users'), null);
+    expect(row(sectionOf(page.records[0] as LegacyDriverRecord), 'storage', 'Storage')).toMatchObject({
+      value: expect.stringMatching(/more than 50,000 entries/),
+    });
+  });
+
+  it('evicts the run cache when a resource finishes', async () => {
+    installFetchTable(usersTable());
+    const driver = new GoogleWorkspaceDriver();
+    const ctx = makeCtx();
+    const first = await driver.fetchRecords(fetchCtx(ctx, 'users'), null);
+    expect(__googleWorkspaceRunCacheSizeForTests()).toBeGreaterThan(0);
+    await driver.fetchRecords(fetchCtx(ctx, 'users'), first.cursor);
+    expect(__googleWorkspaceRunCacheSizeForTests()).toBe(0);
+  });
 });
 
 describe('GoogleWorkspaceDriver tenant', () => {
@@ -365,7 +449,7 @@ describe('GoogleWorkspaceDriver tenant', () => {
     expect(row(s, 'storage', 'Shared drives')).toMatchObject({ kind: 'meter', used: 100_000 });
     expect(row(s, 'storage', 'Data as of')).toMatchObject({ value: '2026-10-06' });
     expect(row(s, 'security', '2-step verification coverage')).toEqual({
-      kind: 'meter', label: '2-step verification coverage', used: 1, total: 2, unit: 'count',
+      kind: 'meter', label: '2-step verification coverage', used: 1, total: 2, unit: 'count', higherIsBetter: true,
     });
     expect(row(s, 'security', 'Super admins')).toMatchObject({ value: 1 });
     expect(row(s, 'security', 'Wasted licences')).toMatchObject({ value: 1 });

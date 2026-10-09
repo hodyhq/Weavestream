@@ -73,30 +73,34 @@ export function buildSubscriptionSection(sub: ResellerSubscription, edition: str
   const planName = sub.plan?.planName;
   const renewal = sub.renewalSettings?.renewalType;
   const trial = sub.trialSettings;
-  return section([
-    group('plan', 'Plan', 'google-admin', [
-      text('Edition', edition),
-      text('SKU', sub.skuId),
-      planName ? text('Plan', PLAN_LABELS[planName] ?? planName) : null,
-      bool('Commitment', sub.plan?.isCommitmentPlan),
-      renewal ? text('Renewal', RENEWAL_LABELS[renewal] ?? renewal) : null,
-      sub.status ? badge('Status', sub.status, statusTone(sub.status)) : null,
-      bool('In trial', trial?.isInTrial),
-      text('Purchase order', sub.purchaseOrderId),
-      text('Customer domain', sub.customerDomain),
-      text('Subscription ID', sub.subscriptionId),
+  return {
+    ...section([
+      group('plan', 'Plan', 'google-admin', [
+        text('Edition', edition),
+        text('SKU', sub.skuId),
+        planName ? text('Plan', PLAN_LABELS[planName] ?? planName) : null,
+        bool('Commitment', sub.plan?.isCommitmentPlan),
+        renewal ? text('Renewal', RENEWAL_LABELS[renewal] ?? renewal) : null,
+        sub.status ? badge('Status', sub.status, statusTone(sub.status)) : null,
+        bool('In trial', trial?.isInTrial),
+        text('Purchase order', sub.purchaseOrderId),
+        text('Customer domain', sub.customerDomain),
+        text('Subscription ID', sub.subscriptionId),
+      ]),
+      group('seats', 'Seats', 'google-admin', [
+        seatMeter(sub),
+        num('Purchased seats', finite(sub.seats?.numberOfSeats)),
+        num('Licensed seats', finite(sub.seats?.licensedNumberOfSeats)),
+        num('Maximum seats', finite(sub.seats?.maximumNumberOfSeats)),
+      ]),
+      group('dates', 'Dates', 'google-admin', [
+        datetime('Created', sub.creationTime),
+        date('Commitment start', sub.plan?.commitmentInterval?.startTime),
+        date('Commitment end (renewal)', sub.plan?.commitmentInterval?.endTime),
+        date('Trial end', trial?.trialEndTime),
+      ]),
     ]),
-    group('seats', 'Seats', 'google-admin', [
-      seatMeter(sub),
-      num('Purchased seats', finite(sub.seats?.numberOfSeats)),
-      num('Licensed seats', finite(sub.seats?.licensedNumberOfSeats)),
-      num('Maximum seats', finite(sub.seats?.maximumNumberOfSeats)),
-    ]),
-    group('dates', 'Dates', 'google-admin', [
-      datetime('Created', sub.creationTime),
-      date('Commitment start', sub.plan?.commitmentInterval?.startTime),
-      date('Commitment end (renewal)', sub.plan?.commitmentInterval?.endTime),
-      date('Trial end', trial?.trialEndTime),
-    ]),
-  ]);
+    // Distinguishable from the tenant block when an asset has both.
+    title: 'Google Workspace (reseller)',
+  };
 }

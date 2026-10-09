@@ -91,7 +91,7 @@ describe('Google Workspace setup guide', () => {
   });
 
   it('never contains an em-dash', () => {
-    expect(JSON.stringify(GOOGLE_WORKSPACE_SETUP_GUIDE)).not.toContain('—');
+    expect(JSON.stringify(GOOGLE_WORKSPACE_SETUP_GUIDE)).not.toContain('\u2014');
   });
 });
 
@@ -99,8 +99,10 @@ describe('diagnose: client check (dummy authorization code)', () => {
   it('treats invalid_grant as a working client', async () => {
     const calls = install(tokenError('invalid_grant'));
     const result = await clientCheck();
+    // Only the client id and secret are proven; the redirect URI waits for a real connect.
     expect(integrationSetupCheckSchema.parse(result)).toEqual({
-      ok: true, passedStepIds: ['project', 'client', 'credentials'], failures: [],
+      ok: true, passedStepIds: ['project', 'credentials'], failures: [],
+      notes: [{ stepId: 'client', message: 'Redirect URI is confirmed on the first successful connect.' }],
     });
     const sent = new URLSearchParams(calls[0]!.body);
     expect(sent.get('grant_type')).toBe('authorization_code');

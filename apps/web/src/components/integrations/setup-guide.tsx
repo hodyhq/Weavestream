@@ -10,7 +10,7 @@ import { Btn, Icon, useToast } from '../ui';
  * plain text with a tiny markdown subset (blank-line paragraphs, `- `
  * bullets, `**bold**`) rendered as React elements: never as HTML. A step
  * turns green when Check setup passes it and red with a fixed message when
- * it fails.
+ * it fails; a step the check cannot verify keeps its number and shows a note.
  */
 export function SetupGuide({
   steps,
@@ -88,6 +88,7 @@ export function SetupGuide({
         <ol style={listStyle}>
           {steps.map((step, index) => {
             const failures = failedBy.get(step.id);
+            const notes = (check?.notes ?? []).filter((n) => n.stepId === step.id);
             const state = failures ? 'failed' : passed.has(step.id) ? 'passed' : 'todo';
             return (
               <li key={step.id} style={stepStyle} data-state={state}>
@@ -102,6 +103,11 @@ export function SetupGuide({
                   {failures?.map((message, i) => (
                     <p key={i} style={dangerStyle} role="alert">
                       {message}
+                    </p>
+                  ))}
+                  {notes.map((n, i) => (
+                    <p key={i} style={mutedStyle}>
+                      {n.message}
                     </p>
                   ))}
                   <GuideBody body={step.body} />

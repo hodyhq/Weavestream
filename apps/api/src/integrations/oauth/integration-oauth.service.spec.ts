@@ -5,7 +5,7 @@ import {
   setDefaultResolveForTests,
 } from '../../common/egress/safe-fetch.js';
 import { integrationSecretAad } from '../../crypto/integration-secret-encryption.service.js';
-import { IntegrationOAuthService, OAUTH_STATE_TTL_SEC, oauthStateKey } from './integration-oauth.service.js';
+import { IntegrationOAuthService, OAUTH_STATE_TTL_SEC, excessScopes, oauthStateKey } from './integration-oauth.service.js';
 
 /**
  * The OAuth framework is exercised with a test-only fake driver: no real
@@ -303,6 +303,36 @@ describe('IntegrationOAuthService.callback', () => {
       ctx.service.callback(USER, { code: 'c', state: url.searchParams.get('state') }, META),
     ).resolves.toBe(failed);
     expect(ctx.prisma.integrationSecret.upsert).not.toHaveBeenCalled();
+  });
+
+  it('fails and audits when the grant carries scopes that were not requested', async () => {
+    const ctx = setup();
+    const url = await startFlow(ctx);
+    scriptFetch([{ body: { access_token: 'a', refresh_token: 'test-refresh-1', scope: 'openid scope.read scope.write' } }]);
+    await expect(
+      ctx.service.callback(USER, { code: 'c', state: url.searchParams.get('state') }, META),
+    ).resolves.toBe(failed);
+    expect(ctx.prisma.integrationSecret.upsert).not.toHaveBeenCalled();
+    expect(ctx.audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.oauth.connect.failed',
+      after: { provider: 'google', reason: 'excess_scopes', excessScopes: ['scope.write'] },
+    }));
+  });
+
+  it('connects with a subset of the requested scopes and Google identity scope names', async () => {
+    const ctx = setup();
+    const url = await startFlow(ctx);
+    scriptFetch([{ body: { access_token: 'a', refresh_token: 'test-refresh-1', scope: 'openid https://www.googleapis.com/auth/userinfo.email' } }]);
+    await expect(
+      ctx.service.callback(USER, { code: 'c', state: url.searchParams.get('state') }, META),
+    ).resolves.toBe(connected);
+    expect(ctx.prisma.integrationSecret.upsert).toHaveBeenCalled();
+  });
+});
+
+describe('excessScopes', () => {
+  it('ignores identity scopes and requested ones', () => {
+    expect(excessScopes(['openid', 'profile', 'https://www.googleapis.com/auth/userinfo.profile', 'a', 'b'], ['a'])).toEqual(['b']);
   });
 });
 

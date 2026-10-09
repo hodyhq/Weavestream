@@ -565,6 +565,14 @@ describe('AssetsService.get integration sections', () => {
       {
         lastSyncedAt: new Date('2026-10-01T00:00:00.000Z'),
         sectionData: section,
+        state: 'active',
+        companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
+      },
+      {
+        // The record left the source: kept as history, flagged inactive.
+        lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'),
+        sectionData: section,
+        state: 'stale',
         companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
       },
       {
@@ -605,7 +613,10 @@ describe('AssetsService.get integration sections', () => {
     const asset = await service.get({ id: 'u1', role: 'SUPER_ADMIN' } as never, companyId, assetId);
     expect(asset.integrationSections).toEqual([{
       integrationId, driver: 'google-workspace', integrationName: 'Acme Workspace',
-      lastSyncedAt: new Date('2026-10-01T00:00:00.000Z'), section,
+      lastSyncedAt: new Date('2026-10-01T00:00:00.000Z'), active: true, section,
+    }, {
+      integrationId, driver: 'google-workspace', integrationName: 'Acme Workspace',
+      lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'), active: false, section,
     }]);
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ companyId, assetId }),

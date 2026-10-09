@@ -281,6 +281,7 @@ export class IntegrationsService {
     meta: AuditMeta,
   ): Promise<IntegrationDto> {
     const descriptor = this.drivers.describe(input.driver);
+    this.assertNoSecretForOAuth(descriptor, input.secret, false);
     this.validateDriverPayload(descriptor, input.config, input.secret);
     this.validateDriverConfiguration(input.driver, input.config, input.secret);
 
@@ -372,6 +373,7 @@ export class IntegrationsService {
     });
     if (!existing) throw new NotFoundException(`Integration ${id} not found`);
     const descriptor = this.drivers.describe(existing.driver);
+    this.assertNoSecretForOAuth(descriptor, input.secret, input.clearSecret === true);
 
     if (input.config) {
       this.validateDriverPayload(descriptor, input.config, input.secret);
@@ -1351,6 +1353,19 @@ export class IntegrationsService {
           `Match-key field ${id} is not on layout ${assetLayoutId} or is archived.`,
         );
       }
+    }
+  }
+
+  /** OAuth drivers: the OAuth service is the only writer of the stored grant. */
+  private assertNoSecretForOAuth(
+    descriptor: DriverDescriptor,
+    secret: Record<string, unknown> | null | undefined,
+    clearSecret: boolean,
+  ): void {
+    if (descriptor.oauth && (secret != null || clearSecret)) {
+      throw new BadRequestException(
+        `Driver "${descriptor.key}" connects with OAuth; use Connect or Disconnect instead of setting credentials.`,
+      );
     }
   }
 

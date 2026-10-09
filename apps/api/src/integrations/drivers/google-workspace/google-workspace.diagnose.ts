@@ -36,10 +36,17 @@ function result(passed: string[], failures: Failure[]): IntegrationSetupCheck {
   return { ok: failures.length === 0, passedStepIds: passed, failures };
 }
 
+/** Fixed note: a dummy code cannot prove the redirect URI; a real connect does. */
+export const REDIRECT_UNVERIFIED_NOTE = 'Redirect URI is confirmed on the first successful connect.';
+
 // A syntactically valid PKCE verifier; the dummy code fails before it is used.
 const DUMMY_VERIFIER = 'weavestream-setup-check-weavestream-setup-check';
 
-/** Verify the instance OAuth client (id, secret, redirect URI) without any customer token. */
+/**
+ * Verify the instance OAuth client id and secret without any customer
+ * token. The redirect URI (client step) stays unverified: Google rejects
+ * the dummy code before it compares the redirect URI.
+ */
 export async function diagnoseGoogleClient(
   input: Extract<DriverDiagnoseInput, { mode: 'client' }>,
 ): Promise<IntegrationSetupCheck> {
@@ -57,8 +64,8 @@ export async function diagnoseGoogleClient(
     if (!(e instanceof OAuthTokenError)) return result([], [UNREACHABLE]);
     switch (e.code) {
       case 'invalid_grant':
-        // Expected: the client id, secret and redirect URI were accepted.
-        return result([S.project, S.client, S.credentials], []);
+        // Expected: the client id and secret were accepted; the redirect URI was not checked.
+        return { ...result([S.project, S.credentials], []), notes: [{ stepId: S.client, message: REDIRECT_UNVERIFIED_NOTE }] };
       case 'invalid_client':
       case 'unauthorized_client':
         return result([], [{

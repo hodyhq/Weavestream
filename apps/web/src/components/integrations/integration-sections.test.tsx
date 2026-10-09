@@ -82,4 +82,24 @@ describe('IntegrationSections', () => {
     expect(meterState(94, 100).tone).toBe('warn');
     expect(meterState(95, 100).tone).toBe('danger');
   });
+
+  it('inverts the tone for a higher-is-better coverage meter', () => {
+    expect(meterState(100, 100, true).tone).toBe('ok');
+    expect(meterState(80, 100, true).tone).toBe('ok');
+    expect(meterState(79, 100, true).tone).toBe('warn');
+    expect(meterState(50, 100, true).tone).toBe('warn');
+    expect(meterState(49, 100, true).tone).toBe('danger');
+    render(<IntegrationSections sections={[entry([{ label: '2SV', kind: 'meter', used: 10, total: 10, unit: 'count', higherIsBetter: true }])]} />);
+    expect(screen.getByRole('meter', { name: '2SV' })).toHaveAttribute('data-tone', 'ok');
+  });
+
+  it('tags a section whose binding is no longer active', () => {
+    render(<IntegrationSections sections={[{ ...entry([{ label: 'Plan', kind: 'text', value: 'x' }]), active: false }]} />);
+    expect(screen.getByText('No longer in Example Workspace')).toBeInTheDocument();
+  });
+
+  it('shows no tag on an active binding', () => {
+    render(<IntegrationSections sections={[{ ...entry([{ label: 'Plan', kind: 'text', value: 'x' }]), active: true }]} />);
+    expect(screen.queryByText(/No longer in/)).toBeNull();
+  });
 });

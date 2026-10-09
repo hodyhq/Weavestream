@@ -97,6 +97,8 @@ const rowSchema = z.discriminatedUnion('kind', [
       total: finiteNumber.positive(),
       unit: z.enum(['bytes', 'mb', 'count']),
       value: plainText(INTEGRATION_SECTION_LIMITS.labelLength).optional(),
+      /** Coverage-style meter (e.g. 2SV): a low fill is the warning, not a high one. */
+      higherIsBetter: z.boolean().optional(),
     })
     .strict(),
 ]);
@@ -138,6 +140,8 @@ export const assetIntegrationSectionSchema = z.object({
   driver: z.string(),
   integrationName: z.string(),
   lastSyncedAt: z.string(),
+  /** False once the binding is no longer active (the record left the source): history stays visible, tagged. */
+  active: z.boolean().optional(),
   section: integrationSectionSchema,
 });
 export type AssetIntegrationSection = z.infer<typeof assetIntegrationSectionSchema>;

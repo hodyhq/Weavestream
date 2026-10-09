@@ -531,6 +531,7 @@ export class AssetsService {
       select: {
         lastSyncedAt: true,
         sectionData: true,
+        state: true,
         companyMapping: {
           select: { integration: { select: { id: true, driver: true, name: true } } },
         },
@@ -549,6 +550,7 @@ export class AssetsService {
         driver: integration.driver,
         integrationName: integration.name,
         lastSyncedAt: row.lastSyncedAt,
+        active: row.state === 'active',
         section: parsed.data,
       });
     }

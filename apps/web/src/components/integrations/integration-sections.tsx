@@ -69,6 +69,7 @@ function IntegrationSectionPanel({ entry }: { entry: AssetIntegrationSection }) 
           <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0 }}>
             {section.title}
           </span>
+          {entry.active === false && <Tag tone="warn">No longer in {entry.integrationName}</Tag>}
           <span
             title={`${entry.integrationName} · last synced ${new Date(entry.lastSyncedAt).toISOString()}`}
             style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}
@@ -215,14 +216,23 @@ function meterAmount(value: number, unit: 'bytes' | 'mb' | 'count'): string {
   return value.toLocaleString('en-US');
 }
 
-/** Rounded usage percent plus the threshold tone (amber at 80%, red at 95%). */
-export function meterState(used: number, total: number): { percent: number; tone: 'ok' | 'warn' | 'danger' } {
+/**
+ * Rounded percent plus the threshold tone. Usage meters: amber at 80%,
+ * red at 95%. Coverage meters (higherIsBetter): red below 50%, amber
+ * below 80%, otherwise ok.
+ */
+export function meterState(
+  used: number,
+  total: number,
+  higherIsBetter = false,
+): { percent: number; tone: 'ok' | 'warn' | 'danger' } {
   const percent = Math.round((used / total) * 100);
+  if (higherIsBetter) return { percent, tone: percent < 50 ? 'danger' : percent < 80 ? 'warn' : 'ok' };
   return { percent, tone: percent >= 95 ? 'danger' : percent >= 80 ? 'warn' : 'ok' };
 }
 
 function UsageMeter({ row }: { row: Extract<IntegrationSectionRow, { kind: 'meter' }> }) {
-  const { percent, tone } = meterState(row.used, row.total);
+  const { percent, tone } = meterState(row.used, row.total, row.higherIsBetter);
   const text = `${meterAmount(row.used, row.unit)} of ${meterAmount(row.total, row.unit)} (${percent}%)`;
   const fill = tone === 'danger' ? 'var(--danger)' : tone === 'warn' ? 'var(--warn)' : 'var(--accent)';
   return (

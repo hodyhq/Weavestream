@@ -1,6 +1,6 @@
 import type { DriverDescriptor } from '@weavestream/shared';
 import { IntegrationsService, ensureResourceDestination, validateResourceRegistry, validateResourceTargetConfig, assertResourcePatchCompatible } from './integrations.service.js';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { BREEZE_RECOMMENDED_DESTINATIONS } from './drivers/breeze/breeze.driver.js';
 import {
@@ -1060,6 +1060,7 @@ describe('IntegrationsService OAuth drivers', () => {
   const crypto = {
     decrypt: () => JSON.stringify({ refreshToken: 'test-refresh-tail', grantedScopes: [], connectedAt: 'x' }),
   };
+  const USER_ACTOR = { id: '00000000-0000-4000-8000-0000000000ab' } as never;
   const oauthDescriptor = {
     key: 'fake-oauth',
     resources: [],
@@ -1108,6 +1109,21 @@ describe('IntegrationsService OAuth drivers', () => {
     const dto = await setup(null).service.get(id);
     expect(dto.hasSecret).toBe(true);
     expect(dto.secretMask).toBeNull();
+  });
+
+  it.each([
+    ['secret', { secret: { refreshToken: 'test-forged' } }],
+    ['clearSecret', { clearSecret: true }],
+  ])('rejects %s on update: the OAuth service is the only writer', async (_label, input) => {
+    const { service } = setup(null);
+    await expect(service.update(USER_ACTOR, id, input as never, { ip: null, userAgent: null } as never))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a secret on create', async () => {
+    const { service } = setup(null);
+    await expect(service.create(USER_ACTOR, { driver: 'fake-oauth', name: 'x', config: {}, secret: { refreshToken: 'test-forged' } } as never, { ip: null, userAgent: null } as never))
+      .rejects.toBeInstanceOf(BadRequestException);
   });
 });
 
