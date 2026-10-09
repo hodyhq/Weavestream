@@ -293,6 +293,11 @@ describe('LevelDriver devices', () => {
     expect(row(s, 'patches', 'Patches')).toMatchObject({ kind: 'text', value: expect.stringMatching(/^Not available: /) });
   });
 
+  it('fails instead of ending the walk when a page says more follow but carries no ids', async () => {
+    installFetchTable(table({ [`${API}/devices?`]: { body: { data: [{ hostname: 'no-id' }], has_more: true } } }));
+    await expect(new LevelDriver().fetchRecords(fetchCtx(makeCtx()), null)).rejects.toThrow(/without ids/);
+  });
+
   it('propagates a rate limit from optional data so the page is retried', async () => {
     installFetchTable(table({ [`${API}/updates?`]: { status: 429, body: {} } }));
     await expect(new LevelDriver().fetchRecords(fetchCtx(makeCtx()), null)).rejects.toBeInstanceOf(DriverRateLimitError);

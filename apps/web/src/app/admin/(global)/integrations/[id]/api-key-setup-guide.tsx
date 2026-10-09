@@ -27,16 +27,22 @@ export function ApiKeySetupGuide({
 
   async function runCheck() {
     setChecking(true);
-    const res = await apiFetch<IntegrationSetupCheck>(`/admin/integrations/${integrationId}/check`, {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
-    setChecking(false);
-    if (!res.ok || !res.data) {
-      toast.push(problemMessage(res.problem) ?? 'Could not run the setup check.', 'danger');
-      return;
+    try {
+      const res = await apiFetch<IntegrationSetupCheck>(`/admin/integrations/${integrationId}/check`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      if (!res.ok || !res.data) {
+        toast.push(problemMessage(res.problem) ?? 'Could not run the setup check.', 'danger');
+        return;
+      }
+      setCheck(res.data);
+    } catch {
+      // apiFetch rethrows network failures; the button must not stay stuck loading.
+      toast.push('Could not run the setup check.', 'danger');
+    } finally {
+      setChecking(false);
     }
-    setCheck(res.data);
   }
 
   return (

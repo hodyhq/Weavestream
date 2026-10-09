@@ -144,10 +144,17 @@ async function listAll<T extends { id?: string }>(
     if (out.length > cap) {
       throw new LookupTooLargeError(`Not shown: the account has more than ${cap.toLocaleString('en-US')} entries, above what one sync holds.`);
     }
-    after = items.at(-1)?.id;
-    if (body.has_more !== true || !after) break;
+    if (body.has_more !== true) break;
+    after = lastId(items);
   }
   return out;
+}
+
+/** Id to continue after; a page that says more follow but has no ids must not end the walk silently. */
+function lastId(items: Array<{ id?: string }>): string {
+  const id = [...items].reverse().find((item) => item.id)?.id;
+  if (!id) throw new LevelRequestError('Level returned a page without ids while saying more pages follow.', 502);
+  return id;
 }
 
 async function rootGroups(ctx: IntegrationContext): Promise<SourceOrgDto[]> {
@@ -300,7 +307,8 @@ export class LevelDriver implements IntegrationDriver {
     };
     for (const flag of DEVICE_INCLUDES) params[flag] = 'true';
     const body = await levelGet<Page<LevelDevice>>(ctx, url('/devices', params));
-    const devices = (Array.isArray(body.data) ? body.data : []).filter((d) => d.id);
+    const rawDevices = Array.isArray(body.data) ? body.data : [];
+    const devices = rawDevices.filter((d) => d.id);
 
     const alerts = await runCached(ctx, snapshotAt, 'alerts', () =>
       optional(async () => byDevice(await listAll<LevelAlert>(ctx, '/alerts', { status: 'active' }, LOOKUP_ITEM_CAP))));
@@ -322,7 +330,7 @@ export class LevelDriver implements IntegrationDriver {
         };
       });
 
-    const next = body.has_more === true ? encodeCursor(devices.at(-1)?.id) : null;
+    const next = body.has_more === true ? encodeCursor(lastId(rawDevices)) : null;
     if (next === null) evictRun(ctx, snapshotAt);
     return { records, hasMore: next !== null, cursor: next, snapshotAt };
   }

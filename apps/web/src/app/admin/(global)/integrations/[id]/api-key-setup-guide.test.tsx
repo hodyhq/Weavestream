@@ -43,4 +43,12 @@ describe('ApiKeySetupGuide', () => {
     await waitFor(() => expect(screen.getByText('The key was revoked.')).toBeInTheDocument());
     expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/integration-1/check', { method: 'POST', body: JSON.stringify({}) });
   });
+
+  it('recovers when the request itself fails', async () => {
+    apiFetch.mockRejectedValue(new Error('network down'));
+    render(<ApiKeySetupGuide integrationId="integration-1" steps={steps} hasSecret />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check setup' }));
+    await waitFor(() => expect(toast.push).toHaveBeenCalledWith('Could not run the setup check.', 'danger'));
+    expect(screen.getByRole('button', { name: 'Check setup' })).not.toBeDisabled();
+  });
 });
