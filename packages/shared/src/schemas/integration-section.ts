@@ -14,6 +14,7 @@ import { isValidHttpUrl } from './http-url.js';
 
 /** Icons a section or group may name; each maps to `/integrations/icons/<slug>.svg`. */
 export const INTEGRATION_SECTION_ICONS = [
+  'google',
   'gmail',
   'google-drive',
   'google-admin',

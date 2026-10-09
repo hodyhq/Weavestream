@@ -1,0 +1,391 @@
+import type {
+  IntegrationSection,
+  IntegrationSectionGroup,
+  IntegrationSectionRow,
+} from '@weavestream/shared';
+
+/**
+ * Pure builders for the Google Workspace integration sections. Records
+ * only carry the name and the match key as layout fields; everything
+ * below is rendered read-only on the asset page (integrationSectionSchema).
+ */
+
+export const SECTION_TITLE = 'Google Workspace';
+const DAY_MS = 86_400_000;
+export const INACTIVE_DAYS = 90;
+const MB = 1024 * 1024;
+
+/** A lookup that may be unavailable (missing privilege, API off, report lag). */
+export type Lookup<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+export interface StorageUsage {
+  usedMb?: number;
+  totalMb?: number;
+  gmailMb?: number;
+  driveMb?: number;
+  sharedDrivesMb?: number;
+}
+
+export interface UsageReport<T> {
+  /** Report date (YYYY-MM-DD), shown as "Data as of". */
+  date: string;
+  value: T;
+}
+
+export interface GoogleUser {
+  id?: string;
+  primaryEmail?: string;
+  name?: { fullName?: string };
+  suspended?: boolean;
+  archived?: boolean;
+  isAdmin?: boolean;
+  isDelegatedAdmin?: boolean;
+  isEnrolledIn2Sv?: boolean;
+  isEnforcedIn2Sv?: boolean;
+  lastLoginTime?: string;
+  creationTime?: string;
+  orgUnitPath?: string;
+}
+
+type Row = IntegrationSectionRow | null;
+
+const CONTROL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+
+/** Plain text the section schema accepts: no controls, nothing tag-shaped, capped. */
+export function clean(value: string, max: number): string {
+  return value.replace(CONTROL_RE, '').replace(/<(?=[a-z!/?])/gi, '< ').slice(0, max);
+}
+
+function text(label: string, value: string | null | undefined): Row {
+  return value ? { kind: 'text', label, value: clean(value, 1_000) } : null;
+}
+
+function num(label: string, value: number | null | undefined): Row {
+  return typeof value === 'number' && Number.isFinite(value) ? { kind: 'number', label, value } : null;
+}
+
+function bool(label: string, value: boolean | null | undefined): Row {
+  return typeof value === 'boolean' ? { kind: 'boolean', label, value } : null;
+}
+
+function badge(label: string, value: string, tone: 'neutral' | 'success' | 'warning' | 'danger'): Row {
+  return { kind: 'badge', label, value: clean(value, 64), tone };
+}
+
+/** ISO string, or an epoch-milliseconds string, as an ISO datetime. */
+export function toIso(value: string | number | null | undefined): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const ms = typeof value === 'number' || /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+function datetime(label: string, value: string | number | null | undefined): Row {
+  const iso = toIso(value);
+  return iso ? { kind: 'datetime', label, value: iso } : null;
+}
+
+function date(label: string, value: string | number | null | undefined): Row {
+  const iso = toIso(value);
+  return iso ? { kind: 'date', label, value: iso.slice(0, 10) } : null;
+}
+
+function list(label: string, values: string[]): Row {
+  return { kind: 'list', label, value: values.slice(0, 50).map((value) => clean(value, 200)) };
+}
+
+/**
+ * A usage bar against a quota, or (pooled storage: no per-user quota, or
+ * a quota of -1 / 0) the used amount as bytes with "pooled" in the label.
+ */
+function usage(label: string, usedMb: number | undefined, totalMb: number | undefined): Row {
+  if (typeof usedMb !== 'number' || !Number.isFinite(usedMb) || usedMb < 0) return null;
+  if (typeof totalMb === 'number' && Number.isFinite(totalMb) && totalMb > 0) {
+    return { kind: 'meter', label, used: usedMb, total: totalMb, unit: 'mb' };
+  }
+  return { kind: 'bytes', label: `${label} (pooled storage)`, value: usedMb * MB };
+}
+
+function group(
+  key: string,
+  title: string,
+  icon: IntegrationSectionGroup['icon'],
+  rows: Row[],
+): IntegrationSectionGroup {
+  return { key, title, ...(icon ? { icon } : {}), rows: rows.filter((row): row is IntegrationSectionRow => row !== null).slice(0, 40) };
+}
+
+function section(groups: IntegrationSectionGroup[]): IntegrationSection {
+  return { title: SECTION_TITLE, groups: groups.filter((g) => g.rows.length > 0) };
+}
+
+/** Last login as epoch ms, or null when the user never signed in (Google reports the epoch). */
+export function lastLoginMs(user: GoogleUser): number | null {
+  const ms = user.lastLoginTime ? Date.parse(user.lastLoginTime) : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+/** Licensed AND (suspended, archived, or no sign-in for 90 days / ever). */
+export function isWastedLicence(user: GoogleUser, licensed: boolean, nowMs: number): boolean {
+  if (!licensed) return false;
+  if (user.suspended || user.archived) return true;
+  const last = lastLoginMs(user);
+  return last === null || nowMs - last > INACTIVE_DAYS * DAY_MS;
+}
+
+function accountStatus(user: GoogleUser): Row {
+  if (user.archived) return badge('Status', 'Archived', 'neutral');
+  if (user.suspended) return badge('Status', 'Suspended', 'warning');
+  return badge('Status', 'Active', 'success');
+}
+
+function adminRole(user: GoogleUser): Row {
+  if (user.isAdmin) return badge('Admin role', 'Super admin', 'warning');
+  if (user.isDelegatedAdmin) return badge('Admin role', 'Delegated admin', 'neutral');
+  return badge('Admin role', 'None', 'neutral');
+}
+
+export function buildUserSection(
+  user: GoogleUser,
+  licences: Lookup<ReadonlyMap<string, string[]>>,
+  usageLookup: Lookup<UsageReport<ReadonlyMap<string, StorageUsage>>>,
+  nowMs: number,
+): IntegrationSection {
+  const email = (user.primaryEmail ?? '').toLowerCase();
+  const skus = licences.ok ? licences.value.get(email) ?? [] : [];
+  const groups: IntegrationSectionGroup[] = [
+    group('account', 'Account', 'google', [
+      accountStatus(user),
+      text('Org unit', user.orgUnitPath),
+      datetime('Created', user.creationTime),
+      lastLoginMs(user) === null ? text('Last login', 'Never') : datetime('Last login', user.lastLoginTime),
+    ]),
+    group('licences', 'Licences', 'google-admin', licences.ok
+      ? [skus.length > 0 ? list('Assigned', skus) : text('Assigned', 'None')]
+      : [text('Licences', `Not available: ${licences.reason}`)]),
+  ];
+
+  if (usageLookup.ok) {
+    const entry = usageLookup.value.value.get(email);
+    const asOf = date('Data as of', usageLookup.value.date);
+    if (entry) {
+      groups.push(
+        group('mailbox', 'Mailbox', 'gmail', [usage('Mailbox storage', entry.gmailMb, entry.totalMb)]),
+        group('drive', 'Drive', 'google-drive', [usage('Drive storage', entry.driveMb, entry.totalMb)]),
+        group('storage', 'Total storage', 'google-drive', [usage('Total storage', entry.usedMb, entry.totalMb), asOf]),
+      );
+    } else {
+      groups.push(group('storage', 'Storage', 'google-drive', [text('Storage', 'No usage reported for this user yet.'), asOf]));
+    }
+  } else {
+    groups.push(group('storage', 'Storage', 'google-drive', [text('Storage', `Not available: ${usageLookup.reason}`)]));
+  }
+
+  groups.push(
+    group('security', 'Security', 'google-admin', [
+      adminRole(user),
+      bool('2-step verification enrolled', user.isEnrolledIn2Sv),
+      bool('2-step verification enforced', user.isEnforcedIn2Sv),
+      licences.ok
+        ? isWastedLicence(user, skus.length > 0, nowMs)
+          ? badge('Wasted licence', 'Yes', 'danger')
+          : badge('Wasted licence', 'No', 'success')
+        : null,
+    ]),
+  );
+  return section(groups);
+}
+
+export interface TenantInput {
+  customerId: string;
+  primaryDomain: string;
+  createdAt?: string;
+  users: GoogleUser[];
+  licences: Lookup<ReadonlyMap<string, string[]>>;
+  storage: Lookup<UsageReport<StorageUsage>>;
+  nowMs: number;
+}
+
+export function buildTenantSection(input: TenantInput): IntegrationSection {
+  const active = input.users.filter((u) => !u.suspended && !u.archived);
+  const enrolled = active.filter((u) => u.isEnrolledIn2Sv).length;
+  const superAdmins = input.users.filter((u) => u.isAdmin).length;
+
+  const licenceRows: Row[] = [];
+  let wasted: number | null = null;
+  if (input.licences.ok) {
+    const perEdition = new Map<string, number>();
+    for (const skus of input.licences.value.values()) {
+      for (const sku of skus) perEdition.set(sku, (perEdition.get(sku) ?? 0) + 1);
+    }
+    for (const [sku, count] of [...perEdition].sort((a, b) => b[1] - a[1])) licenceRows.push(num(sku, count));
+    if (licenceRows.length === 0) licenceRows.push(text('Assigned', 'None'));
+    const licensed = input.licences.value;
+    wasted = input.users.filter((u) =>
+      isWastedLicence(u, (licensed.get((u.primaryEmail ?? '').toLowerCase())?.length ?? 0) > 0, input.nowMs),
+    ).length;
+  } else {
+    licenceRows.push(text('Licences', `Not available: ${input.licences.reason}`));
+  }
+
+  const storageRows: Row[] = [];
+  if (input.storage.ok) {
+    const s = input.storage.value.value;
+    storageRows.push(
+      usage('Total storage', s.usedMb, s.totalMb),
+      usage('Gmail', s.gmailMb, s.totalMb),
+      usage('Drive', s.driveMb, s.totalMb),
+      usage('Shared drives', s.sharedDrivesMb, s.totalMb),
+      date('Data as of', input.storage.value.date),
+    );
+  } else {
+    storageRows.push(text('Storage', `Not available: ${input.storage.reason}`));
+  }
+
+  return section([
+    group('overview', 'Overview', 'google', [
+      text('Primary domain', input.primaryDomain),
+      text('Customer ID', input.customerId),
+      num('Active users', active.length),
+      num('Suspended users', input.users.filter((u) => u.suspended && !u.archived).length),
+      num('Archived users', input.users.filter((u) => u.archived).length),
+      datetime('Created', input.createdAt),
+    ]),
+    group('licences', 'Licences assigned per edition', 'google-admin', licenceRows),
+    group('storage', 'Storage', 'google-drive', storageRows),
+    group('security', 'Security', 'google-admin', [
+      active.length > 0
+        ? { kind: 'meter', label: '2-step verification coverage', used: enrolled, total: active.length, unit: 'count' }
+        : null,
+      num('Super admins', superAdmins),
+      wasted === null ? null : num('Wasted licences', wasted),
+    ]),
+  ]);
+}
+
+export interface GoogleGroup {
+  id?: string;
+  email?: string;
+  name?: string;
+  description?: string;
+  directMembersCount?: string | number;
+}
+
+export function buildGroupSection(g: GoogleGroup, members: Array<{ email?: string; role?: string }>): IntegrationSection {
+  const count = Number(g.directMembersCount);
+  const shown = members.filter((m) => m.email).map((m) => (m.role && m.role !== 'MEMBER' ? `${m.email} (${m.role.toLowerCase()})` : m.email!));
+  return section([
+    group('group', 'Group', 'google', [
+      text('Email', g.email),
+      text('Description', g.description),
+      num('Members', Number.isFinite(count) ? count : members.length),
+      shown.length > 0 ? list(Number.isFinite(count) && count > shown.length ? `Members (first ${shown.length})` : 'Member list', shown) : null,
+    ]),
+  ]);
+}
+
+export function buildDomainSection(d: {
+  primary: boolean;
+  verified?: boolean;
+  aliasOf?: string;
+  creationTime?: string | number;
+}): IntegrationSection {
+  return section([
+    group('domain', 'Domain', 'google', [
+      bool('Primary', d.primary),
+      bool('Verified', d.verified),
+      text('Alias of', d.aliasOf),
+      date('Created', d.creationTime),
+    ]),
+  ]);
+}
+
+export interface ChromeDevice {
+  deviceId?: string;
+  serialNumber?: string;
+  model?: string;
+  status?: string;
+  osVersion?: string;
+  lastSync?: string;
+  annotatedUser?: string;
+  annotatedAssetId?: string;
+  orgUnitPath?: string;
+  macAddress?: string;
+  autoUpdateExpiration?: string;
+}
+
+export function buildChromeSection(d: ChromeDevice, nowMs: number): IntegrationSection {
+  const expiry = toIso(d.autoUpdateExpiration);
+  return section([
+    group('chrome', 'Chrome OS', 'chrome', [
+      text('Model', d.model),
+      text('Serial number', d.serialNumber),
+      text('OS version', d.osVersion),
+      d.status ? badge('Status', d.status, d.status === 'ACTIVE' ? 'success' : 'neutral') : null,
+      datetime('Last sync', d.lastSync),
+      text('User', d.annotatedUser),
+      text('Org unit', d.orgUnitPath),
+      text('MAC address', d.macAddress),
+      date('Auto-update expiration', d.autoUpdateExpiration),
+      expiry && Date.parse(expiry) < nowMs ? badge('Updates', 'Expired', 'danger') : null,
+    ]),
+  ]);
+}
+
+export interface MobileDevice {
+  resourceId?: string;
+  serialNumber?: string;
+  model?: string;
+  os?: string;
+  type?: string;
+  email?: string[];
+  status?: string;
+  lastSync?: string;
+  deviceCompromisedStatus?: string;
+}
+
+export function buildMobileSection(d: MobileDevice): IntegrationSection {
+  const compromised = d.deviceCompromisedStatus;
+  return section([
+    group('device', 'Device', 'android', [
+      text('Model', d.model),
+      text('Serial number', d.serialNumber),
+      text('OS', d.os),
+      text('Type', d.type),
+      d.email && d.email.length > 0 ? list('Owner', d.email) : null,
+      text('Status', d.status),
+      datetime('Last sync', d.lastSync),
+      compromised
+        ? badge('Compromised', compromised, /no compromise/i.test(compromised) ? 'success' : /compromise/i.test(compromised) ? 'danger' : 'neutral')
+        : null,
+    ]),
+  ]);
+}
+
+export interface GoogleAlert {
+  alertId?: string;
+  createTime?: string;
+  startTime?: string;
+  endTime?: string;
+  type?: string;
+  source?: string;
+  metadata?: { status?: string };
+  securityInvestigationToolLink?: string;
+}
+
+export function buildAlertSection(a: GoogleAlert): IntegrationSection {
+  const link = a.securityInvestigationToolLink;
+  const status = a.metadata?.status;
+  return section([
+    group('alert', 'Alert', 'google-admin', [
+      text('Type', a.type),
+      text('Source', a.source),
+      status ? badge('Status', status, status === 'CLOSED' ? 'success' : 'warning') : null,
+      datetime('Created', a.createTime),
+      datetime('Started', a.startTime),
+      datetime('Ended', a.endTime),
+      link && /^https:\/\//i.test(link) && link.length <= 2048
+        ? { kind: 'link', label: 'Admin console', value: link, text: 'Open in the investigation tool' }
+        : null,
+    ]),
+  ]);
+}

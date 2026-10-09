@@ -932,10 +932,13 @@ export class AssetsService {
       (target.externalId === input.externalId &&
         (target.externalSource === (input.externalSource ?? null) ||
           target.externalSource === legacyExternalSource));
+    // Match-first resources only name the assets they create: an adopted
+    // (or later re-synced) asset keeps the operator's name.
+    const nameToWrite = target && input.claimUnboundMatch === true ? target.name : input.name;
     const identityChanged =
       !!target &&
       sameIdentity &&
-      (target.name !== input.name ||
+      (target.name !== nameToWrite ||
         target.externalId !== input.externalId ||
         target.externalSource !== (input.externalSource ?? null));
     const restored = target?.archivedAt != null;
@@ -1109,7 +1112,7 @@ export class AssetsService {
                 ...(restored ? { archivedAt: null } : {}),
                 ...(sameIdentity
                   ? {
-                      name: input.name,
+                      name: nameToWrite,
                       externalId: input.externalId,
                       externalSource: input.externalSource ?? null,
                     }
@@ -1946,7 +1949,66 @@ export class AssetsService {
     if (input.claimUnboundMatch === true && only && only.externalSource === null && only.externalId === null) {
       return { target: only, ambiguous: false, claimed: true };
     }
+    if (input.claimUnboundMatch === true && candidates.length === 0) {
+      return this.findCaseInsensitiveUnboundMatch(input, layout, values, client);
+    }
     return { target: null, ambiguous: false };
+  }
+
+  /**
+   * Match-first fallback for text-like keys stored in mixed case (an
+   * operator typed `Alice@Example.COM` into a TEXT field). Prisma has no
+   * case-insensitive filter on Json columns, and the variant OR above only
+   * covers as-is / lower / upper, so the unbound, identity-free assets of
+   * the layout are compared in memory instead.
+   */
+  private async findCaseInsensitiveUnboundMatch(
+    input: IntegrationAssetWriteInput,
+    layout: LayoutWithFields,
+    values: Record<string, unknown>,
+    client: Pick<Prisma.TransactionClient, 'asset'> | PrismaService,
+  ): Promise<{ target: (Asset & { fieldValues: AssetFieldValue[] }) | null; ambiguous: boolean; claimed?: boolean }> {
+    const fold = (value: unknown) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
+    const wanted = new Map<string, unknown>();
+    for (const fieldId of input.matchKeyFieldIds) {
+      const field = layout.fields.find((candidate) => candidate.id === fieldId);
+      if (!field || !['TEXT', 'EMAIL', 'URL'].includes(field.fieldType)) {
+        // Strict keys were already compared exactly by the query above.
+        return { target: null, ambiguous: false };
+      }
+      const value = values[field.slug];
+      if (typeof value !== 'string') return { target: null, ambiguous: false };
+      wanted.set(fieldId, fold(value));
+    }
+    // shortcut: scans at most 5000 unbound manual assets of the layout per
+    // unmatched record; add a lower(value) expression index if it gets hot.
+    const unbound = await client.asset.findMany({
+      where: {
+        companyId: input.companyId,
+        assetLayoutId: input.assetLayoutId,
+        archivedAt: null,
+        externalSource: null,
+        externalId: null,
+        integrationSyncRecords: {
+          none: {
+            integrationCompanyMappingId: input.integrationCompanyMappingId,
+            resourceId: input.resourceId,
+          },
+        },
+      },
+      include: { fieldValues: { where: { assetFieldId: { in: [...wanted.keys()] } } } },
+      take: 5_000,
+    });
+    const matches = unbound.filter((asset) =>
+      [...wanted].every(([fieldId, value]) =>
+        asset.fieldValues.some((row) => row.assetFieldId === fieldId && fold(row.value) === value),
+      ),
+    );
+    if (matches.length > 1) return { target: null, ambiguous: true };
+    if (matches.length !== 1) return { target: null, ambiguous: false };
+    // Re-read with every field value: the scan above loaded the keys only.
+    const target = await client.asset.findUnique({ where: { id: matches[0]!.id }, include: { fieldValues: true } });
+    return target ? { target, ambiguous: false, claimed: true } : { target: null, ambiguous: false };
   }
 
   private async loadLayout(

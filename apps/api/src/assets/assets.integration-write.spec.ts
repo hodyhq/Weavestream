@@ -1075,6 +1075,57 @@ describe('AssetsService integration system writes', () => {
       const variants = where.AND[0].fieldValues.some.OR.map((clause: { value: { equals: unknown } }) => clause.value.equals);
       expect(variants).toContain('alice@example.com');
     });
+
+    it('matches a mixed-case email stored in a TEXT field case-insensitively', async () => {
+      const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
+      const manual = asset({
+        id: ids.manual, name: 'Alice (manual)', externalSource: null, externalId: null,
+        fieldValues: [{ id: 'fv-1', companyId: ids.company, assetId: ids.manual, assetFieldId: ids.field, value: 'Alice@Example.COM' }],
+      });
+      const { service, prisma, tx } = setup({ layout: { ...layout, fields: [textField] } });
+      // Exact-variant query misses; the in-memory fallback scan finds it.
+      for (const client of [prisma, tx]) {
+        client.asset.findMany.mockReset();
+        client.asset.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([manual]).mockResolvedValue([]);
+        client.asset.findUnique.mockResolvedValue(manual);
+      }
+      await expect(service.writeFromIntegration({
+        ...input,
+        name: 'alice@example.com',
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+        fieldValues: [{ targetFieldId: ids.field, value: 'alice@example.com', syncDirection: 'source_wins' }],
+      })).resolves.toMatchObject({ targetId: ids.manual });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+      const scan = prisma.asset.findMany.mock.calls[1][0].where;
+      expect(scan).toMatchObject({ externalSource: null, externalId: null, assetLayoutId: ids.layout });
+    });
+
+    it('does not fall back to the scan without claimUnboundMatch', async () => {
+      const { service, prisma } = setup({ match: [] });
+      await service.writeFromIntegration({ ...input, matchKeyFieldIds: [ids.field] });
+      expect(prisma.asset.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the operator name when adopting and on later syncs', async () => {
+      const manual = asset({ id: ids.manual, name: 'Operator name', externalSource: null, externalId: null });
+      const { service, tx } = setup({ match: [manual] });
+      await service.writeFromIntegration({
+        ...input,
+        name: 'Google display name',
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      });
+      const data = tx.asset.updateMany.mock.calls[0][0].data;
+      expect(data.name).toBe('Operator name');
+      expect(data.externalId).toBe(input.externalId);
+    });
+
+    it('still renames on update for resources without match-first', async () => {
+      const { service, tx } = setup({ target: asset({ name: 'Old name' }), binding: binding() });
+      await service.writeFromIntegration({ ...input, existingTargetId: ids.asset, name: 'New name' });
+      expect(tx.asset.updateMany.mock.calls[0][0].data.name).toBe('New name');
+    });
   });
 
   it('blocks multiple unbound natural-key candidates as ambiguous', async () => {
