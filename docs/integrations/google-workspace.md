@@ -154,6 +154,8 @@ Below the match picker, a table lists the resource's standard facts (for users: 
 
 On sync, a Google record whose match value equals **exactly one** unlinked asset you created yourself adopts that asset instead of creating a duplicate. Text matching ignores upper and lower case. If two or more assets match, the run reports it and links nothing, so you can clean up the duplicates first.
 
+When none of your own assets match, a record also links to **exactly one** asset another integration already syncs (for example the same person from Microsoft 365, or a Chromebook from an RMM). Google then fills that asset's fields according to the integration priority order, and a value that differs from a higher integration's is listed under **Differences** in the Google Workspace section. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
+
 An adopted asset keeps the name you gave it. Assets that Google created follow the Google name (for example when a user is renamed).
 
 ## Troubleshooting
@@ -177,6 +179,7 @@ An adopted asset keeps the name you gave it. Assets that Google created follow t
 | A layout field stopped updating from Google | Someone changed it in Weavestream, so it is listed as a difference | Open the asset (or the integration's **Differences** tab) and choose **Use Google Workspace value** or **Keep ours**. |
 | Phone stays empty for a user | The number has letters (such as an extension) or too few digits to be an international number | Fix the number in Google, or type it in Weavestream. |
 | A record was not linked and the run reports "multiple assets match" | Two or more of your assets share the match value | Remove or rename the duplicates, then sync again. |
+| Run warning: "Skipped resource chrome_devices" or "mobile_devices" | The connected account cannot read devices (it lacks the device management admin privilege) | Reconnect with a super admin, or leave the resource disabled. Users and groups still sync. |
 
 ## Security Model
 

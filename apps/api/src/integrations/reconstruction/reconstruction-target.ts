@@ -211,6 +211,10 @@ export interface ReconstructionWriteContext {
   matchFirstIndexes?: MatchFirstIndexCache;
   /** Runner-set for resources that declare `standardFields`: report person-changed fields. */
   recordFieldDiffs?: boolean;
+  /** Runner-set with match-first: asset sources this record may co-bind to (see AssetsService). */
+  coBindSources?: readonly string[];
+  /** Runner-set with `recordFieldDiffs`: the integration priority order and this driver. */
+  integrationPriority?: { driver: string; order: readonly string[] };
   resolveBinding(
     ref: ReconstructionDependencyRef,
   ): Promise<ResolvedReconstructionTarget | null>;

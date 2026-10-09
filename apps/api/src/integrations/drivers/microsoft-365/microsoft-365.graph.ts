@@ -53,6 +53,29 @@ export const MICROSOFT_PERMISSIONS = MICROSOFT_PERMISSION_GROUPS.flatMap((g) => 
 
 export const MICROSOFT_REQUIRED_PERMISSIONS = MICROSOFT_PERMISSIONS.filter((p) => !MICROSOFT_OPTIONAL_PERMISSIONS.includes(p));
 
+/** Reads Intune managed devices (the Computers and Mobile devices resources). */
+export const INTUNE_PERMISSION = 'DeviceManagementManagedDevices.Read.All';
+
+/**
+ * Why Intune devices cannot be read, for the identified signals only; null
+ * means an unidentified failure that must fail the run (or, in Check setup,
+ * get a neutral note):
+ * - HTTP 400 `BadRequest` "Request not applicable to target tenant.": the
+ *   tenant has no active Intune licence
+ *   (learn.microsoft.com/en-us/answers/questions/1063413).
+ * - HTTP 403 while the app is not known to hold the permission.
+ */
+export function intuneUnavailableMessage(error: unknown, roles: readonly string[] | null): string | null {
+  if (error instanceof GraphRequestError && error.notApplicableToTenant) {
+    return 'Intune is not licensed in this tenant, so computers and mobile devices are skipped.';
+  }
+  if (!(error instanceof GraphAccessError) || error.status !== 403 || roles?.includes(INTUNE_PERMISSION)) return null;
+  if (roles) {
+    return `${INTUNE_PERMISSION} is not granted in this tenant, so computers and mobile devices are skipped. Add it on the app, then a Global Administrator presses Reconnect.`;
+  }
+  return `Intune devices are not available (needs Microsoft Intune and ${INTUNE_PERMISSION}), so computers and mobile devices are skipped.`;
+}
+
 /** True when the granted roles can read the report concealment setting. */
 export function canReadReportSettings(roles: readonly string[]): boolean {
   return roles.includes(REPORT_SETTINGS_READ) || roles.includes(REPORT_SETTINGS_WRITE);
@@ -81,7 +104,7 @@ export const MICROSOFT_365_OAUTH: DriverOAuthDescriptor = {
 
 /** A Graph 401/403: a permission not granted, or a licence (P1, Intune, Defender) the tenant lacks. */
 export class GraphAccessError extends DriverAuthError {
-  constructor(message: string, readonly graphCode: string | null = null) {
+  constructor(message: string, readonly graphCode: string | null = null, readonly status: number | null = null) {
     super(message);
     this.name = 'GraphAccessError';
   }
@@ -89,17 +112,39 @@ export class GraphAccessError extends DriverAuthError {
 
 /** Any other non-OK Graph response; carries the status and Graph's error code only. */
 export class GraphRequestError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string | null) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+    /** Graph's 400 "Request not applicable to target tenant." (no licence for the API). */
+    readonly notApplicableToTenant = false,
+  ) {
     super(message);
     this.name = 'GraphRequestError';
   }
 }
 
+/**
+ * Graph's `error.code` (an identifier), else null, and whether the error is
+ * the fixed "Request not applicable to target tenant." The message is only
+ * compared, never kept.
+ */
+export async function graphError(res: Response): Promise<{ code: string | null; notApplicableToTenant: boolean }> {
+  const body = (await res.json().catch(() => null)) as { error?: { code?: unknown; message?: unknown } } | null;
+  const raw = body?.error?.code;
+  const code = typeof raw === 'string' && /^[A-Za-z0-9_.]{1,80}$/.test(raw) ? raw : null;
+  const message = body?.error?.message;
+  const notApplicableToTenant =
+    res.status === 400 &&
+    code === 'BadRequest' &&
+    typeof message === 'string' &&
+    /^request not applicable to target tenant\.?$/i.test(message.trim());
+  return { code, notApplicableToTenant };
+}
+
 /** Graph's `error.code` (an identifier, never the message), else null. */
 export async function graphErrorCode(res: Response): Promise<string | null> {
-  const body = (await res.json().catch(() => null)) as { error?: { code?: unknown } } | null;
-  const code = body?.error?.code;
-  return typeof code === 'string' && /^[A-Za-z0-9_.]{1,80}$/.test(code) ? code : null;
+  return (await graphError(res)).code;
 }
 
 /** Only Graph v1.0 URLs are ever requested with the token (including `@odata.nextLink`). */
@@ -118,7 +163,7 @@ async function failure(res: Response, what: string): Promise<never> {
       parseRetryAfter(res.headers.get('Retry-After'), 30_000),
     );
   }
-  const code = await graphErrorCode(res);
+  const { code, notApplicableToTenant } = await graphError(res);
   if (code && P1_CODES.has(code)) {
     throw new GraphAccessError('Not available (needs Entra ID P1).', code);
   }
@@ -126,9 +171,10 @@ async function failure(res: Response, what: string): Promise<never> {
     throw new GraphAccessError(
       `Microsoft denied access to ${what} (HTTP ${res.status}). Run Check setup to see which permission is missing; a Global Administrator then presses Reconnect.`,
       code,
+      res.status,
     );
   }
-  throw new GraphRequestError(`Microsoft Graph request for ${what} failed (HTTP ${res.status}).`, res.status, code);
+  throw new GraphRequestError(`Microsoft Graph request for ${what} failed (HTTP ${res.status}).`, res.status, code, notApplicableToTenant);
 }
 
 function send(ctx: IntegrationContext, url: string, headers: Record<string, string> = {}, redirect: 'error' | 'manual' = 'error') {

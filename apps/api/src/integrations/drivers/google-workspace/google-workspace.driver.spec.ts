@@ -2,6 +2,7 @@ import { driverDescriptorSchema, integrationSectionSchema, type IntegrationSecti
 import {
   DriverAuthError,
   DriverRateLimitError,
+  DriverResourceUnavailableError,
   type FetchRecordsContext,
   type IntegrationContext,
   type LegacyDriverRecord,
@@ -552,6 +553,24 @@ describe('GoogleWorkspaceDriver groups and devices', () => {
   it('domains: no longer an asset resource (they feed Domains monitoring)', async () => {
     installFetchTable(table);
     await expect(only('domains')).rejects.toThrow('Unknown Google Workspace resource: domains');
+  });
+
+  it('skips Chrome and mobile devices when the account lacks the device privilege (HTTP 403)', async () => {
+    installFetchTable({
+      ...table,
+      [`${DIR}/customer/my_customer/devices/chromeos?`]: { status: 403, body: { error: { errors: [{ reason: 'forbidden' }] } } },
+      [`${DIR}/customer/my_customer/devices/mobile?`]: { status: 403, body: { error: { errors: [{ reason: 'forbidden' }] } } },
+    });
+    await expect(only('chrome_devices')).rejects.toBeInstanceOf(DriverResourceUnavailableError);
+    await expect(only('mobile_devices')).rejects.toThrow('so mobile devices are skipped');
+  });
+
+  it('still fails a device listing whose API is disabled (configuration, not data)', async () => {
+    installFetchTable({
+      ...table,
+      [`${DIR}/customer/my_customer/devices/chromeos?`]: { status: 403, body: { error: { errors: [{ reason: 'accessNotConfigured' }] } } },
+    });
+    await expect(only('chrome_devices')).rejects.toBeInstanceOf(DriverAuthError);
   });
 
   it('chrome devices: serial match key, standard facts, and the expiry as an optional date field', async () => {

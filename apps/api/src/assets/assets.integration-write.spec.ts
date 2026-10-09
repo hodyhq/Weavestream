@@ -146,6 +146,7 @@ function setup(options: {
     relation: { updateMany: jest.fn(), deleteMany: jest.fn() },
     integrationSyncRecord: {
       findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
+      findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
       update: jest.fn().mockResolvedValue({}),
     },
@@ -178,7 +179,11 @@ function setup(options: {
   };
   const prisma = {
     assetLayout: { findUnique: jest.fn().mockResolvedValue(selectedLayout) },
-    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
+    integrationSyncRecord: {
+      findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
+      findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     asset: {
       findUnique: jest.fn().mockResolvedValue(options.target ?? null),
       findFirst: jest.fn().mockResolvedValue(null),
@@ -1184,6 +1189,111 @@ describe('AssetsService integration system writes', () => {
       expect(data.externalId).toBe(input.externalId);
     });
 
+    describe('co-binding an asset another integration owns', () => {
+      const coBind = { claimUnboundMatch: true, coBindSources: ['google-workspace', 'level'] };
+      const owned = (overrides: Record<string, unknown> = {}) =>
+        asset({ id: ids.manual, name: 'Owner name', externalSource: 'google-workspace', externalId: 'g-user-1', ...overrides });
+
+      it('binds this record to the single matching asset without taking its identity or name', async () => {
+        const { service, tx } = setup({ match: [owned()] });
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-1', name: 'Other name',
+          matchKeyFieldIds: [ids.field],
+          fieldValues: [{ targetFieldId: ids.field, value: 'edge-02', syncDirection: 'source_wins' }],
+        })).resolves.toMatchObject({ targetId: ids.manual, adopted: true, change: 'updated' });
+        expect(tx.asset.create).not.toHaveBeenCalled();
+        const call = tx.asset.updateMany.mock.calls[0][0];
+        // The owner's identity is pinned, never replaced, and the name is untouched.
+        expect(call.where).toMatchObject({ id: ids.manual, externalSource: 'google-workspace', externalId: 'g-user-1' });
+        expect(call.data).not.toHaveProperty('externalSource');
+        expect(call.data).not.toHaveProperty('name');
+      });
+
+      it('serializes the co-bind check per integration and asset inside the page transaction', async () => {
+        const { service, tx } = setup({ match: [owned()] });
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
+        })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
+        const lock = tx.$queryRaw.mock.calls.find((call) => Array.isArray(call[0]) && String(call[0][0]).includes('pg_advisory_xact_lock'));
+        expect(lock).toBeDefined();
+        expect(lock!.slice(1)).toEqual([`cobind:${ids.integration}:${ids.manual}`]);
+        expect(tx.integrationSyncRecord.findFirst).toHaveBeenCalled();
+      });
+
+      it('refuses to co-bind without a caller transaction to serialize the check', async () => {
+        const { service, tx } = setup({ match: [owned()] });
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
+        })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
+        expect(tx.asset.updateMany).not.toHaveBeenCalled();
+        const locked = tx.$queryRaw.mock.calls.some((call) => Array.isArray(call[0]) && String(call[0][0]).includes('pg_advisory_xact_lock'));
+        expect(locked).toBe(false);
+      });
+
+      it('co-binds a device by serial owned by an RMM', async () => {
+        const rmm = owned({ externalSource: 'level', externalId: 'lvl-1' });
+        const { service, tx } = setup({ match: [rmm] });
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'intune-1', matchKeyFieldIds: [ids.field],
+        })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
+        expect(tx.asset.create).not.toHaveBeenCalled();
+      });
+
+      it('never co-binds an asset this integration already holds under another external id', async () => {
+        const { service, tx } = setup({ match: [owned()] });
+        tx.integrationSyncRecord.findFirst.mockResolvedValue({ id: 'own-binding' });
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-2', matchKeyFieldIds: [ids.field],
+        })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
+        expect(tx.asset.updateMany).not.toHaveBeenCalled();
+        expect(tx.integrationSyncRecord.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+          where: expect.objectContaining({ assetId: ids.manual, companyMapping: { integrationId: ids.integration } }),
+        }));
+      });
+
+      it('never co-binds an asset owned by a driver without standard fields', async () => {
+        const legacy = owned({ externalSource: 'action1', externalId: 'a1-1' });
+        const { service, tx } = setup({ match: [legacy] });
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
+        })).resolves.toMatchObject({ change: 'created' });
+        expect(tx.asset.updateMany).not.toHaveBeenCalled();
+      });
+
+      it('reports two matching owned assets as ambiguous and creates nothing', async () => {
+        const second = owned({ id: '00000000-0000-0000-0000-000000000099', externalId: 'g-user-2' });
+        const { service, tx } = setup({ match: [owned(), second] });
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
+        })).resolves.toMatchObject({ change: 'blocked', gap: { kind: 'ambiguous', details: { reasonCode: 'ambiguous_match' } } });
+        expect(tx.asset.create).not.toHaveBeenCalled();
+      });
+
+      it('co-binds a mixed-case email case-insensitively after no manual asset matched', async () => {
+        const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
+        const google = owned({
+          fieldValues: [{ id: 'fv-1', companyId: ids.company, assetId: ids.manual, assetFieldId: ids.field, value: 'Alice@Example.COM' }],
+        });
+        const { service, prisma, tx } = setup({ layout: { ...layout, fields: [textField] } });
+        for (const client of [prisma, tx]) {
+          client.asset.findMany.mockReset();
+          // exact query, manual index, co-bind index
+          client.asset.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([google]).mockResolvedValue([]);
+          client.asset.findUnique.mockResolvedValue(google);
+        }
+        await expect(service.writeFromIntegration({
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-1', name: 'alice@example.com',
+          matchKeyFieldIds: [ids.field],
+          fieldValues: [{ targetFieldId: ids.field, value: 'alice@example.com', syncDirection: 'preserve_manual' }],
+        })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
+        expect(tx.asset.create).not.toHaveBeenCalled();
+        expect(tx.asset.findMany.mock.calls[2][0].where).toMatchObject({
+          externalSource: { in: ['google-workspace', 'level'] },
+          integrationSyncRecords: { none: { companyMapping: { integrationId: ids.integration } } },
+        });
+      });
+    });
+
     it('reports adoption so the runner can mark the binding', async () => {
       const manual = asset({ id: ids.manual, externalSource: null, externalId: null });
       const { service } = setup({ match: [manual] });
@@ -1453,6 +1563,81 @@ describe('AssetsService standard-field write policy (recordFieldDiffs)', () => {
     recordFieldDiffs: true,
     fieldValues: [{ targetFieldId: ids.field, value, syncDirection: 'preserve_manual' as const }],
     previousFieldChecksums: previous,
+  });
+
+  describe('several integrations on one asset', () => {
+    const other = (driver: string, value: string) => ({
+      lastSyncedFieldChecksums: { [ids.field]: checksum(value) },
+      companyMapping: { integration: { driver } },
+    });
+    const shared = (value: string, order: string[], previous: Record<string, string> = {}) => ({
+      ...standard(value, previous),
+      priority: { driver: 'microsoft-365', order },
+    });
+    const LOWER = ['google-workspace', 'microsoft-365'];
+    const OWNER = ['microsoft-365', 'google-workspace'];
+
+    it('a lower-priority source records a difference instead of overwriting the owner', async () => {
+      const { service, prisma, tx } = setup({ target: withValue('Engineer'), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Engineer')]);
+      await expect(service.writeFromIntegration(shared('Senior Engineer', LOWER)))
+        .resolves.toMatchObject({ fieldDiffs: { [ids.field]: { sourceValue: 'Senior Engineer', localFingerprint: checksum('Engineer') } } });
+      expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+      expect(prisma.integrationSyncRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ assetId: ids.asset, companyMapping: { integrationId: { not: ids.integration } } }),
+      }));
+    });
+
+    it('a lower-priority source fills the field while it is empty', async () => {
+      const { service, prisma, tx } = setup({ target: withValue(undefined), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Engineer')]);
+      await expect(service.writeFromIntegration(shared('Senior Engineer', LOWER)))
+        .resolves.toMatchObject({ fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('Senior Engineer') } });
+      expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+    });
+
+    it('a lower-priority source equal to the current value is no difference', async () => {
+      const { service, prisma } = setup({ target: withValue('Engineer'), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Engineer')]);
+      await expect(service.writeFromIntegration(shared('Engineer', LOWER)))
+        .resolves.toMatchObject({ fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('Engineer') } });
+    });
+
+    it('the owner replaces a value another integration wrote, and the order change applies on the next write', async () => {
+      const { service, prisma, tx } = setup({ target: withValue('Engineer'), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Engineer')]);
+      await expect(service.writeFromIntegration(shared('Senior Engineer', OWNER)))
+        .resolves.toMatchObject({ fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('Senior Engineer') } });
+      expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+    });
+
+    it('the owner keeps a person edit and records the difference on its own binding', async () => {
+      const { service, prisma, tx } = setup({ target: withValue('Typed by hand'), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Engineer')]);
+      await expect(service.writeFromIntegration(shared('Senior Engineer', OWNER, { [ids.field]: checksum('Senior Engineer') })))
+        .resolves.toMatchObject({ fieldDiffs: { [ids.field]: { sourceValue: 'Senior Engineer' } } });
+      expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    });
+
+    it('loads every live binding on the asset so the highest-priority provider is never dropped', async () => {
+      const { service, prisma, tx } = setup({ target: withValue('Engineer'), binding: binding() });
+      // 60 lower-priority bindings, then the owner last: a 50-row cap would omit it.
+      const many = Array.from({ length: 60 }, () => other('level', 'Engineer'));
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([...many, other('google-workspace', 'Engineer')]);
+      await expect(service.writeFromIntegration(shared('Senior Engineer', ['google-workspace', 'microsoft-365', 'level'])))
+        .resolves.toMatchObject({ fieldDiffs: { [ids.field]: { sourceValue: 'Senior Engineer' } } });
+      expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+      expect(prisma.integrationSyncRecord.findMany.mock.calls[0][0]).not.toHaveProperty('take');
+    });
+
+    it('an empty source value never clears what another integration provides', async () => {
+      const { service, prisma, tx } = setup({ target: withValue('Engineer'), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Engineer')]);
+      await expect(service.writeFromIntegration(shared('', OWNER)))
+        .resolves.toMatchObject({ fieldDiffs: {} });
+      expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+      expect(tx.assetFieldValue.deleteMany).not.toHaveBeenCalled();
+    });
   });
 
   it('first sync of a new asset writes every mapped field and records no difference', async () => {

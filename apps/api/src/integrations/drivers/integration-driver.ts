@@ -207,6 +207,20 @@ export class DriverAuthError extends Error {
   }
 }
 
+/**
+ * A whole resource whose source data this tenant cannot provide (a product
+ * not licensed, an optional permission not granted). Thrown from the first
+ * page of `fetchRecords`: the runner skips the resource with a run warning
+ * and leaves its bindings untouched (no reconciliation, no stale sweep).
+ */
+export class DriverResourceUnavailableError extends Error {
+  readonly code = 'DriverResourceUnavailableError' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'DriverResourceUnavailableError';
+  }
+}
+
 export class DriverRateLimitError extends Error {
   readonly code = 'DriverRateLimitError' as const;
   readonly retryAfterMs: number;

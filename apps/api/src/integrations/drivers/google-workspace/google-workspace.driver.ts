@@ -9,6 +9,7 @@ import type {
 import {
   DriverAuthError,
   DriverRateLimitError,
+  DriverResourceUnavailableError,
   type FetchRecordsContext,
   type IntegrationContext,
   type IntegrationDriver,
@@ -261,7 +262,8 @@ export function decodeCursor(cursor: string | null): string | undefined {
 
 /** A Google 401/403: missing privilege, scope, or an API not enabled. */
 export class GoogleAccessError extends DriverAuthError {
-  constructor(message: string) {
+  /** True for a 403 that is not "API disabled": the account lacks a privilege for this data. */
+  constructor(message: string, readonly privilegeDenied = false) {
     super(message);
     this.name = 'GoogleAccessError';
   }
@@ -325,6 +327,7 @@ async function googleGet<T>(ctx: IntegrationContext, url: string): Promise<T> {
   if (res.status === 401 || res.status === 403) {
     throw new GoogleAccessError(
       `Google denied access to the ${api} (HTTP ${res.status}). The connected account needs admin privileges for this data; reconnect with a suitable admin.`,
+      res.status === 403,
     );
   }
   throw new GoogleRequestError(`Google Workspace request to the ${api} failed (HTTP ${res.status}).`, res.status);
@@ -334,6 +337,24 @@ export function withQuery(base: string, params: Record<string, string | undefine
   const url = new URL(base);
   for (const [key, value] of Object.entries(params)) if (value !== undefined) url.searchParams.set(key, value);
   return url.toString();
+}
+
+/**
+ * First page of a device listing: an account without the device privilege
+ * (HTTP 403) makes the whole resource unavailable, so it is skipped with a
+ * run warning instead of failing the run.
+ */
+async function deviceListing<T>(ctx: IntegrationContext, url: string, firstPage: boolean, label: string): Promise<T> {
+  try {
+    return await googleGet<T>(ctx, url);
+  } catch (e) {
+    if (firstPage && e instanceof GoogleAccessError && e.privilegeDenied) {
+      throw new DriverResourceUnavailableError(
+        `The connected Google account cannot read ${label} (needs the device management admin privilege), so ${label} are skipped.`,
+      );
+    }
+    throw e;
+  }
 }
 
 /** Every page of a pageToken listing. */
@@ -765,9 +786,11 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
         return { records, nextPageToken: body.nextPageToken };
       }
       case 'chrome_devices': {
-        const body = await googleGet<{ chromeosdevices?: ChromeDevice[]; nextPageToken?: string }>(
+        const body = await deviceListing<{ chromeosdevices?: ChromeDevice[]; nextPageToken?: string }>(
           ctx,
           withQuery(`${DIRECTORY}/customer/my_customer/devices/chromeos`, { projection: 'FULL', maxResults: '200', pageToken }),
+          pageToken === undefined,
+          'Chrome devices',
         );
         const records = (body.chromeosdevices ?? [])
           .filter((d) => d.deviceId)
@@ -782,9 +805,11 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
         return { records, nextPageToken: body.nextPageToken };
       }
       case 'mobile_devices': {
-        const body = await googleGet<{ mobiledevices?: MobileDevice[]; nextPageToken?: string }>(
+        const body = await deviceListing<{ mobiledevices?: MobileDevice[]; nextPageToken?: string }>(
           ctx,
           withQuery(`${DIRECTORY}/customer/my_customer/devices/mobile`, { projection: 'FULL', maxResults: '100', pageToken }),
+          pageToken === undefined,
+          'mobile devices',
         );
         const records = (body.mobiledevices ?? [])
           .filter((d) => d.resourceId)

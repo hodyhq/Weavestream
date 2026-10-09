@@ -17,6 +17,7 @@ import {
   canReadReportSettings,
   getOrganization,
   graphGet,
+  intuneUnavailableMessage,
   readReportConcealment,
 } from './microsoft-365.graph.js';
 import { MICROSOFT_SETUP_STEP as S } from './microsoft-365.setup-guide.js';
@@ -44,6 +45,10 @@ const RATE_LIMITED: Failure = {
 function result(passed: string[], failures: Failure[], notes: Note[] = []): IntegrationSetupCheck {
   return { ok: failures.length === 0, passedStepIds: passed, failures, ...(notes.length > 0 ? { notes } : {}) };
 }
+
+/** An Intune read failure that is not an identified licence or permission signal. */
+export const INTUNE_UNREADABLE_NOTE =
+  'Intune devices could not be read right now, so a sync may fail on computers and mobile devices. Try Check setup again later.';
 
 export const SECRET_UNVERIFIED_NOTE =
   'Save your Directory (tenant) ID on the Microsoft app card to let Check setup verify the client secret.';
@@ -167,7 +172,7 @@ export async function diagnoseMicrosoftConnection(ctx: IntegrationContext): Prom
 
   const devices = await probe(() => graphGet(ctx, `${GRAPH}/deviceManagement/managedDevices?$select=id&$top=1`, 'Intune devices'));
   if (!devices.ok) {
-    notes.push({ stepId: S.layouts, message: 'Intune devices are not available (needs Microsoft Intune and DeviceManagementManagedDevices.Read.All); Computers and Mobile devices sync nothing.' });
+    notes.push({ stepId: S.layouts, message: intuneUnavailableMessage(devices.error, roles) ?? INTUNE_UNREADABLE_NOTE });
   }
 
   const readable = roles === null || canReadReportSettings(roles);

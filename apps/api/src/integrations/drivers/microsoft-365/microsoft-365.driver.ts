@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { z } from 'zod';
 import type {
   DriverDescriptor,
@@ -8,6 +9,7 @@ import type {
 } from '@weavestream/shared';
 import {
   DriverAuthError,
+  DriverResourceUnavailableError,
   type DriverDiagnoseInput,
   type FetchRecordsContext,
   type IntegrationContext,
@@ -34,6 +36,7 @@ import {
   graphGet,
   graphListAll,
   graphReportCsv,
+  intuneUnavailableMessage,
   type GraphPage,
   type MicrosoftOrganization,
 } from './microsoft-365.graph.js';
@@ -87,6 +90,8 @@ interface ResourceSpec {
   layout: RecommendedDestination['layout'];
   standardFields?: DriverStandardField[];
 }
+
+const logger = new Logger('Microsoft365Driver');
 
 const MODEL: DriverStandardField = { sourceField: 'model', label: 'Model', fieldType: 'TEXT', fieldHints: ['model'] };
 const MANUFACTURER: DriverStandardField = { sourceField: 'manufacturer', label: 'Manufacturer', fieldType: 'TEXT', fieldHints: ['manufacturer', 'make', 'vendor', 'brand'] };
@@ -527,7 +532,6 @@ export class Microsoft365Driver implements IntegrationDriver {
       hasMore: next !== null,
       cursor: next,
       snapshotAt,
-      ...(page.blocked ? { blockedInputs: [{ kind: 'validation' as const, externalId: null, message: page.blocked }] } : {}),
     };
   }
 
@@ -537,7 +541,7 @@ export class Microsoft365Driver implements IntegrationDriver {
     org: MicrosoftOrganization & { id: string },
     snapshotAt: string,
     nextLink: string | undefined,
-  ): Promise<{ records: LegacyDriverRecord[]; nextLink?: string; blocked?: string }> {
+  ): Promise<{ records: LegacyDriverRecord[]; nextLink?: string }> {
     const nowMs = Date.parse(snapshotAt);
     const cached = <T>(name: string, load: () => Promise<T>) => runCached(ctx, snapshotAt, name, load);
     const skus = () => cached('skus', () => optional(() => getSkus(ctx), 'Licence data is not available.'));
@@ -654,11 +658,13 @@ export class Microsoft365Driver implements IntegrationDriver {
         try {
           body = await graphGet<GraphPage<ManagedDevice>>(ctx, url, 'Intune devices');
         } catch (e) {
-          // No Intune licence (403, or 400 "not applicable to target tenant"):
-          // nothing to sync, with a run note, never a paused integration.
-          const intuneMissing = e instanceof GraphAccessError || (e instanceof GraphRequestError && e.status === 400);
-          if (!nextLink && intuneMissing) {
-            return { records: [], blocked: 'Intune devices are not available (needs Microsoft Intune and DeviceManagementManagedDevices.Read.All).' };
+          // An identified missing Intune licence or permission skips the
+          // resource with a run warning; any other Graph error fails the run.
+          const unavailable = nextLink ? null : intuneUnavailableMessage(e, requireAdminConsent(ctx).grantedRoles);
+          if (unavailable) throw new DriverResourceUnavailableError(unavailable);
+          if (e instanceof GraphRequestError || e instanceof GraphAccessError) {
+            const code = e instanceof GraphRequestError ? e.code : e.graphCode;
+            logger.warn(`Intune devices read failed: HTTP ${e.status ?? 'unknown'}, Graph code ${code ?? 'none'}`);
           }
           throw e;
         }

@@ -120,6 +120,21 @@ export interface IntegrationAssetWriteInput {
    * of once per record. Absent: a throwaway index per call.
    */
   matchFirstIndexes?: MatchFirstIndexCache;
+  /**
+   * Co-binding (runner-controlled, with `claimUnboundMatch`): asset
+   * external sources (driver keys) whose assets this record may share.
+   * When no manual asset matches, one asset carrying one of these sources
+   * and no binding of this integration is bound instead of creating a
+   * duplicate; its identity and name stay with the integration that owns it.
+   */
+  coBindSources?: readonly string[];
+  /**
+   * Integration priority (driver keys, highest first) and this
+   * integration's driver. With several integrations bound to one asset,
+   * the highest-priority one that provides a value owns a standard field;
+   * a lower one only fills it when empty and otherwise reports a difference.
+   */
+  priority?: { driver: string; order: readonly string[] };
   fieldValues: Array<{
     targetFieldId: string;
     value: unknown;
@@ -151,6 +166,31 @@ export type MatchFirstIndexCache = Map<string, Map<string, string[]> | 'overflow
 
 /** Most unbound manual assets one match-first index may hold. */
 const MATCH_FIRST_INDEX_CAP = 5_000;
+
+/** Checksums of the values that mean "no value" (never a provided value). */
+const EMPTY_FIELD_CHECKSUMS = new Set([null, '', []].map((value) => assetFieldChecksum(value)));
+
+function isEmptyFieldValue(value: unknown): boolean {
+  return EMPTY_FIELD_CHECKSUMS.has(assetFieldChecksum(value));
+}
+
+/** Another integration's binding on the same asset, as the write policy sees it. */
+interface CoBinding {
+  /** Index in the priority order (lower wins); unknown drivers rank last. */
+  rank: number;
+  /** AssetField.id -> checksum of the value that integration last wrote. */
+  checksums: Record<string, string>;
+}
+
+function priorityRank(priority: IntegrationAssetWriteInput['priority'], driver: string): number {
+  const order = priority?.order ?? [];
+  const index = order.indexOf(driver);
+  return index === -1 ? order.length : index;
+}
+
+function providesValue(checksum: string | undefined): boolean {
+  return checksum !== undefined && !EMPTY_FIELD_CHECKSUMS.has(checksum);
+}
 
 function foldMatchValue(value: string): string {
   return value.trim().toLowerCase();
@@ -958,6 +998,7 @@ export class AssetsService {
     }
     const target = resolution.target;
     const claimed = resolution.claimed === true;
+    const coBound = resolution.coBound === true;
     if (input.existingTargetId && !target) {
       return integrationAssetBlocked(
         input.companyId,
@@ -990,33 +1031,77 @@ export class AssetsService {
     // field newly mapped onto it has no baseline of its own, but the value
     // it holds was put there by a person, not by this integration.
     const establishedBinding = input.recordFieldDiffs === true && !!input.existingTargetId;
+    // Other integrations bound to the same asset (standard-field resources
+    // only): the priority order decides who owns each field.
+    const others = input.recordFieldDiffs === true && target
+      ? await this.coBindings(input, target.id, readClient)
+      : [];
+    const ownRank = priorityRank(input.priority, input.priority?.driver ?? '');
     for (const [fieldId, entry] of directionByFieldId) {
       const field = fieldById.get(fieldId)!;
       const stored = existingValues[field.slug];
       const storedChecksum = assetFieldChecksum(stored);
       if (entry.syncDirection === 'manual_only') continue;
       const previousChecksum = input.previousFieldChecksums[fieldId];
+      const sourceValue = normalized[field.slug];
+      const sourceFingerprint = assetFieldChecksum(sourceValue);
+      const storedEmpty = stored === null || stored === undefined;
+      // The recorded baseline stays the last integration-authored
+      // checksum. Recording the manual value's checksum instead would
+      // adopt the operator edit as "last synced", so the next run to
+      // reach this path would see no edit and overwrite it:
+      // preserve_manual retains the operator value until the operator
+      // reverts the field to the last synced value themselves.
+      const keepBaseline = (): void => {
+        if (previousChecksum !== undefined) fieldChecksums[fieldId] = previousChecksum;
+      };
+      const reportDifference = (): void => {
+        if (!input.recordFieldDiffs) return;
+        // The asset already holds the source value: nothing differs, and
+        // the field follows the source again from here on.
+        if (sourceFingerprint === storedChecksum) fieldChecksums[fieldId] = storedChecksum;
+        else fieldDiffs[fieldId] = { sourceValue, sourceFingerprint, localFingerprint: storedChecksum };
+      };
+      if (others.length > 0) {
+        const providers = others.filter((other) => providesValue(other.checksums[fieldId]));
+        // An empty source value never clears what another integration put there.
+        if (providers.length > 0 && isEmptyFieldValue(sourceValue)) {
+          keepBaseline();
+          continue;
+        }
+        // A higher-priority integration provides this field: this one only
+        // fills it while empty, and otherwise records a difference.
+        if (!storedEmpty && providers.some((other) => other.rank < ownRank)) {
+          keepBaseline();
+          reportDifference();
+          continue;
+        }
+        // Owner. A value another bound integration wrote while this one had
+        // none is integration-authored and is replaced; anything else this
+        // integration did not write is a person's edit (preserve_manual).
+        const ownBaseline = providesValue(previousChecksum) ? previousChecksum : undefined;
+        const writtenByOther = others.some((other) => other.checksums[fieldId] === storedChecksum);
+        if (
+          entry.syncDirection === 'preserve_manual' &&
+          !storedEmpty &&
+          (ownBaseline !== undefined ? ownBaseline !== storedChecksum : !writtenByOther)
+        ) {
+          keepBaseline();
+          reportDifference();
+          continue;
+        }
+        valuesToWrite[field.slug] = sourceValue;
+        fieldChecksums[fieldId] = sourceFingerprint;
+        continue;
+      }
       if (
         entry.syncDirection === 'preserve_manual' &&
         stored !== null &&
         stored !== undefined &&
         (previousChecksum !== undefined ? previousChecksum !== storedChecksum : establishedBinding)
       ) {
-        // The recorded baseline stays the last integration-authored
-        // checksum. Recording the manual value's checksum instead would
-        // adopt the operator edit as "last synced", so the next run to
-        // reach this path would see no edit and overwrite it —
-        // preserve_manual retains the operator value until the operator
-        // reverts the field to the last synced value themselves.
-        if (previousChecksum !== undefined) fieldChecksums[fieldId] = previousChecksum;
-        if (input.recordFieldDiffs) {
-          const sourceValue = normalized[field.slug];
-          const sourceFingerprint = assetFieldChecksum(sourceValue);
-          // The person's value already equals the source: nothing differs,
-          // and the field follows the source again from here on.
-          if (sourceFingerprint === storedChecksum) fieldChecksums[fieldId] = storedChecksum;
-          else fieldDiffs[fieldId] = { sourceValue, sourceFingerprint, localFingerprint: storedChecksum };
-        }
+        keepBaseline();
+        reportDifference();
         continue;
       }
       const value = normalized[field.slug];
@@ -1032,9 +1117,10 @@ export class AssetsService {
     );
 
     const legacyExternalSource = legacyIntegrationExternalSource(input);
+    // A co-bound asset keeps the identity of the integration that owns it.
     const sameIdentity =
       !target ||
-      target.externalSource === null ||
+      (!coBound && target.externalSource === null) ||
       (target.externalId === input.externalId &&
         (target.externalSource === (input.externalSource ?? null) ||
           target.externalSource === legacyExternalSource));
@@ -1218,7 +1304,9 @@ export class AssetsService {
                 // Match-first adoption is an atomic claim: it only lands while
                 // the asset still has no external identity, so two mappings or
                 // resources racing for the same manual asset cannot both adopt it.
-                ...(claimed ? { externalSource: null, externalId: null } : {}),
+                // A co-bind pins the owner's identity instead.
+                ...(claimed && !coBound ? { externalSource: null, externalId: null } : {}),
+                ...(coBound ? { externalSource: target!.externalSource, externalId: target!.externalId } : {}),
               },
               data: {
                 ...(restored ? { archivedAt: null } : {}),
@@ -1244,7 +1332,7 @@ export class AssetsService {
             throw error;
           }
           if (guarded.count === 0) {
-            if (claimed) {
+            if (claimed && !coBound) {
               const now = await tx.asset.findUnique({
                 where: { id: target!.id },
                 select: { externalSource: true, externalId: true },
@@ -2002,6 +2090,8 @@ export class AssetsService {
     ambiguous: boolean;
     /** Match-first adoption of an unbound, identity-free asset. */
     claimed?: boolean;
+    /** Match-first co-binding of an asset another integration owns (with `claimed`). */
+    coBound?: boolean;
     /** The match-first index source exceeded its cap: nothing adopted. */
     overflow?: boolean;
   }> {
@@ -2090,6 +2180,12 @@ export class AssetsService {
     if (input.claimUnboundMatch === true && only && only.externalSource === null && only.externalId === null) {
       return { target: only, ambiguous: false, claimed: true };
     }
+    // Co-binding: the single match belongs to another integration that
+    // fills standard fields (the same person or device seen twice). Its
+    // binding stays; this integration's record joins it.
+    if (input.claimUnboundMatch === true && only && candidates.length === 1 && (await this.isCoBindable(input, only, client))) {
+      return { target: only, ambiguous: false, claimed: true, coBound: true };
+    }
     if (input.claimUnboundMatch === true && candidates.length === 0) {
       return this.findCaseInsensitiveUnboundMatch(input, layout, values, client);
     }
@@ -2108,8 +2204,8 @@ export class AssetsService {
     input: IntegrationAssetWriteInput,
     layout: LayoutWithFields,
     values: Record<string, unknown>,
-    client: Pick<Prisma.TransactionClient, 'asset'> | PrismaService,
-  ): Promise<{ target: (Asset & { fieldValues: AssetFieldValue[] }) | null; ambiguous: boolean; claimed?: boolean; overflow?: boolean }> {
+    client: Pick<Prisma.TransactionClient, 'asset' | 'integrationSyncRecord'> | PrismaService,
+  ): Promise<{ target: (Asset & { fieldValues: AssetFieldValue[] }) | null; ambiguous: boolean; claimed?: boolean; coBound?: boolean; overflow?: boolean }> {
     const wanted: string[] = [];
     for (const fieldId of input.matchKeyFieldIds) {
       const field = layout.fields.find((candidate) => candidate.id === fieldId);
@@ -2119,45 +2215,125 @@ export class AssetsService {
       if (typeof value !== 'string') return { target: null, ambiguous: false };
       wanted.push(foldMatchValue(value));
     }
-    const cache = input.matchFirstIndexes ?? new Map();
-    const cacheKey = [input.companyId, input.assetLayoutId, input.integrationCompanyMappingId, input.resourceId, ...input.matchKeyFieldIds].join('|');
-    let index = cache.get(cacheKey);
-    if (index === undefined) {
-      index = await this.buildMatchFirstIndex(input, client);
-      cache.set(cacheKey, index);
-    }
+    const lookup = async (mode: 'manual' | 'cobind'): Promise<string[] | 'overflow'> => {
+      const cache = input.matchFirstIndexes ?? new Map();
+      const cacheKey = [mode, input.companyId, input.assetLayoutId, input.integrationCompanyMappingId, input.resourceId, ...input.matchKeyFieldIds].join('|');
+      let index = cache.get(cacheKey);
+      if (index === undefined) {
+        index = await this.buildMatchFirstIndex(input, client, mode);
+        cache.set(cacheKey, index);
+      }
+      return index === 'overflow' ? 'overflow' : index.get(JSON.stringify(wanted)) ?? [];
+    };
     // The index source exceeded its cap: it can prove neither uniqueness
     // nor absence, so report instead of adopting the wrong asset or
     // creating a duplicate.
-    if (index === 'overflow') return { target: null, ambiguous: false, overflow: true };
-    const ids = index.get(JSON.stringify(wanted)) ?? [];
+    const ids = await lookup('manual');
+    if (ids === 'overflow') return { target: null, ambiguous: false, overflow: true };
     if (ids.length > 1) return { target: null, ambiguous: true };
-    if (ids.length !== 1) return { target: null, ambiguous: false };
-    // Re-read with every field value, and re-check ownership: an earlier
-    // record of this run may already have adopted the asset.
-    const target = await client.asset.findUnique({ where: { id: ids[0]! }, include: { fieldValues: true } });
-    return target && target.archivedAt === null && target.externalSource === null && target.externalId === null
-      ? { target, ambiguous: false, claimed: true }
+    if (ids.length === 1) {
+      // Re-read with every field value, and re-check ownership: an earlier
+      // record of this run may already have adopted the asset.
+      const target = await client.asset.findUnique({ where: { id: ids[0]! }, include: { fieldValues: true } });
+      return target && target.archivedAt === null && target.externalSource === null && target.externalId === null
+        ? { target, ambiguous: false, claimed: true }
+        : { target: null, ambiguous: false };
+    }
+    if ((input.coBindSources?.length ?? 0) === 0) return { target: null, ambiguous: false };
+    const shared = await lookup('cobind');
+    if (shared === 'overflow') return { target: null, ambiguous: false, overflow: true };
+    if (shared.length > 1) return { target: null, ambiguous: true };
+    if (shared.length !== 1) return { target: null, ambiguous: false };
+    // Re-check: an earlier record of this run may already have co-bound it.
+    const target = await client.asset.findUnique({ where: { id: shared[0]! }, include: { fieldValues: true } });
+    return target && (await this.isCoBindable(input, target, client))
+      ? { target, ambiguous: false, claimed: true, coBound: true }
       : { target: null, ambiguous: false };
+  }
+
+  /**
+   * Co-binding guard: a live asset in this company and layout, owned by an
+   * integration that fills standard fields (its external source is one of
+   * `coBindSources`), with no binding of this integration (an asset this
+   * integration already holds under another external id is never shared).
+   */
+  private async isCoBindable(
+    input: IntegrationAssetWriteInput,
+    target: Asset,
+    client: Pick<Prisma.TransactionClient, 'integrationSyncRecord'> | PrismaService,
+  ): Promise<boolean> {
+    if (
+      target.archivedAt !== null ||
+      target.companyId !== input.companyId ||
+      target.assetLayoutId !== input.assetLayoutId ||
+      target.externalSource === null ||
+      !(input.coBindSources ?? []).includes(target.externalSource)
+    ) return false;
+    // Two mappings of one integration can sync the same company at once:
+    // serialize the check with the binding write (same page transaction)
+    // per integration and asset, so only one record co-binds it. Without
+    // that transaction the check cannot be serialized: refuse to co-bind.
+    if (!input.tx) return false;
+    await input.tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`cobind:${input.integrationId}:${target.id}`}, 0))`;
+    const own = await client.integrationSyncRecord.findFirst({
+      where: { companyId: input.companyId, assetId: target.id, companyMapping: { integrationId: input.integrationId } },
+      select: { id: true },
+    });
+    return own === null;
+  }
+
+  /** Bindings of OTHER integrations on the asset (live ones only), ranked. */
+  private async coBindings(
+    input: IntegrationAssetWriteInput,
+    targetId: string,
+    client: Pick<Prisma.TransactionClient, 'integrationSyncRecord'> | PrismaService,
+  ): Promise<CoBinding[]> {
+    const rows = await client.integrationSyncRecord.findMany({
+      where: {
+        companyId: input.companyId,
+        assetId: targetId,
+        targetKind: 'asset',
+        state: { in: ['active', 'blocked'] },
+        companyMapping: { integrationId: { not: input.integrationId } },
+      },
+      select: {
+        lastSyncedFieldChecksums: true,
+        companyMapping: { select: { integration: { select: { driver: true } } } },
+      },
+      // No cap: a cap could drop the highest-priority provider. The set is
+      // bounded by the integrations bound to this one asset.
+    });
+    return rows.map((row) => ({
+      rank: priorityRank(input.priority, row.companyMapping.integration.driver),
+      checksums: (row.lastSyncedFieldChecksums ?? {}) as Record<string, string>,
+    }));
   }
 
   private async buildMatchFirstIndex(
     input: IntegrationAssetWriteInput,
     client: Pick<Prisma.TransactionClient, 'asset'> | PrismaService,
+    mode: 'manual' | 'cobind' = 'manual',
   ): Promise<Map<string, string[]> | 'overflow'> {
     const unbound = await client.asset.findMany({
       where: {
         companyId: input.companyId,
         assetLayoutId: input.assetLayoutId,
         archivedAt: null,
-        externalSource: null,
-        externalId: null,
-        integrationSyncRecords: {
-          none: {
-            integrationCompanyMappingId: input.integrationCompanyMappingId,
-            resourceId: input.resourceId,
-          },
-        },
+        ...(mode === 'manual'
+          ? {
+              externalSource: null,
+              externalId: null,
+              integrationSyncRecords: {
+                none: {
+                  integrationCompanyMappingId: input.integrationCompanyMappingId,
+                  resourceId: input.resourceId,
+                },
+              },
+            }
+          : {
+              externalSource: { in: [...(input.coBindSources ?? [])] },
+              integrationSyncRecords: { none: { companyMapping: { integrationId: input.integrationId } } },
+            }),
       },
       select: {
         id: true,
