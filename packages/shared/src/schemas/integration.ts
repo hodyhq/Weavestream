@@ -369,6 +369,18 @@ export const MICROSOFT_REPORT_SETTING = {
   graph: 'PATCH https://graph.microsoft.com/v1.0/admin/reportSettings (displayConcealedNames)',
 } as const;
 
+/**
+ * The same change by hand, for a tenant that did not grant the optional
+ * ReportSettings.ReadWrite.All (learn.microsoft.com, "reports show
+ * anonymous user names").
+ */
+export const MICROSOFT_REPORT_SETTING_MANUAL_STEPS: readonly string[] = [
+  'Sign in to the Microsoft 365 admin center (admin.microsoft.com) as a Global Administrator of this tenant.',
+  'Go to Settings > Org settings, and on the Services tab select Reports.',
+  `To show real names, clear "${MICROSOFT_REPORT_SETTING.label}". To hide them again, select it.`,
+  'Select Save. Microsoft applies the change within a few minutes; the next sync uses it.',
+];
+
 /** Report-names state of one Microsoft 365 integration (never carries tokens). */
 export const microsoftReportNamesSchema = z.object({
   /** True: the tenant conceals names. Null: Weavestream could not read it. */
@@ -377,6 +389,12 @@ export const microsoftReportNamesSchema = z.object({
   choice: z.enum(['shown', 'hidden']).nullable(),
   /** Fixed text when the setting could not be read, else null. */
   readError: z.string().nullable(),
+  /**
+   * True when the tenant granted the optional ReportSettings.ReadWrite.All,
+   * so Weavestream can change the setting; false: the page shows the manual
+   * steps instead of the buttons.
+   */
+  canChange: z.boolean(),
   /** Fixed result text after an action, else absent. */
   message: z.string().optional(),
 });

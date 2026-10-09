@@ -12,16 +12,16 @@ import {
   encodeCursor,
   listMicrosoftDomains,
 } from './microsoft-365.driver.js';
-import { MICROSOFT_PERMISSIONS } from './microsoft-365.graph.js';
+import { MICROSOFT_PERMISSIONS, MICROSOFT_REQUIRED_PERMISSIONS, graphReportCsv } from './microsoft-365.graph.js';
 import { writeReportConcealment } from './microsoft-365.report-settings.js';
 import { CONCEALED_NOTE } from './microsoft-365.sections.js';
-import { diagnoseMicrosoftClient, diagnoseMicrosoftConnection } from './microsoft-365.diagnose.js';
+import { OPTIONAL_WRITE_NOTE, diagnoseMicrosoftClient, diagnoseMicrosoftConnection } from './microsoft-365.diagnose.js';
 
 const G = 'https://graph.microsoft.com/v1.0';
 const TENANT = '11111111-2222-4333-8444-555555555555';
 const OTHER_TENANT = '99999999-2222-4333-8444-555555555555';
 const TOKEN_URL = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`;
-const CSV_HOST = 'https://reports.example.net';
+const CSV_HOST = 'https://reportsncu.office.com';
 const SNAPSHOT = '2026-10-08T12:00:00.000Z';
 const U1 = 'aaaaaaaa-0000-4000-8000-000000000001';
 const U2 = 'aaaaaaaa-0000-4000-8000-000000000002';
@@ -136,6 +136,7 @@ function baseTable(overrides: Record<string, Entry> = {}): Record<string, Entry>
       body: { value: [
         { skuId: SKU_BP, skuPartNumber: 'SPB', capabilityStatus: 'Enabled', consumedUnits: 3, prepaidUnits: { enabled: 5 } },
         { skuId: 'x', skuPartNumber: 'CONTOSO_CUSTOM_SKU', capabilityStatus: 'Suspended', consumedUnits: 1, prepaidUnits: { enabled: 0 } },
+        { skuId: 'y', skuPartNumber: 'WIN_DEF_ATP', capabilityStatus: 'Enabled', consumedUnits: 3, prepaidUnits: { enabled: 2, warning: 1 } },
       ] },
     },
     [`${G}/reports/authenticationMethods/userRegistrationDetails`]: {
@@ -264,7 +265,7 @@ describe('Microsoft365Driver descriptor', () => {
     });
     expect([...MICROSOFT_PERMISSIONS].sort()).toEqual([
       'AuditLog.Read.All', 'DeviceManagementManagedDevices.Read.All', 'Domain.Read.All', 'GroupMember.Read.All',
-      'LicenseAssignment.Read.All', 'MailboxSettings.Read', 'Organization.Read.All', 'ReportSettings.ReadWrite.All',
+      'LicenseAssignment.Read.All', 'MailboxSettings.Read', 'Organization.Read.All', 'ReportSettings.Read.All', 'ReportSettings.ReadWrite.All',
       'Reports.Read.All', 'RoleManagement.Read.Directory', 'SecurityAlert.Read.All', 'SecurityEvents.Read.All', 'User.Read.All',
     ]);
     expect(driver.descriptor.resources.map((r) => r.key)).toEqual(['tenant', 'users', 'groups', 'computers', 'mobile_devices']);
@@ -312,6 +313,14 @@ describe('Microsoft365Driver users', () => {
     expect(report.headers.authorization).toMatch(/^Bearer /);
     const download = calls.find((c) => c.url.startsWith(CSV_HOST))!;
     expect(download.headers.authorization).toBeUndefined();
+  });
+
+  it('refuses a report redirect to a host outside Microsoft', async () => {
+    const calls = installFetchTable(baseTable({
+      [`${G}/reports/getMailboxUsageDetail`]: { status: 302, headers: { location: 'https://reports.example.net/mailbox.csv' } },
+    }));
+    await expect(graphReportCsv(makeCtx(), "getMailboxUsageDetail(period='D7')", 'the mailbox usage report')).rejects.toThrow(/unsafe download link/);
+    expect(calls.some((c) => c.url.startsWith('https://reports.example.net'))).toBe(false);
   });
 
   it('detects shared mailboxes with $batch (20 per request, GET only) and flags their licence as wasted', async () => {
@@ -419,6 +428,8 @@ describe('Microsoft365Driver tenant', () => {
     expect(rowOf(rec, 'overview', 'Members')).toMatchObject({ value: 12 });
     expect(rowOf(rec, 'overview', 'Guests')).toMatchObject({ value: 4 });
     expect(rowOf(rec, 'licences', 'Microsoft 365 Business Premium')).toEqual({ kind: 'meter', label: 'Microsoft 365 Business Premium', used: 3, total: 5, unit: 'count' });
+    // Grace-period (warning) units count as purchased, so the meter never runs past full.
+    expect(rowOf(rec, 'licences', 'Microsoft Defender for Endpoint P2')).toEqual({ kind: 'meter', label: 'Microsoft Defender for Endpoint P2', used: 3, total: 3, unit: 'count' });
     // Unknown part number falls back to itself.
     expect(rowOf(rec, 'licences', 'CONTOSO_CUSTOM_SKU')).toMatchObject({ kind: 'text', value: 'Suspended, 1 assigned' });
     expect(rowOf(rec, 'subscriptions', 'Microsoft 365 Business Premium')).toMatchObject({ value: 'Enabled, 5 licences, next lifecycle date 2027-01-31' });
@@ -555,6 +566,19 @@ describe('Check setup', () => {
     expect(failure.message).toMatch(/^Not granted in this tenant: .*AuditLog\.Read\.All/);
     expect(failure.message).toContain('Reconnect');
     expect(failure.message).not.toContain('User.Read.All,');
+  });
+
+  it('passes a tenant that granted no optional report-settings permission, without reading the setting', async () => {
+    const calls = installFetchTable(baseTable({
+      [TOKEN_URL]: { body: { access_token: jwt({ tid: TENANT, roles: MICROSOFT_REQUIRED_PERMISSIONS }), expires_in: 3600 } },
+    }));
+    const result = await diagnoseMicrosoftConnection(makeCtx());
+    expect(result.failures).toEqual([]);
+    expect(result.passedStepIds).toContain('permissions');
+    const notes = (result.notes ?? []).map((n) => n.message).join(' | ');
+    expect(notes).toContain(OPTIONAL_WRITE_NOTE);
+    expect(notes).toContain('optional ReportSettings.Read.All not granted');
+    expect(calls.some((c) => c.url.startsWith(`${G}/admin/reportSettings`))).toBe(false);
   });
 
   it('notes P1, Intune and concealed names without failing a fully granted tenant', async () => {

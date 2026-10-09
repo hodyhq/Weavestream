@@ -1,9 +1,9 @@
-import { BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { MICROSOFT_REPORT_SETTING } from '@weavestream/shared';
 import { setDefaultFetchForTests, setDefaultResolveForTests } from '../../common/egress/safe-fetch.js';
 import { integrationSecretAad } from '../../crypto/integration-secret-encryption.service.js';
 import { __resetOAuthAccessTokenCacheForTests } from '../oauth/oauth-token.js';
-import { MicrosoftReportNamesService } from './microsoft-report-names.service.js';
+import { MicrosoftReportNamesService, REPORT_NAMES_NOT_CHANGEABLE, REPORT_NAMES_NOT_READABLE } from './microsoft-report-names.service.js';
 
 const ID = '00000000-0000-4000-8000-000000000091';
 const TENANT = '11111111-2222-4333-8444-555555555555';
@@ -40,8 +40,8 @@ function graph(initial: boolean | 'forbidden', patchStatus = 204) {
   return { calls, state: () => concealed };
 }
 
-function setup(choice?: 'shown' | 'hidden') {
-  let secret: Record<string, unknown> = { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z', ...(choice ? { reportNames: choice } : {}) };
+function setup(choice?: 'shown' | 'hidden', grantedRoles: string[] = ['ReportSettings.ReadWrite.All']) {
+  let secret: Record<string, unknown> = { tenantId: TENANT, grantedRoles, consentedAt: '2026-10-01T00:00:00.000Z', ...(choice ? { reportNames: choice } : {}) };
   const integrations = {
     loadDriverContext: jest.fn(async () => ({
       integrationId: ID,
@@ -54,6 +54,7 @@ function setup(choice?: 'shown' | 'hidden') {
   };
   const prisma = {
     integrationSecret: {
+      findUnique: jest.fn(async () => ({ ciphertext: crypto.encrypt(JSON.stringify(secret), integrationSecretAad(ID)) })),
       update: jest.fn(async ({ data }: { data: { ciphertext: string } }) => {
         secret = JSON.parse(crypto.decrypt(data.ciphertext, integrationSecretAad(ID)));
         return {};
@@ -63,7 +64,7 @@ function setup(choice?: 'shown' | 'hidden') {
   const audit = { log: jest.fn(async () => undefined) };
   const env = { values: { INTEGRATION_HTTP_TIMEOUT_MS: 5_000, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } };
   const service = new MicrosoftReportNamesService(prisma as never, integrations as never, crypto as never, audit as never, env as never);
-  return { service, audit, secret: () => secret };
+  return { service, audit, prisma, secret: () => secret, setSecret: (v: Record<string, unknown>) => { secret = v; } };
 }
 
 beforeEach(() => {
@@ -84,7 +85,7 @@ describe('MicrosoftReportNamesService', () => {
 
   it('reads the current tenant value before asking (GET only)', async () => {
     const { calls } = graph(true);
-    await expect(setup().service.status(ID)).resolves.toEqual({ concealed: true, choice: null, readError: null });
+    await expect(setup().service.status(ID)).resolves.toEqual({ concealed: true, choice: null, readError: null, canChange: true });
     expect(calls.map((c) => c.method)).toEqual(['GET']);
   });
 
@@ -176,5 +177,40 @@ describe('MicrosoftReportNamesService', () => {
     const { calls } = graph('forbidden');
     await expect(setup().service.apply(ACTOR, ID, { action: 'show' }, META)).rejects.toBeInstanceOf(BadRequestException);
     expect(calls.map((c) => c.method)).toEqual(['GET']);
+  });
+
+  it('without the optional write permission: shows the value, cannot change, never PATCHes, audits the refusal', async () => {
+    const { calls, state } = graph(true);
+    const { service, audit, secret } = setup(undefined, ['ReportSettings.Read.All']);
+    await expect(service.status(ID)).resolves.toEqual({ concealed: true, choice: null, readError: null, canChange: false });
+    await expect(service.apply(ACTOR, ID, { action: 'show' }, META)).rejects.toThrow(REPORT_NAMES_NOT_CHANGEABLE);
+    expect(calls.map((c) => c.method)).toEqual(['GET', 'GET']);
+    expect(state()).toBe(true);
+    expect(secret().reportNames).toBeUndefined();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.microsoft.report_names.failed',
+      after: expect.objectContaining({ reason: 'not_granted', action: 'show' }),
+    }));
+    // keep still works: it changes nothing.
+    await expect(service.apply(ACTOR, ID, { action: 'keep' }, META)).resolves.toMatchObject({ choice: 'hidden', canChange: false });
+  });
+
+  it('without any report-settings permission: does not call Graph and says the read permission is missing', async () => {
+    const { calls } = graph(true);
+    const status = await setup(undefined, ['User.Read.All']).service.status(ID);
+    expect(status).toEqual({ concealed: null, choice: null, readError: REPORT_NAMES_NOT_READABLE, canChange: false });
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses to store the choice over a reconnect that happened meanwhile', async () => {
+    graph(true);
+    const { service, prisma, setSecret } = setup();
+    prisma.integrationSecret.findUnique.mockImplementationOnce(async () => {
+      const other = { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-02T00:00:00.000Z' };
+      setSecret(other);
+      return { ciphertext: crypto.encrypt(JSON.stringify(other), integrationSecretAad(ID)) };
+    });
+    await expect(service.apply(ACTOR, ID, { action: 'keep' }, META)).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.integrationSecret.update).not.toHaveBeenCalled();
   });
 });

@@ -11,8 +11,10 @@ import {
   GRAPH,
   GraphAccessError,
   MICROSOFT_365_OAUTH,
-  MICROSOFT_PERMISSIONS,
+  MICROSOFT_REQUIRED_PERMISSIONS,
   P1_CODES,
+  REPORT_SETTINGS_WRITE,
+  canReadReportSettings,
   getOrganization,
   graphGet,
   readReportConcealment,
@@ -93,6 +95,9 @@ export async function diagnoseMicrosoftClient(
   }
 }
 
+export const OPTIONAL_WRITE_NOTE =
+  'The optional ReportSettings.ReadWrite.All is not granted, so the report names setting is changed by hand in the Microsoft 365 admin center (the integration page lists the steps).';
+
 export function missingPermissionsMessage(missing: string[]): string {
   return `Not granted in this tenant: ${missing.join(', ')}. Add any of these that are missing on the app (step 2), then a Global Administrator presses Reconnect and approves again.`;
 }
@@ -124,9 +129,12 @@ export async function diagnoseMicrosoftConnection(ctx: IntegrationContext): Prom
   if (roles === null) {
     notes.push({ stepId: S.permissions, message: 'Microsoft returned a token Weavestream cannot read, so granted permissions were not compared.' });
   } else {
-    const missing = MICROSOFT_PERMISSIONS.filter((p) => !roles!.includes(p));
+    const missing = MICROSOFT_REQUIRED_PERMISSIONS.filter((p) => !roles!.includes(p));
     if (missing.length > 0) failures.push({ stepId: S.permissions, message: missingPermissionsMessage(missing) });
     else passed.push(S.permissions);
+    if (!roles.includes(REPORT_SETTINGS_WRITE)) {
+      notes.push({ stepId: S.names, message: OPTIONAL_WRITE_NOTE });
+    }
   }
 
   const probe = async <T>(load: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> => {
@@ -162,9 +170,11 @@ export async function diagnoseMicrosoftConnection(ctx: IntegrationContext): Prom
     notes.push({ stepId: S.layouts, message: 'Intune devices are not available (needs Microsoft Intune and DeviceManagementManagedDevices.Read.All); Computers and Mobile devices sync nothing.' });
   }
 
-  const concealed = await probe(() => readReportConcealment(ctx));
+  const concealed = roles !== null && !canReadReportSettings(roles)
+    ? ({ ok: false, error: null } as const)
+    : await probe(() => readReportConcealment(ctx));
   if (!concealed.ok) {
-    notes.push({ stepId: S.names, message: `The report setting "${MICROSOFT_REPORT_SETTING.label}" could not be read (ReportSettings.ReadWrite.All).` });
+    notes.push({ stepId: S.names, message: `The report setting "${MICROSOFT_REPORT_SETTING.label}" could not be read (optional ReportSettings.Read.All not granted).` });
   } else if (concealed.value) {
     notes.push({
       stepId: S.names,

@@ -80,6 +80,8 @@ After connecting, the integration's **Credentials & schedule** tab reads the cur
 - **No, keep names hidden (change nothing)**: nothing is sent to the tenant. Storage rows say they are hidden by the tenant's report privacy setting, and Check setup notes it.
 - **Turn concealment back on**: shown while names are visible. It sends `displayConcealedNames: true`, after a confirmation. The same checkbox in the admin center works too.
 
+**Optional permissions.** Reading the value needs `ReportSettings.Read.All` (or `ReportSettings.ReadWrite.All`); changing it needs `ReportSettings.ReadWrite.All`. Both are optional. When the tenant did not grant `ReportSettings.ReadWrite.All`, the page still shows the current value (when it can be read) and, instead of the buttons, the steps to change it by hand: sign in to the Microsoft 365 admin center as a Global Administrator, go to **Settings > Org settings**, on the **Services** tab select **Reports**, clear (show names) or select (hide names) **Conceal user, group, and site names in all reports**, and select **Save**. Weavestream never attempts the change without the permission.
+
 Each choice needs an MFA step-up, is stored with the connection, and writes an `integration.microsoft.report_names` audit row with the setting name, the value before and after, and whether anything changed (`.failed` with a reason when Microsoft refused). If the value cannot be read, nothing is changed. This PATCH is the only write the integration ever makes, and it is never made during a sync.
 
 ## Setup Instructions
@@ -114,7 +116,8 @@ Open **API permissions > Add a permission > Microsoft Graph > Application permis
 | `SecurityEvents.Read.All` | Secure Score |
 | `SecurityAlert.Read.All` | Recent security alerts |
 | `DeviceManagementManagedDevices.Read.All` | Intune computers and mobile devices |
-| `ReportSettings.ReadWrite.All` | Read the report concealment setting, and change it only when an admin chooses to (see above) |
+| `ReportSettings.Read.All` (optional) | Read the report concealment setting, so the integration page can show it |
+| `ReportSettings.ReadWrite.All` (optional) | Only if you want Weavestream to be able to turn report name concealment off/on for a customer (see above). Without it the page shows the manual admin center steps instead of the buttons |
 
 ### Step 3: Create a client secret and note its expiry
 
@@ -164,6 +167,7 @@ Check setup reads only the AADSTS number and the Graph error code Microsoft retu
 | Storage says "Hidden by the tenant's report privacy setting" | Names are concealed in usage reports | Choose **Show real names** on the integration, or leave it. |
 | Storage shows "not available" or an older date | Usage reports lag 24 to 72 hours | Wait; the next sync picks up newer figures. |
 | "Microsoft refused the change: ReportSettings.ReadWrite.All is not granted" | The tenant approved an older permission list | **Reconnect** as a Global Administrator, then choose again. |
+| The integration page lists admin center steps instead of buttons | The optional `ReportSettings.ReadWrite.All` is not granted in this tenant | Follow the steps, or add the permission to the app and **Reconnect**. |
 | Run rate limited | Microsoft Graph throttling (429); usage reports allow about 14 requests per 10 minutes per tenant | Weavestream waits for the time Microsoft asks and retries; each report is fetched once per run. |
 | After Microsoft sign-in you land on the login page | `API_URL` is on a different host from `APP_URL` | Serve the API under the web app's host and update the redirect URI on the app registration. |
 
@@ -172,7 +176,7 @@ Check setup reads only the AADSTS number and the Graph error code Microsoft retu
 - **App-only, no user tokens.** Weavestream holds one client secret (yours) and, per customer, only the verified tenant ID, the granted permissions, the consent time and the report-names choice. Access tokens are minted per tenant with the client credentials grant, cached in memory per integration until shortly before they expire, and dropped on a reconnect or a new client secret. There is no refresh token.
 - **Encrypted secret with an expiry warning.** The client secret is encrypted at rest (AES-256-GCM), write-only (only its last four characters are shown), saved with an MFA step-up and audited. Weavestream warns 30 days before the expiry date you enter.
 - **Verified tenant.** The consent callback's `tenant` value is never trusted: the token's tenant (`tid`) and Microsoft Graph's own answer must both match it, and the token's app must be yours. The state is random, single use, valid for ten minutes and bound to the signed-in user and the integration. Error callbacks are mapped to fixed messages; Microsoft's description is never stored, logged or shown.
-- **Least privilege.** Every permission is read-only except `ReportSettings.ReadWrite.All`, which is used for one PATCH of `displayConcealedNames`, only from the explicit, step-up gated, audited admin action, never during a sync. A connection with more permissions than the list is refused.
+- **Least privilege.** Every permission is read-only except the optional `ReportSettings.ReadWrite.All`, which is never needed for a sync and is used for one PATCH of `displayConcealedNames`, only from the explicit, step-up gated, audited admin action, never during a sync. A connection with more permissions than the list is refused. Report usage downloads are only followed to Microsoft hosts.
 - **Read-only sync.** The sync and Check setup only send GET requests to Microsoft Graph (plus `$batch` requests whose sub-requests are fixed to GET). Report downloads follow Microsoft's redirect through the egress guard without the access token.
 - **Tenant isolation.** A connection only ever feeds the company its tenant is mapped to; a mapped tenant that differs from the consented one, or from what Microsoft Graph reports, stops the sync.
 - **Customer control.** The customer can remove access at any time by deleting the Weavestream enterprise application in their tenant; Weavestream then shows **Reconnect**. Conditional Access policies for users do not apply to this app-only identity.

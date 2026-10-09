@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { MicrosoftReportNames, MicrosoftReportNamesAction } from '@weavestream/shared';
-import { MICROSOFT_REPORT_SETTING, problemMessage } from '@weavestream/shared';
+import { MICROSOFT_REPORT_SETTING, MICROSOFT_REPORT_SETTING_MANUAL_STEPS, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { Btn, Tag, useToast } from '../../../../../components/ui';
 
@@ -21,6 +21,9 @@ export const SHOW_EXPLANATION =
 
 export const KEEP_EXPLANATION =
   'Keeping names hidden changes nothing in the tenant. Mailbox and OneDrive storage then show as hidden by the tenant\'s report privacy setting.';
+
+export const MANUAL_INTRO =
+  'This tenant did not grant the optional ReportSettings.ReadWrite.All, so Weavestream cannot change this setting. To change it by hand:';
 
 export const CONCEAL_EXPLANATION =
   `Weavestream turns "${S.label}" (${S.path}) back on for this whole tenant (${S.graph}: false to true). ` +
@@ -105,8 +108,18 @@ export function ReportNamesChoice({ integrationId, choice: initialChoice }: { in
           ) : (
             <p style={mutedStyle}>You chose to keep names hidden. You can change this at any time. Yes: {SHOW_EXPLANATION}</p>
           )}
+          {!state.canChange && (
+            <div>
+              <p style={textStyle}>{MANUAL_INTRO}</p>
+              <ol style={{ ...textStyle, paddingLeft: 20 }}>
+                {MICROSOFT_REPORT_SETTING_MANUAL_STEPS.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {concealed !== false && (
+            {state.canChange && concealed !== false && (
               <Btn kind="primary" size="sm" onClick={() => void act('show')} loading={busy === 'show'} disabled={busy !== null || concealed === null}>
                 Yes, show real names (turn the setting off)
               </Btn>
@@ -121,7 +134,7 @@ export function ReportNamesChoice({ integrationId, choice: initialChoice }: { in
                 Keep real names shown (change nothing)
               </Btn>
             )}
-            {concealed === false && (
+            {state.canChange && concealed === false && (
               <Btn kind="outline" size="sm" onClick={() => void act('conceal')} loading={busy === 'conceal'} disabled={busy !== null}>
                 Turn concealment back on
               </Btn>

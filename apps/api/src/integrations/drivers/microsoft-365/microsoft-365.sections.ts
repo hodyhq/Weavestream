@@ -413,7 +413,8 @@ export function buildTenantSection(input: TenantInput): IntegrationSection {
         .slice(0, 40)
         .map((s): Row => {
           const name = skuName(s.skuPartNumber);
-          const total = s.prepaidUnits?.enabled ?? 0;
+          // Units in their grace period (warning) are still purchased and assignable.
+          const total = (s.prepaidUnits?.enabled ?? 0) + (s.prepaidUnits?.warning ?? 0);
           const used = Math.max(0, s.consumedUnits ?? 0);
           if (s.capabilityStatus && s.capabilityStatus !== 'Enabled') return text(name, `${s.capabilityStatus}, ${used} assigned`);
           return total > 0 ? { kind: 'meter', label: name, used, total, unit: 'count' } : num(`${name} (assigned)`, used);

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import {
   MICROSOFT_REPORT_SETTING,
@@ -19,13 +19,31 @@ import type { RequestMeta } from '../../common/request-meta.js';
 import type { IntegrationContext } from '../drivers/integration-driver.js';
 import { DriverAuthError, DriverRateLimitError } from '../drivers/integration-driver.js';
 import { parseStoredAdminConsent, type StoredAdminConsent } from '../oauth/oauth-token.js';
-import { readReportConcealment } from '../drivers/microsoft-365/microsoft-365.graph.js';
+import {
+  REPORT_SETTINGS_WRITE,
+  canReadReportSettings,
+  readReportConcealment,
+} from '../drivers/microsoft-365/microsoft-365.graph.js';
 import { writeReportConcealment } from '../drivers/microsoft-365/microsoft-365.report-settings.js';
 
 const DRIVER = 'microsoft-365';
 
 export const REPORT_NAMES_READ_ERROR =
-  `Weavestream could not read "${MICROSOFT_REPORT_SETTING.label}" for this tenant. Run Check setup, or press Reconnect if ReportSettings.ReadWrite.All was not approved.`;
+  `Weavestream could not read "${MICROSOFT_REPORT_SETTING.label}" for this tenant. Run Check setup, then try again.`;
+
+export const REPORT_NAMES_NOT_READABLE =
+  `Weavestream cannot read "${MICROSOFT_REPORT_SETTING.label}": the optional ReportSettings.Read.All is not granted in this tenant. Check it in the Microsoft 365 admin center.`;
+
+export const REPORT_NAMES_NOT_CHANGEABLE =
+  'This tenant did not grant the optional ReportSettings.ReadWrite.All, so Weavestream cannot change the setting. Change it by hand in the Microsoft 365 admin center (steps on this page).';
+
+function canChange(consent: StoredAdminConsent): boolean {
+  return consent.grantedRoles.includes(REPORT_SETTINGS_WRITE);
+}
+
+function readErrorOf(consent: StoredAdminConsent): string {
+  return canReadReportSettings(consent.grantedRoles) ? REPORT_NAMES_READ_ERROR : REPORT_NAMES_NOT_READABLE;
+}
 
 /** "On (names hidden)" / "Off (real names shown)" for a displayConcealedNames value. */
 export function settingState(concealed: boolean): string {
@@ -57,8 +75,13 @@ export class MicrosoftReportNamesService {
   /** Current tenant value (read live) and the stored choice. */
   async status(integrationId: string): Promise<MicrosoftReportNames> {
     const { ctx, consent } = await this.load(integrationId);
-    const concealed = await this.read(ctx, integrationId);
-    return { concealed, choice: consent.reportNames ?? null, readError: concealed === null ? REPORT_NAMES_READ_ERROR : null };
+    const concealed = await this.read(ctx, integrationId, consent);
+    return {
+      concealed,
+      choice: consent.reportNames ?? null,
+      readError: concealed === null ? readErrorOf(consent) : null,
+      canChange: canChange(consent),
+    };
   }
 
   async apply(
@@ -84,7 +107,7 @@ export class MicrosoftReportNamesService {
     };
 
     // Read before any change, so the audit row and the answer state the real "before".
-    const before = await this.read(ctx, integrationId);
+    const before = await this.read(ctx, integrationId, consent);
     if (input.action === 'keep') {
       // Nothing changes, so the stored choice records what the tenant shows.
       const kept = before === false ? 'shown' : 'hidden';
@@ -98,13 +121,24 @@ export class MicrosoftReportNamesService {
       return {
         concealed: before,
         choice: kept,
-        readError: before === null ? REPORT_NAMES_READ_ERROR : null,
+        readError: before === null ? readErrorOf(consent) : null,
+        canChange: canChange(consent),
         message: `Nothing was changed in the tenant. "${MICROSOFT_REPORT_SETTING.label}" stays ${before === null ? 'as it is' : settingState(before)}.`,
       };
     }
 
     const conceal = input.action === 'conceal';
     const choice = conceal ? 'hidden' : 'shown';
+    if (!canChange(consent)) {
+      // Optional permission not granted: never attempt the PATCH.
+      await this.audit.log({
+        ...auditBase,
+        action: AUDIT_ACTIONS.integration.microsoftReportNamesFailed,
+        before: { displayConcealedNames: before },
+        after: { ...detail, reason: 'not_granted' },
+      });
+      throw new BadRequestException(REPORT_NAMES_NOT_CHANGEABLE);
+    }
     if (before === null) {
       await this.audit.log({
         ...auditBase,
@@ -147,6 +181,7 @@ export class MicrosoftReportNamesService {
       concealed: conceal,
       choice,
       readError: null,
+      canChange: true,
       message: changed
         ? `Done: "${MICROSOFT_REPORT_SETTING.label}" is now ${state} for this tenant. Microsoft applies it within a few minutes; the next sync uses it.`
         : `"${MICROSOFT_REPORT_SETTING.label}" was already ${state}; nothing was changed.`,
@@ -177,7 +212,8 @@ export class MicrosoftReportNamesService {
   }
 
   /** Null when the setting cannot be read (permission missing, Microsoft unreachable). */
-  private async read(ctx: IntegrationContext, integrationId: string): Promise<boolean | null> {
+  private async read(ctx: IntegrationContext, integrationId: string, consent: StoredAdminConsent): Promise<boolean | null> {
+    if (!canReadReportSettings(consent.grantedRoles)) return null;
     try {
       return await readReportConcealment(ctx);
     } catch (e) {
@@ -187,6 +223,17 @@ export class MicrosoftReportNamesService {
   }
 
   private async storeChoice(integrationId: string, consent: StoredAdminConsent, reportNames: 'shown' | 'hidden'): Promise<void> {
+    // A reconnect while the Graph calls ran must not be overwritten with the old consent.
+    const row = await this.prisma.integrationSecret.findUnique({ where: { integrationId }, select: { ciphertext: true } });
+    let current: StoredAdminConsent | null = null;
+    try {
+      current = row ? parseStoredAdminConsent(JSON.parse(this.crypto.decrypt(row.ciphertext, integrationSecretAad(integrationId)))) : null;
+    } catch (e) {
+      this.logger.error({ err: (e as Error).message, integrationId }, 'failed to decrypt integration secret');
+    }
+    if (!current || current.tenantId !== consent.tenantId || current.consentedAt !== consent.consentedAt) {
+      throw new ConflictException('The Microsoft connection changed while saving. Reload the page and choose again.');
+    }
     const ciphertext = this.crypto.encrypt(JSON.stringify({ ...consent, reportNames }), integrationSecretAad(integrationId));
     await this.prisma.integrationSecret.update({ where: { integrationId }, data: { ciphertext } });
   }

@@ -164,10 +164,12 @@ export class IntegrationOAuthAppService {
       where: { provider },
       select: { clientId: true, secretExpiresAt: true, tenantId: true },
     });
-    // Omitted = keep, null = clear. Stored as a DATE (UTC midnight).
+    // Omitted = keep, null = clear. Stored as a DATE (UTC midnight). A new
+    // secret without a date clears the old one: that date was the old secret's.
+    const expiry = input.secretExpiresAt === undefined && input.clientSecret !== undefined ? null : input.secretExpiresAt;
     const extra = {
-      ...(input.secretExpiresAt !== undefined
-        ? { secretExpiresAt: input.secretExpiresAt === null ? null : new Date(`${input.secretExpiresAt}T00:00:00.000Z`) }
+      ...(expiry !== undefined
+        ? { secretExpiresAt: expiry === null ? null : new Date(`${expiry}T00:00:00.000Z`) }
         : {}),
       ...(input.tenantId !== undefined ? { tenantId: input.tenantId === null ? null : input.tenantId.toLowerCase() } : {}),
     };
@@ -205,7 +207,7 @@ export class IntegrationOAuthAppService {
       after: {
         provider,
         clientId: input.clientId,
-        ...(input.secretExpiresAt !== undefined ? { secretExpiresAt: input.secretExpiresAt } : {}),
+        ...(expiry !== undefined ? { secretExpiresAt: expiry } : {}),
         ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),
         ...(input.clientSecret === undefined
           ? { secretKept: true }

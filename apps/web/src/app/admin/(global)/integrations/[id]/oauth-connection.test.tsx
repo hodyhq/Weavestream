@@ -161,7 +161,7 @@ describe('OAuthConnection (Microsoft admin consent)', () => {
     clientCredentialsScope: 'https://graph.microsoft.com/.default',
     scopes: ['User.Read.All'],
   };
-  const reportNames = { ok: true, status: 200, data: { concealed: true, choice: null, readError: null } };
+  const reportNames = { ok: true, status: 200, data: { concealed: true, choice: null, readError: null, canChange: true } };
 
   async function renderMs() {
     await act(async () => {

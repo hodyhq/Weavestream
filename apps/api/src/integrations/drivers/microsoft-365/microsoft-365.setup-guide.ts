@@ -39,9 +39,10 @@ export const MICROSOFT_365_SETUP_GUIDE: SetupGuideStep[] = [
     id: S.permissions,
     title: 'Add the Microsoft Graph application permissions',
     body: [
-      'In the app, open **API permissions > Add a permission > Microsoft Graph > Application permissions**. Add every permission below (use the copy buttons), then press **Add permissions**.',
+      'In the app, open **API permissions > Add a permission > Microsoft Graph > Application permissions**. Add every required permission below (use the copy buttons), then press **Add permissions**.',
       'Pick **Application permissions**, not Delegated. Weavestream reads with its own app identity and never signs in as a person. You can remove the default delegated **User.Read**; it is not used.',
-      'All of them are read-only except **ReportSettings.ReadWrite.All**. Weavestream only uses it when a customer admin explicitly chooses to show real names in usage reports (step 6). Do not add any other permission: a connection that grants more than this list is refused.',
+      'The two **Optional** groups are up to you. **ReportSettings.Read.All** lets the integration page show the current report names setting. **ReportSettings.ReadWrite.All** is optional: add it only if you want Weavestream to be able to turn report name concealment off/on for a customer (step 6); without it the page shows the admin center steps instead. It is the only permission that is not read-only.',
+      'Do not add any other permission: a connection that grants more than this list is refused.',
     ].join('\n\n'),
     copyValues: [{ label: 'Application permissions', computed: 'scopes' }],
   },

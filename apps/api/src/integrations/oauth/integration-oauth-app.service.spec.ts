@@ -102,7 +102,7 @@ describe('IntegrationOAuthAppService', () => {
     );
     expect(JSON.stringify(audit.log.mock.calls)).not.toContain('test-client-secret');
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
-      after: { provider: 'google', clientId: 'client-1', secretMask: '••••cret' },
+      after: { provider: 'google', clientId: 'client-1', secretExpiresAt: null, secretMask: '••••cret' },
     }));
   });
 
@@ -210,6 +210,15 @@ describe('IntegrationOAuthAppService', () => {
       const app = await service.get('microsoft');
       expect(app.secretExpiresAt).toBe(soon);
       expect(app.secretExpiryWarning).toMatch(new RegExp(`expires on ${soon} \\(in 1?\\d days?\\)`));
+    });
+    it('clears the old expiry date when a new secret is saved without one, and keeps it when only the client ID changes', async () => {
+      const { service, prisma } = setup({ clientId: 'client-1', secretCiphertext: 'x', updatedAt: new Date() } as never);
+      await service.update({ id: 'user-1' } as never, 'microsoft', { clientId: 'client-1', clientSecret: 'test-client-secret-2' }, { ip: '127.0.0.1', userAgent: 'jest' });
+      const upsert = (prisma.integrationOAuthApp.upsert.mock.calls[0] as unknown as [{ update: Record<string, unknown> }])[0].update;
+      expect(upsert.secretExpiresAt).toBeNull();
+      await service.update({ id: 'user-1' } as never, 'microsoft', { clientId: 'client-2' }, { ip: '127.0.0.1', userAgent: 'jest' });
+      const update = (prisma.integrationOAuthApp.update.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0].data;
+      expect('secretExpiresAt' in update).toBe(false);
     });
   });
 

@@ -33,10 +33,41 @@ export const MICROSOFT_PERMISSION_GROUPS: ReadonlyArray<{ label: string; scopes:
   { label: 'Sign-ins, MFA and usage reports', scopes: ['AuditLog.Read.All', 'Reports.Read.All'] },
   { label: 'Security', scopes: ['SecurityEvents.Read.All', 'SecurityAlert.Read.All'] },
   { label: 'Intune devices', scopes: ['DeviceManagementManagedDevices.Read.All'] },
-  { label: 'Report names setting (changed only if an admin chooses to)', scopes: ['ReportSettings.ReadWrite.All'] },
+  { label: 'Optional: read the report names setting', scopes: ['ReportSettings.Read.All'] },
+  {
+    label: 'Optional: let Weavestream turn report name concealment off/on for a customer',
+    scopes: ['ReportSettings.ReadWrite.All'],
+  },
 ];
 
+/** Reads `GET /admin/reportSettings` (ReportSettings.ReadWrite.All also can). */
+export const REPORT_SETTINGS_READ = 'ReportSettings.Read.All';
+/** The only write permission; lets the admin action PATCH `displayConcealedNames`. */
+export const REPORT_SETTINGS_WRITE = 'ReportSettings.ReadWrite.All';
+
+/** Not needed for a sync; a tenant that did not grant them still passes Check setup. */
+export const MICROSOFT_OPTIONAL_PERMISSIONS: readonly string[] = [REPORT_SETTINGS_READ, REPORT_SETTINGS_WRITE];
+
+/** Everything a tenant may grant: a role outside this list is refused as excess. */
 export const MICROSOFT_PERMISSIONS = MICROSOFT_PERMISSION_GROUPS.flatMap((g) => g.scopes);
+
+export const MICROSOFT_REQUIRED_PERMISSIONS = MICROSOFT_PERMISSIONS.filter((p) => !MICROSOFT_OPTIONAL_PERMISSIONS.includes(p));
+
+/** True when the granted roles can read the report concealment setting. */
+export function canReadReportSettings(roles: readonly string[]): boolean {
+  return roles.includes(REPORT_SETTINGS_READ) || roles.includes(REPORT_SETTINGS_WRITE);
+}
+
+/**
+ * Hosts a usage-report 302 may point at (Microsoft's report download
+ * service, e.g. reportsncu.office.com). Anything else is refused.
+ */
+const REPORT_DOWNLOAD_HOST_SUFFIXES = ['.office.com', '.office.net', '.microsoft.com'];
+
+export function isReportDownloadHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return REPORT_DOWNLOAD_HOST_SUFFIXES.some((suffix) => h.endsWith(suffix));
+}
 
 export const MICROSOFT_365_OAUTH: DriverOAuthDescriptor = {
   provider: 'microsoft',
@@ -218,7 +249,7 @@ export async function graphReportCsv(
     } catch {
       throw new GraphRequestError(`Microsoft Graph returned no download link for ${what}.`, res.status, null);
     }
-    if (target.protocol !== 'https:') {
+    if (target.protocol !== 'https:' || !isReportDownloadHost(target.hostname) || target.username || target.password) {
       throw new GraphRequestError(`Microsoft Graph returned an unsafe download link for ${what}.`, res.status, null);
     }
     const download = await fetchWithRetry(target.toString(), {
