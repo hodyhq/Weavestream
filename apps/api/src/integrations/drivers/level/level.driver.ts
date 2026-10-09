@@ -212,11 +212,13 @@ async function optional<T>(load: () => Promise<T>): Promise<Lookup<T>> {
   }
 }
 
-function byDevice<T extends { device_id?: string }>(items: T[]): Map<string, T[]> {
+export function byDevice<T extends { device_id?: string }>(items: T[]): Map<string, T[]> {
   const out = new Map<string, T[]>();
   for (const item of items) {
     if (!item.device_id) continue;
-    out.set(item.device_id, [...(out.get(item.device_id) ?? []), item]);
+    const bucket = out.get(item.device_id);
+    if (bucket) bucket.push(item);
+    else out.set(item.device_id, [item]);
   }
   return out;
 }

@@ -8,6 +8,7 @@ import {
 } from '../integration-driver.js';
 import {
   LEVEL_RECOMMENDED_DESTINATIONS,
+  byDevice,
   LevelDriver,
   __resetLevelRunCacheForTests,
 } from './level.driver.js';
@@ -339,5 +340,27 @@ describe('LevelDriver Check setup', () => {
     installFetchTable({ [`${API}/groups?`]: { status: 429, body: {} } });
     const check = await new LevelDriver().diagnose({ mode: 'connection', ctx: makeCtx() });
     expect(check.failures).toEqual([{ stepId: null, message: expect.stringMatching(/rate limiting/) }]);
+  });
+});
+
+describe('Level byDevice bucketing', () => {
+  it('groups items per device in order, appending in place rather than copying the bucket', () => {
+    const items = [
+      { device_id: 'd1', n: 1 },
+      { device_id: 'd2', n: 2 },
+      { n: 3 },
+      { device_id: 'd1', n: 4 },
+      { device_id: 'd1', n: 5 },
+    ];
+    const set = jest.spyOn(Map.prototype, 'set');
+    try {
+      const out = byDevice(items);
+      expect(out.get('d1')!.map((i) => i.n)).toEqual([1, 4, 5]);
+      expect(out.get('d2')!.map((i) => i.n)).toEqual([2]);
+      // One set per device: a copy-per-item bucket would set on every item.
+      expect(set).toHaveBeenCalledTimes(2);
+    } finally {
+      set.mockRestore();
+    }
   });
 });

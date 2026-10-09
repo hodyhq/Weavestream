@@ -76,7 +76,7 @@ Open **Organizations**. Every top-level group in Level is listed. Map each one t
 
 ## Map Layouts and Match-first
 
-The **Map layouts** tab lists the **Devices** resource. Pick the layout devices go into (or create a new one, or skip it) and the field to match on. Weavestream suggests existing layouts by name, such as Workstations or Configurations, and a field named like Serial number. If the layout you pick has no Serial number field, choose **Create field** in the match picker and Weavestream adds that one field to the layout when you save; it is pre-selected when no existing field fits. Only the match field is ever added, and a field with the same name but another type is never changed: pick another field instead.
+The **Map layouts** tab lists the **Devices** resource. Pick the layout devices go into (or create a new one, or skip it) and the field to match on. Weavestream suggests existing layouts by name, such as Workstations or Configurations, and a field named like Serial number. If the layout you pick has no Serial number field, choose **Create field** in the match picker and Weavestream adds that one field to the layout when you save; it is pre-selected when no existing field fits. Only the match field is ever added, and a field with the same name but another type is never changed: pick another field instead. **Create new layout** and **Create field** also need permission to manage asset layouts.
 
 On sync, a device whose serial number equals **exactly one** unlinked asset you created yourself adopts that asset instead of creating a duplicate. Text matching ignores upper and lower case. If two or more assets match, the run reports it and links nothing.
 
