@@ -37,6 +37,7 @@ export interface AssetIntegrationWriteInput {
   name: string;
   assetLayoutId: string;
   matchKeyFieldIds: string[];
+  claimUnboundMatch?: boolean;
   fieldValues: Array<{
     targetFieldId: string;
     value: unknown;
@@ -147,6 +148,9 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         name: input.name,
         assetLayoutId: input.assetLayoutId,
         matchKeyFieldIds: [...input.matchKeyFieldIds],
+        ...(ctx.claimUnboundMatches === true ? { claimUnboundMatch: true } : {}),
+        ...(ctx.previousAdopted === true ? { keepTargetName: true } : {}),
+        ...(ctx.matchFirstIndexes ? { matchFirstIndexes: ctx.matchFirstIndexes } : {}),
         fieldValues: input.fieldValues.map((field) => ({
           targetFieldId: field.targetFieldId,
           value: field.value,

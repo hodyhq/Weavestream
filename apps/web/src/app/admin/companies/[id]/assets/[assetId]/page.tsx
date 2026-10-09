@@ -32,6 +32,7 @@ import {
   provenanceAttention,
 } from '../../../../../../components/integrations/provenance-badge';
 import { recentRelative as relative } from '../../../../../../lib/relative-time';
+import { IntegrationSections } from '../../../../../../components/integrations/integration-sections';
 
 export async function generateMetadata({
   params,
@@ -126,7 +127,10 @@ export default async function AssetDetailPage({
             gap: 16,
           }}
         >
-          <AssetDetailView asset={asset} context={fieldContext} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+            <AssetDetailView asset={asset} context={fieldContext} />
+            <IntegrationSections sections={asset.integrationSections ?? []} />
+          </div>
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <LinkedItemsPanel

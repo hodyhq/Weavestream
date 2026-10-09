@@ -27,6 +27,8 @@ Weavestream's integration layer synchronises asset and infrastructure data from 
 - **Upsert Engine** — Records are created on first sync and updated on subsequent runs based on the provider's unique identifier.
 - **Soft Staling (No Deletion)** — Records removed or unseen in upstream platforms are flagged as stale rather than deleted, preserving full historical integrity.
 - **Granular Audit Log** — Sync runs, field changes, and status transitions write append-only records to the platform audit log.
+- **Integration Sections**: A driver can attach a read-only detail card to each synced asset (grouped values, usage bars, links). It appears on the asset page with the driver's logo and the last sync time, is replaced on every sync, and is never shown to client users. Section values are not searchable yet.
+- **Map Layouts and Match-first**: Drivers that suggest layout matches add a **Map layouts** tab: pick the layout for each kind of record (or create a new one, or skip it) and the field to match on. On sync, a record whose match value equals exactly one unlinked, manually created asset adopts that asset instead of creating a duplicate; two or more candidates are reported on the run and nothing is linked. New assets get only their name and match value; everything else goes in the integration section.
 - **SSRF & Egress Protection** — Outbound integration requests pass through Weavestream's safe fetch layer to guard against SSRF, DNS rebinding, and unauthorized private network access.
 
 ## Available Integrations
@@ -38,6 +40,9 @@ Select an integration below for provider-specific setup guides, resource capabil
 [!card title="Breeze" text="Read-only reconstruction sync for durably importing organization structures, devices, configurations, and topology." icon="plug" layout="compact"](/integrations/breeze/)
 
 [!card title="Cloudflare" text="Manage Zero Trust Gateway IP lists with drift repair, and sync every domain on the account into Domains." icon="plug" layout="compact"](/integrations/cloudflare/)
+
+[!card title="Google Workspace" text="One-click connect per customer to sync users, licences, storage, groups, domains, devices and security alerts (read-only)." icon="plug" layout="compact"](/integrations/google-workspace/)
+[!card title="Google Workspace (reseller)" text="For Google resellers: one connection syncs every customer's subscriptions, seats and renewal dates (read-only)." icon="plug" layout="compact"](/integrations/google-workspace/#reseller-subscriptions)
 
 [!card title="NinjaOne" text="Sync agent-managed workstations, servers, SNMP network gear, and guest VMs with dual-resource mapping." icon="plug" layout="compact"](/integrations/ninjaone/)
 

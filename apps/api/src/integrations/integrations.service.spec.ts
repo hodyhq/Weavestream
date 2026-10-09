@@ -1,6 +1,6 @@
 import type { DriverDescriptor } from '@weavestream/shared';
 import { IntegrationsService, ensureResourceDestination, validateResourceRegistry, validateResourceTargetConfig, assertResourcePatchCompatible } from './integrations.service.js';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { BREEZE_RECOMMENDED_DESTINATIONS } from './drivers/breeze/breeze.driver.js';
 import {
@@ -1052,5 +1052,198 @@ describe('reconstruction administration reads', () => {
     }
     expect(seen).toEqual([ids.gap, ids.summary, ids.target]);
     expect(new Set(seen).size).toBe(3);
+  });
+});
+
+describe('IntegrationsService OAuth drivers', () => {
+  const id = '00000000-0000-4000-8000-0000000000aa';
+  const crypto = {
+    decrypt: () => JSON.stringify({ refreshToken: 'test-refresh-tail', grantedScopes: [], connectedAt: 'x' }),
+  };
+  const USER_ACTOR = { id: '00000000-0000-4000-8000-0000000000ab' } as never;
+  const oauthDescriptor = {
+    key: 'fake-oauth',
+    resources: [],
+    oauth: { provider: 'google', scopes: ['s'] },
+  } as unknown as DriverDescriptor;
+
+  function setup(
+    client: { clientId: string; clientSecret: string; version?: string } | null,
+    secretRow = { id: 'secret-1', ciphertext: 'blob', updatedAt: new Date('2026-01-01T00:00:00Z') },
+  ) {
+    const prisma = {
+      integration: {
+        findUnique: jest.fn(async () => ({
+          id,
+          driver: 'fake-oauth',
+          config: {},
+          secret: secretRow,
+          resources: [],
+          _count: { companyMappings: 0 },
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        })),
+      },
+    };
+    const drivers = { has: () => true, describe: () => oauthDescriptor };
+    const oauthApps = { getClient: jest.fn(async () => client) };
+    const service = new IntegrationsService(
+      prisma as never, crypto as never, {} as never, drivers as never,
+      { values: { INTEGRATION_SYNC_DEFAULT_CRON: 'off' } } as never, {} as never, {} as never,
+      oauthApps as never,
+    );
+    return { service, oauthApps };
+  }
+
+  it('injects the instance OAuth app into the driver context', async () => {
+    const client = { clientId: 'client-1', clientSecret: 'test-client-secret' };
+    const { service, oauthApps } = setup(client);
+    const ctx = await service.loadDriverContext(id);
+    expect(oauthApps.getClient).toHaveBeenCalledWith('google');
+    expect(ctx.oauthClient).toEqual(client);
+  });
+
+  it('stamps a non-secret credential version that changes on reconnect or app save', async () => {
+    const client = { clientId: 'client-1', clientSecret: 'test-client-secret', version: 'app-1@2026-01-01T00:00:00.000Z' };
+    const base = await setup(client).service.loadDriverContext(id);
+    expect(base.credentialVersion).toBe('secret-1@2026-01-01T00:00:00.000Z|app-1@2026-01-01T00:00:00.000Z');
+    expect(base.credentialVersion).not.toContain('test-client-secret');
+    expect(base.credentialVersion).not.toContain('test-refresh-tail');
+    const reconnected = await setup(client, {
+      id: 'secret-1', ciphertext: 'blob', updatedAt: new Date('2026-01-02T00:00:00Z'),
+    }).service.loadDriverContext(id);
+    expect(reconnected.credentialVersion).not.toBe(base.credentialVersion);
+    const appSaved = await setup({ ...client, version: 'app-1@2026-01-03T00:00:00.000Z' }).service.loadDriverContext(id);
+    expect(appSaved.credentialVersion).not.toBe(base.credentialVersion);
+  });
+
+  it('omits the OAuth app when none is configured', async () => {
+    const ctx = await setup(null).service.loadDriverContext(id);
+    expect(ctx).not.toHaveProperty('oauthClient');
+  });
+
+  it('never exposes token tails through secretMask', async () => {
+    const dto = await setup(null).service.get(id);
+    expect(dto.hasSecret).toBe(true);
+    expect(dto.secretMask).toBeNull();
+  });
+
+  it.each([
+    ['secret', { secret: { refreshToken: 'test-forged' } }],
+    ['clearSecret', { clearSecret: true }],
+  ])('rejects %s on update: the OAuth service is the only writer', async (_label, input) => {
+    const { service } = setup(null);
+    await expect(service.update(USER_ACTOR, id, input as never, { ip: null, userAgent: null } as never))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects a secret on create', async () => {
+    const { service } = setup(null);
+    await expect(service.create(USER_ACTOR, { driver: 'fake-oauth', name: 'x', config: {}, secret: { refreshToken: 'test-forged' } } as never, { ip: null, userAgent: null } as never))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('Map layouts: recommended destinations for match-first resources', () => {
+  const ids = {
+    actor: '00000000-0000-4000-8000-000000000001',
+    integration: '00000000-0000-4000-8000-000000000002',
+    resource: '00000000-0000-4000-8000-000000000003',
+    layout: '00000000-0000-4000-8000-000000000004',
+  };
+  const users = {
+    key: 'users', label: 'Users', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+    matchSuggestions: { sourceField: 'primaryEmail', layoutHints: ['people'], fieldHints: ['email'] },
+    minimalFields: ['fullName', 'primaryEmail'],
+  };
+  const recommendation: RecommendedDestination = {
+    layout: { name: 'Workspace Users', slug: 'workspace_users', icon: 'user', color: 'iris' },
+    fields: [
+      { sourceField: 'fullName', name: 'Name', slug: 'name', fieldType: 'TEXT', syncDirection: 'source_wins', isPrimary: true, showInTable: true, options: {} },
+      { sourceField: 'primaryEmail', name: 'Email', slug: 'email', fieldType: 'EMAIL', syncDirection: 'source_wins', isPrimary: false, showInTable: true, options: {} },
+      { sourceField: 'orgUnit', name: 'Org unit', slug: 'org_unit', fieldType: 'TEXT', syncDirection: 'source_wins', isPrimary: false, showInTable: false, options: {} },
+    ],
+  };
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  function setup(state: { assetLayoutId?: string | null; mappings?: number } = {}) {
+    const row = {
+      id: ids.resource, integrationId: ids.integration, resourceKey: 'users', enabled: false,
+      targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+      assetLayoutId: state.assetLayoutId ?? null, assetLayout: null, matchKeyFieldIds: [],
+      _count: { fieldMappings: state.mappings ?? 0 }, createdAt: new Date(0), updatedAt: new Date(0),
+    };
+    const createdFields: Array<{ slug: string; fieldType: string }> = [];
+    const prisma: any = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: ids.integration, driver: 'gw' }) },
+      integrationResource: {
+        findUnique: jest.fn().mockResolvedValue(row),
+        updateMany: jest.fn(async () => { row.assetLayoutId = ids.layout; return { count: 1 }; }),
+        update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => Object.assign(row, data)),
+        findUniqueOrThrow: jest.fn(async () => ({
+          assetLayoutId: row.assetLayoutId,
+          fieldMappings: row.assetLayoutId
+            ? createdFields.map((f) => ({ sourceField: recommendation.fields.find((r) => r.slug === f.slug)!.sourceField, targetFieldId: `field-${f.slug}` }))
+            : [],
+        })),
+      },
+      assetLayout: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: ids.layout, slug: 'workspace_users', isActive: true }),
+      },
+      assetField: {
+        createMany: jest.fn(async ({ data }: { data: Array<{ slug: string; fieldType: string }> }) => {
+          createdFields.push(...data);
+          return { count: data.length };
+        }),
+        findMany: jest.fn(async () => createdFields.map((f) => ({ id: `field-${f.slug}`, slug: f.slug, fieldType: f.fieldType }))),
+      },
+      integrationFieldMapping: {
+        count: jest.fn().mockResolvedValue(state.mappings ?? 0),
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
+    };
+    prisma.$transaction = jest.fn(async (callback: (tx: unknown) => Promise<void>) => callback(prisma));
+    const drivers = {
+      get: jest.fn().mockReturnValue({
+        descriptor: { ...baseDescriptor, resources: [users] },
+        recommendedDestinations: { users: recommendation },
+      }),
+    };
+    const audit = { logChange: jest.fn().mockResolvedValue(undefined) };
+    const service = new IntegrationsService(
+      prisma as never, {} as never, audit as never, drivers as never,
+      {} as never, {} as never, { has: () => true } as never,
+    );
+    return { prisma, service, audit, createdFields };
+  }
+
+  it('creates only the minimal fields, sets the match key and enables the resource', async () => {
+    const { prisma, service, audit, createdFields } = setup();
+    await service.createResourceDestination({ id: ids.actor } as never, ids.integration, 'users', meta);
+    expect(createdFields.map((f) => f.slug)).toEqual(['name', 'email']);
+    expect(prisma.integrationResource.update).toHaveBeenCalledWith({
+      where: { id: ids.resource },
+      data: { enabled: true, matchKeyFieldIds: ['field-email'] },
+    });
+    expect(audit.logChange).toHaveBeenCalledWith(expect.objectContaining({
+      after: expect.objectContaining({ assetLayoutId: ids.layout, matchKeyFieldIds: ['field-email'] }),
+    }));
+  });
+
+  it('refuses a resource that already has a layout or mappings', async () => {
+    const { service, prisma } = setup({ assetLayoutId: ids.layout, mappings: 1 });
+    await expect(
+      service.createResourceDestination({ id: ids.actor } as never, ids.integration, 'users', meta),
+    ).rejects.toThrow(/Remove the layout/);
+    expect(prisma.assetLayout.create).not.toHaveBeenCalled();
+  });
+
+  it('never auto-applies a recommendation to a match-first resource on reconcile', async () => {
+    const { service, prisma } = setup();
+    prisma.integrationResource.upsert = jest.fn().mockResolvedValue({});
+    await service.reconcileResources(ids.integration);
+    expect(prisma.assetLayout.create).not.toHaveBeenCalled();
+    expect(prisma.integrationResource.updateMany).not.toHaveBeenCalled();
   });
 });

@@ -77,6 +77,26 @@ Workspace-wide defaults for the [password generator](/features/passwords/#passwo
 
 These defaults are used when the generator is opened without user-specific preferences. Users can override them per-session.
 
+## Integration OAuth Apps
+
+**Admin > Settings > Integrations** holds the OAuth app (client) that OAuth-based integrations connect through. You create the client once per Weavestream install in the provider's console (for example the Google Cloud console), then every integration of that provider uses it. Each customer connection is then one click: **Connect with Google** on the integration's **Credentials & schedule** tab.
+
+The card shows:
+
+| Item | What to do with it |
+|---|---|
+| Authorized redirect URI | Register it on the OAuth client exactly as shown. It is built from `API_URL` (`<API_URL>/v1/admin/integrations/oauth/callback`), so `API_URL` must be the public URL browsers use. |
+| Scopes | Add them to the consent screen. The list is the union of what the available integrations of that provider request. |
+| Client ID / Client secret | Paste them from the provider and save. |
+
+`API_URL` and `APP_URL` must share a host (for example `APP_URL=https://ws.example.com` and `API_URL=https://ws.example.com/api`). Session cookies are host-only, so on a different API host the browser arrives at the callback signed out and the connect fails. When the hosts differ, the card and **Check setup** show "API_URL and APP_URL must share a host for Connect with Google to keep you signed in."
+
+The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again. The card shows its last four characters so you can tell which secret is saved. To change only the client ID, leave the secret blank and the saved secret is kept (enter the new client's secret too if it differs). Saving needs the **Settings** permission and a fresh step-up confirmation, and is recorded in the audit log as `settings.integration_oauth_app.update`.
+
+Below the form, the card shows the provider's step-by-step **setup guide** (for Google, see [Google Workspace](/integrations/google-workspace/)) with copy buttons and links. **Check setup** verifies the saved client against the provider without any customer data and turns passed steps green; a failed step shows a fixed message saying what to fix. It is recorded as `settings.integration_oauth_app.check` (outcome and step ids only). The same guide, with a check that probes each provider API, is on every connected integration (recorded as `integration.setup_check`).
+
+Connecting, reconnecting and disconnecting an integration are recorded as `integration.oauth.connect`, `integration.oauth.connect.failed` (with a reason category, never the provider's error text) and `integration.oauth.disconnect`.
+
 ## What Settings Don't Change
 
 Workspace settings are **cosmetic only**. The following always remain as-is regardless of configuration:

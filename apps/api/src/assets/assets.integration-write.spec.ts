@@ -1009,6 +1009,280 @@ describe('AssetsService integration system writes', () => {
     })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
   });
 
+  describe('match-first (claimUnboundMatch)', () => {
+    it('adopts a single unbound manual candidate instead of creating a duplicate', async () => {
+      const manual = asset({ id: ids.manual, name: 'Manual edge', externalSource: null, externalId: null });
+      const { service, tx } = setup({ match: [manual] });
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      })).resolves.toMatchObject({ targetId: ids.manual, change: 'updated' });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+      expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ id: ids.manual }),
+        data: expect.objectContaining({ externalId: input.externalId, externalSource: 'breeze' }),
+      }));
+    });
+
+    it('lets only one of two racing mappings adopt the same unbound asset', async () => {
+      const manual = asset({ id: ids.manual, name: 'Manual edge', externalSource: null, externalId: null });
+      const { service, tx } = setup({ match: [manual] });
+      // One shared row. Both writers resolved it while it was still unbound
+      // (the match query keeps returning that snapshot); updatedAt is left
+      // untouched to model two writes landing in the same millisecond, so
+      // only the identity condition can stop the second adoption.
+      const row = { ...manual };
+      tx.asset.updateMany.mockImplementation(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const matches = Object.entries(where).every(([key, value]) => {
+          const current = (row as Record<string, unknown>)[key];
+          return value instanceof Date && current instanceof Date ? value.getTime() === current.getTime() : current === value;
+        });
+        if (!matches) return { count: 0 };
+        Object.assign(row, { externalId: data.externalId ?? row.externalId, externalSource: data.externalSource ?? row.externalSource });
+        return { count: 1 };
+      });
+      tx.asset.findUnique.mockImplementation(async () => ({ ...row }));
+      const first = await service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      });
+      const second = await service.writeFromIntegration({
+        ...input,
+        integrationCompanyMappingId: '54000000-0000-0000-0000-000000000011',
+        externalId: 'org-2:devices:edge-01',
+        externalSource: 'ninjaone',
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      });
+      expect(first).toMatchObject({ targetId: ids.manual, change: 'updated', adopted: true });
+      expect(second).toMatchObject({
+        targetId: ids.manual,
+        change: 'blocked',
+        gap: { kind: 'ambiguous', details: { reasonCode: 'match_first_claim_lost' } },
+      });
+      // The winner's identity stands; the loser wrote no field values.
+      expect(row).toMatchObject({ externalId: input.externalId, externalSource: 'breeze' });
+      expect(tx.asset.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ id: ids.manual, externalSource: null, externalId: null }),
+      }));
+      expect(tx.assetFieldValue.upsert).toHaveBeenCalledTimes(1);
+      expect(tx.asset.create).not.toHaveBeenCalled();
+    });
+
+    it('never adopts a candidate that carries another source identity', async () => {
+      const owned = asset({ id: ids.manual, externalSource: 'ninjaone', externalId: 'other-1' });
+      const { service, tx } = setup({ match: [owned] });
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
+      expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('still reports two unbound candidates as ambiguous and binds nothing', async () => {
+      const first = asset({ id: ids.manual, externalSource: null, externalId: null });
+      const second = asset({ id: '00000000-0000-0000-0000-000000000099', externalSource: null, externalId: null });
+      const { service, tx } = setup({ match: [first, second] });
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      })).resolves.toMatchObject({
+        change: 'blocked',
+        gap: { kind: 'ambiguous', details: { reasonCode: 'ambiguous_match' } },
+      });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+      expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('matches emails case-insensitively and trimmed through the EMAIL strategy', async () => {
+      const emailField = { ...field, fieldType: 'EMAIL', slug: 'email' };
+      const manual = asset({
+        id: ids.manual, externalSource: null, externalId: null,
+        fieldValues: [{ id: 'fv-1', companyId: ids.company, assetId: ids.manual, assetFieldId: ids.field, value: 'alice@example.com' }],
+      });
+      const { EmailStrategy } = await import('../field-types/strategies/contact.strategy.js');
+      const { service, prisma } = setup({
+        match: [manual],
+        layout: { ...layout, fields: [emailField] },
+        strategy: new EmailStrategy(),
+      });
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+        // The runner projects raw driver values through the strategy first.
+        fieldValues: [{ targetFieldId: ids.field, value: new EmailStrategy().normalize('  Alice@Example.COM '), syncDirection: 'source_wins' }],
+      })).resolves.toMatchObject({ targetId: ids.manual });
+      const where = prisma.asset.findMany.mock.calls[0][0].where;
+      const variants = where.AND[0].fieldValues.some.OR.map((clause: { value: { equals: unknown } }) => clause.value.equals);
+      expect(variants).toContain('alice@example.com');
+    });
+
+    it('matches a mixed-case email stored in a TEXT field case-insensitively', async () => {
+      const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
+      const manual = asset({
+        id: ids.manual, name: 'Alice (manual)', externalSource: null, externalId: null,
+        fieldValues: [{ id: 'fv-1', companyId: ids.company, assetId: ids.manual, assetFieldId: ids.field, value: 'Alice@Example.COM' }],
+      });
+      const { service, prisma, tx } = setup({ layout: { ...layout, fields: [textField] } });
+      // Exact-variant query misses; the in-memory fallback scan finds it.
+      for (const client of [prisma, tx]) {
+        client.asset.findMany.mockReset();
+        client.asset.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([manual]).mockResolvedValue([]);
+        client.asset.findUnique.mockResolvedValue(manual);
+      }
+      await expect(service.writeFromIntegration({
+        ...input,
+        name: 'alice@example.com',
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+        fieldValues: [{ targetFieldId: ids.field, value: 'alice@example.com', syncDirection: 'source_wins' }],
+      })).resolves.toMatchObject({ targetId: ids.manual });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+      const scan = prisma.asset.findMany.mock.calls[1][0].where;
+      expect(scan).toMatchObject({ externalSource: null, externalId: null, assetLayoutId: ids.layout });
+    });
+
+    it('reports a truncated fallback scan as ambiguous instead of adopting or creating', async () => {
+      const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
+      const many = Array.from({ length: 5_001 }, (_, i) => asset({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, externalSource: null, externalId: null }));
+      const { service, prisma, tx } = setup({ layout: { ...layout, fields: [textField] } });
+      for (const client of [prisma, tx]) {
+        client.asset.findMany.mockReset();
+        client.asset.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce(many).mockResolvedValue([]);
+      }
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+        fieldValues: [{ targetFieldId: ids.field, value: 'alice@example.com', syncDirection: 'source_wins' }],
+      })).resolves.toMatchObject({ change: 'blocked', gap: { kind: 'ambiguous', details: { reasonCode: 'match_first_index_overflow' } } });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+    });
+
+    it('does not fall back to the scan without claimUnboundMatch', async () => {
+      const { service, prisma } = setup({ match: [] });
+      await service.writeFromIntegration({ ...input, matchKeyFieldIds: [ids.field] });
+      expect(prisma.asset.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the operator name when adopting and on later syncs', async () => {
+      const manual = asset({ id: ids.manual, name: 'Operator name', externalSource: null, externalId: null });
+      const { service, tx } = setup({ match: [manual] });
+      await service.writeFromIntegration({
+        ...input,
+        name: 'Google display name',
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      });
+      const data = tx.asset.updateMany.mock.calls[0][0].data;
+      expect(data.name).toBe('Operator name');
+      expect(data.externalId).toBe(input.externalId);
+    });
+
+    it('reports adoption so the runner can mark the binding', async () => {
+      const manual = asset({ id: ids.manual, externalSource: null, externalId: null });
+      const { service } = setup({ match: [manual] });
+      await expect(service.writeFromIntegration({
+        ...input, matchKeyFieldIds: [ids.field], claimUnboundMatch: true,
+      })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
+    });
+
+    it('keeps the operator name on later syncs of an adopted binding', async () => {
+      const { service, tx } = setup({ target: asset({ name: 'Operator name' }), binding: binding() });
+      await service.writeFromIntegration({
+        ...input, existingTargetId: ids.asset, name: 'Google display name',
+        claimUnboundMatch: true, keepTargetName: true,
+        fieldValues: [{ targetFieldId: ids.field, value: 'edge-02', syncDirection: 'source_wins' }],
+      });
+      expect(tx.asset.updateMany.mock.calls[0][0].data.name).toBe('Operator name');
+    });
+
+    it('renames an asset the integration created itself on later syncs, even with match-first', async () => {
+      const { service, tx } = setup({ target: asset({ name: 'Old Google name' }), binding: binding() });
+      const result = await service.writeFromIntegration({
+        ...input, existingTargetId: ids.asset, name: 'New Google name', claimUnboundMatch: true,
+      });
+      expect(tx.asset.updateMany.mock.calls[0][0].data.name).toBe('New Google name');
+      expect(result).not.toHaveProperty('adopted');
+    });
+
+    it('builds the case-insensitive index once per run and reuses it for every record', async () => {
+      const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
+      const people = ['Alice@Example.COM', 'Bob@Example.COM', 'Carol@Example.COM'].map((value, i) => asset({
+        id: `00000000-0000-4000-8000-00000000000${i}`, name: value, externalSource: null, externalId: null,
+        fieldValues: [{ id: `fv-${i}`, companyId: ids.company, assetId: `a-${i}`, assetFieldId: ids.field, value }],
+      }));
+      const { service, prisma, tx } = setup({ layout: { ...layout, fields: [textField] } });
+      for (const client of [prisma, tx]) {
+        client.asset.findMany.mockReset();
+        // Exact-variant lookups miss; any call with `select` is the index build.
+        client.asset.findMany.mockImplementation(async (args: { select?: unknown }) => (args.select ? people : []));
+        client.asset.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => people.find((p) => p.id === where.id) ?? null);
+      }
+      const matchFirstIndexes = new Map();
+      for (const [i, email] of ['alice@example.com', 'bob@example.com', 'carol@example.com', 'dave@example.com'].entries()) {
+        const result = await service.writeFromIntegration({
+          ...input, externalId: `user-${i}`, name: email, matchKeyFieldIds: [ids.field],
+          claimUnboundMatch: true, matchFirstIndexes,
+          fieldValues: [{ targetFieldId: ids.field, value: email, syncDirection: 'source_wins' }],
+        });
+        expect(result.targetId).toBe(i < 3 ? people[i]!.id : ids.asset);
+      }
+      const builds = [...prisma.asset.findMany.mock.calls, ...tx.asset.findMany.mock.calls]
+        .filter(([args]) => (args as { select?: unknown }).select !== undefined);
+      expect(builds).toHaveLength(1);
+      expect(matchFirstIndexes.size).toBe(1);
+    });
+
+    it('reports two assets sharing a lowercased key as ambiguous from the index', async () => {
+      const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
+      const twins = ['Alice@Example.com', 'ALICE@example.com'].map((value, i) => asset({
+        id: `00000000-0000-4000-8000-00000000001${i}`, externalSource: null, externalId: null,
+        fieldValues: [{ id: `fv-${i}`, companyId: ids.company, assetId: `a-${i}`, assetFieldId: ids.field, value }],
+      }));
+      const { service, prisma, tx } = setup({ layout: { ...layout, fields: [textField] } });
+      for (const client of [prisma, tx]) {
+        client.asset.findMany.mockReset();
+        client.asset.findMany.mockImplementation(async (args: { select?: unknown }) => (args.select ? twins : []));
+      }
+      await expect(service.writeFromIntegration({
+        ...input, matchKeyFieldIds: [ids.field], claimUnboundMatch: true,
+        fieldValues: [{ targetFieldId: ids.field, value: 'alice@example.com', syncDirection: 'source_wins' }],
+      })).resolves.toMatchObject({ change: 'blocked', gap: { kind: 'ambiguous', details: { reasonCode: 'ambiguous_match' } } });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+      expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('does not adopt an indexed asset that an earlier record of the run already adopted', async () => {
+      const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
+      const stored = asset({
+        id: ids.manual, externalSource: null, externalId: null,
+        fieldValues: [{ id: 'fv-1', companyId: ids.company, assetId: ids.manual, assetFieldId: ids.field, value: 'Alice@Example.COM' }],
+      });
+      const { service, prisma, tx } = setup({ layout: { ...layout, fields: [textField] } });
+      for (const client of [prisma, tx]) {
+        client.asset.findMany.mockReset();
+        client.asset.findMany.mockImplementation(async (args: { select?: unknown }) => (args.select ? [stored] : []));
+        client.asset.findUnique.mockResolvedValue({ ...stored, externalSource: 'breeze', externalId: 'user-0' });
+      }
+      await expect(service.writeFromIntegration({
+        ...input, externalId: 'user-1', matchKeyFieldIds: [ids.field], claimUnboundMatch: true,
+        fieldValues: [{ targetFieldId: ids.field, value: 'alice@example.com', syncDirection: 'source_wins' }],
+      })).resolves.toMatchObject({ change: 'created' });
+    });
+
+    it('still renames on update for resources without match-first', async () => {
+      const { service, tx } = setup({ target: asset({ name: 'Old name' }), binding: binding() });
+      await service.writeFromIntegration({ ...input, existingTargetId: ids.asset, name: 'New name' });
+      expect(tx.asset.updateMany.mock.calls[0][0].data.name).toBe('New name');
+    });
+  });
+
   it('blocks multiple unbound natural-key candidates as ambiguous', async () => {
     const first = asset({ id: ids.manual, externalSource: null, externalId: null });
     const second = asset({ id: '00000000-0000-0000-0000-000000000099', externalSource: null, externalId: null });

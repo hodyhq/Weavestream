@@ -155,6 +155,29 @@ const resourceDescriptorBaseShape = {
    */
   defaultEnabled: z.boolean().optional(),
   dependsOnResourceKeys: z.array(driverResourceKeySchema).max(64).default([]),
+  /**
+   * Guided layout matching ("Map layouts"). `sourceField` is the driver
+   * field records are matched on; `layoutHints` / `fieldHints` are
+   * lower-case layout and field slug/name hints used to pre-select an
+   * existing layout and its match-key field. Declaring this also opts the
+   * resource into match-first: on a sync, an unbound asset with no
+   * external identity whose match-key value equals the record's is
+   * adopted instead of creating a duplicate.
+   */
+  matchSuggestions: z
+    .object({
+      sourceField: z.string().min(1).max(128),
+      layoutHints: z.array(z.string().min(1).max(64)).max(16),
+      fieldHints: z.array(z.string().min(1).max(64)).max(16),
+    })
+    .strict()
+    .optional(),
+  /**
+   * Source fields the driver writes into layout fields (normally the name
+   * and the match key). Everything else a record carries goes into its
+   * integration `section`. "Create new layout" only creates these fields.
+   */
+  minimalFields: z.array(z.string().min(1).max(128)).max(8).optional(),
 } as const;
 
 const assetTargetConfigSchema = z
@@ -264,6 +287,102 @@ export const driverResourceDescriptorSchema = z
 
 export type DriverResourceDescriptor = z.infer<typeof driverResourceDescriptorSchema>;
 
+// ---------------------------------------------------------------------
+// OAuth (authorization-code) drivers
+// ---------------------------------------------------------------------
+
+/** Providers an instance-wide OAuth app can be configured for. */
+export const integrationOAuthProviderSchema = z.enum(['google']);
+export type IntegrationOAuthProvider = z.infer<typeof integrationOAuthProviderSchema>;
+
+/** Display names for OAuth providers (UI copy). */
+export const INTEGRATION_OAUTH_PROVIDER_LABELS: Record<IntegrationOAuthProvider, string> = {
+  google: 'Google',
+};
+
+const httpsUrlSchema = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((value) => value.startsWith('https://'), 'OAuth endpoints must use https://');
+
+/**
+ * A driver that connects through the OAuth authorization-code flow (with
+ * PKCE) declares its provider endpoints and scopes here. The framework
+ * owns the flow; the reserved authorize parameters (client_id,
+ * redirect_uri, response_type, scope, state, code_challenge*) always win
+ * over `extraAuthorizeParams`.
+ */
+export const driverOAuthDescriptorSchema = z
+  .object({
+    provider: integrationOAuthProviderSchema,
+    authorizeUrl: httpsUrlSchema,
+    tokenUrl: httpsUrlSchema,
+    revokeUrl: httpsUrlSchema.optional(),
+    scopes: z.array(z.string().min(1).max(256)).min(1).max(50),
+    extraAuthorizeParams: z.record(z.string().max(256)).optional(),
+  })
+  .strict();
+export type DriverOAuthDescriptor = z.infer<typeof driverOAuthDescriptorSchema>;
+
+// ---------------------------------------------------------------------
+// Setup guide (step-by-step provider setup shown in the UI)
+// ---------------------------------------------------------------------
+
+/** Values the UI fills in at render time (they depend on the install). */
+export const setupGuideComputedValueSchema = z.enum(['redirectUri', 'scopes', 'authorizedOrigin']);
+export type SetupGuideComputedValue = z.infer<typeof setupGuideComputedValueSchema>;
+
+const setupGuideLabelSchema = z.string().min(1).max(80);
+
+/**
+ * One numbered setup step. `body` is plain text with a tiny markdown
+ * subset (blank-line paragraphs, `- ` bullets, `**bold**`) that the UI
+ * renders as React elements, never as HTML. Links are https only.
+ */
+export const setupGuideStepSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{1,48}$/),
+    title: z.string().min(1).max(120),
+    body: z.string().min(1).max(3000),
+    copyValues: z
+      .array(
+        z.union([
+          z.object({ label: setupGuideLabelSchema, value: z.string().min(1).max(2048) }).strict(),
+          z.object({ label: setupGuideLabelSchema, computed: setupGuideComputedValueSchema }).strict(),
+        ]),
+      )
+      .max(6)
+      .optional(),
+    links: z
+      .array(z.object({ label: setupGuideLabelSchema, href: httpsUrlSchema }).strict())
+      .max(6)
+      .optional(),
+  })
+  .strict();
+export type SetupGuideStep = z.infer<typeof setupGuideStepSchema>;
+
+export const setupGuideSchema = z
+  .array(setupGuideStepSchema)
+  .min(1)
+  .max(20)
+  .refine((steps) => new Set(steps.map((s) => s.id)).size === steps.length, 'Setup guide step ids must be unique');
+
+/**
+ * Result of a "Check setup" run. `passedStepIds` turn green in the guide;
+ * each failure names the step to revisit with a fixed message (provider
+ * error text is never passed through).
+ */
+export const integrationSetupCheckSchema = z.object({
+  ok: z.boolean(),
+  passedStepIds: z.array(z.string()),
+  /** `stepId` null: a problem not tied to one step (e.g. rate limited, try again). */
+  failures: z.array(z.object({ stepId: z.string().nullable(), message: z.string() })),
+  /** A step the check could not verify: neither passed nor failed, with a fixed note. */
+  notes: z.array(z.object({ stepId: z.string(), message: z.string() })).optional(),
+});
+export type IntegrationSetupCheck = z.infer<typeof integrationSetupCheckSchema>;
+
 export const driverDescriptorSchema = z
   .object({
   /** Stable id used as `Integration.driver` and in registry lookups. */
@@ -283,6 +402,10 @@ export const driverDescriptorSchema = z
    * Assets, so per-resource layouts and field mappings don't apply.
    */
   resources: z.array(driverResourceDescriptorSchema).default([]),
+  /** Present when the driver connects with the OAuth authorization-code flow. */
+  oauth: driverOAuthDescriptorSchema.optional(),
+  /** Optional step-by-step provider setup guide rendered in the UI. */
+  setupGuide: setupGuideSchema.optional(),
   /** Driver capabilities surfaced to the UI. */
   capabilities: z.object({
     /**
@@ -1079,3 +1202,66 @@ export const integrationTargetProvenanceSchema = z
   })
   .strict();
 export type IntegrationTargetProvenance = z.infer<typeof integrationTargetProvenanceSchema>;
+
+/**
+ * Admin view of an instance-wide OAuth app. The client secret is
+ * write-only: only `secretMask` (its last four characters) is returned.
+ */
+export const integrationOAuthAppSchema = z.object({
+  provider: integrationOAuthProviderSchema,
+  configured: z.boolean(),
+  clientId: z.string().nullable(),
+  secretMask: z.string().nullable(),
+  /** Callback URL to register with the provider (computed from `API_URL`). */
+  redirectUri: z.string(),
+  /**
+   * Fixed warning when `API_URL` and `APP_URL` are on different hosts: the
+   * host-only session cookie is not sent to the callback. Null when fine.
+   */
+  callbackHostWarning: z.string().nullable(),
+  /** Union of the scopes every registered driver of this provider requests. */
+  scopes: z.array(z.string()),
+  updatedAt: z.string().nullable(),
+  /** Setup guide of the first registered driver of this provider, if any. */
+  setupGuide: z.array(setupGuideStepSchema).optional(),
+});
+export type IntegrationOAuthApp = z.infer<typeof integrationOAuthAppSchema>;
+
+export const updateIntegrationOAuthAppSchema = z
+  .object({
+    clientId: z.string().trim().min(1).max(512),
+    /**
+     * Required on first save. Omit it to keep the stored secret (e.g. to
+     * correct the client ID); the API rejects an omitted secret when none
+     * is stored yet.
+     */
+    clientSecret: z.string().trim().min(1).max(512).optional(),
+  })
+  .strict();
+export type UpdateIntegrationOAuthAppInput = z.infer<typeof updateIntegrationOAuthAppSchema>;
+
+/** Connection state of one OAuth integration (never carries tokens). */
+export const integrationOAuthStatusSchema = z.object({
+  provider: integrationOAuthProviderSchema,
+  appConfigured: z.boolean(),
+  /** Callback URL registered with the provider (shown in the setup guide). */
+  redirectUri: z.string(),
+  /**
+   * A stored grant exists but cannot be decrypted or parsed (e.g. key
+   * rotated). `connection` is null; the UI offers Reconnect and Disconnect.
+   */
+  needsReconnect: z.boolean(),
+  connection: z
+    .object({
+      connectedAs: z.string().nullable(),
+      connectedAt: z.string(),
+      grantedScopes: z.array(z.string()),
+    })
+    .nullable(),
+});
+export type IntegrationOAuthStatus = z.infer<typeof integrationOAuthStatusSchema>;
+
+export const integrationOAuthStartResponseSchema = z.object({
+  authorizeUrl: z.string().url(),
+});
+export type IntegrationOAuthStartResponse = z.infer<typeof integrationOAuthStartResponseSchema>;

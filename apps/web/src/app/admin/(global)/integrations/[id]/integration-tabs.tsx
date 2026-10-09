@@ -14,8 +14,9 @@ import { FieldMappingsTab } from './field-mappings-tab';
 import { OrgsTab } from './orgs-tab';
 import { RunsTab } from './runs-tab';
 import { CompletenessTab } from './completeness-tab';
+import { MapLayoutsTab, matchableResources } from './map-layouts-tab';
 
-type StaticTabId = 'creds' | 'orgs' | 'completeness' | 'runs';
+type StaticTabId = 'creds' | 'orgs' | 'layouts' | 'completeness' | 'runs';
 type ResourceTabId = `fields:${string}`;
 type TabId = StaticTabId | ResourceTabId;
 
@@ -48,6 +49,13 @@ const STATIC_TABS_HEAD: TabDescriptor[] = [
     kind: 'static',
   },
 ];
+
+const MAP_LAYOUTS_TAB: TabDescriptor = {
+  id: 'layouts',
+  label: 'Map layouts',
+  help: 'Choose the layout and match field for each kind of record.',
+  kind: 'static',
+};
 
 const STATIC_TABS_TAIL: TabDescriptor[] = [
   {
@@ -159,7 +167,11 @@ export function IntegrationTabs({
     const tail = driver?.capabilities?.reconstructionCompleteness
       ? STATIC_TABS_TAIL
       : STATIC_TABS_TAIL.filter((t) => t.id !== 'completeness');
-    return [...STATIC_TABS_HEAD, ...resourceTabs, ...tail];
+    // Guided matcher only for drivers whose resources declare match suggestions.
+    const head = matchableResources(driver).length > 0
+      ? [...STATIC_TABS_HEAD, MAP_LAYOUTS_TAB]
+      : STATIC_TABS_HEAD;
+    return [...head, ...resourceTabs, ...tail];
   }, [driver]);
 
   // Resolve the initial tab against the descriptor list. Legacy `fields`
@@ -267,6 +279,7 @@ export function IntegrationTabs({
             driver={driver}
           />
         )}
+        {tab === 'layouts' && <MapLayoutsTab integration={integration} driver={driver} />}
         {tab === 'runs' && (
           <RunsTab integration={integration} runs={runs} mappings={mappings} />
         )}

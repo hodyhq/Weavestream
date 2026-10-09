@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import type { AiSettings, EmailSettings } from '@weavestream/shared';
+import type { AiSettings, EmailSettings, IntegrationOAuthApp } from '@weavestream/shared';
 import type { Settings } from '../../../../lib/server-api/settings';
 import {
   ArticleSettingsForm,
@@ -12,8 +12,9 @@ import {
 import { EmailSettingsForm } from './email-settings-form';
 import { AiSettingsForm } from './ai-settings-form';
 import { ApiKeysSwitch } from './api-keys-switch';
+import { IntegrationOAuthAppCard } from './integration-oauth-app-card';
 
-type TabId = 'general' | 'security' | 'articles' | 'email' | 'ai';
+export type TabId = 'general' | 'security' | 'articles' | 'email' | 'ai' | 'integrations';
 
 const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
@@ -41,6 +42,11 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     label: 'AI',
     help: 'OpenAI-compatible LLM endpoint (Ollama, LMStudio, …).',
   },
+  {
+    id: 'integrations',
+    label: 'Integrations',
+    help: 'OAuth apps that integrations connect through.',
+  },
 ];
 
 export function SettingsTabs({
@@ -48,12 +54,14 @@ export function SettingsTabs({
   settings,
   emailSettings,
   aiSettings,
+  googleOAuthApp,
   currentUserEmail,
 }: {
   initialTab: TabId;
   settings: Settings;
   emailSettings: EmailSettings;
   aiSettings: AiSettings;
+  googleOAuthApp: IntegrationOAuthApp | null;
   currentUserEmail: string;
 }) {
   const router = useRouter();
@@ -128,6 +136,7 @@ export function SettingsTabs({
           />
         )}
         {tab === 'ai' && <AiSettingsForm initial={aiSettings} />}
+        {tab === 'integrations' && <IntegrationOAuthAppCard initial={googleOAuthApp} provider="google" />}
       </div>
     </div>
   );

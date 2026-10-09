@@ -4,6 +4,11 @@ import { IntegrationsCoreModule } from './integrations-core.module.js';
 import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registrar.js';
 import { CloudflareListsController } from './cloudflare/cloudflare-lists.controller.js';
 import { TicketsGlobalController } from './tickets-global.controller.js';
+import {
+  IntegrationOAuthAppsController,
+  IntegrationOAuthController,
+} from './oauth/integration-oauth.controller.js';
+import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
 
 /**
  * Phase 11 — universal integration framework module (API side).
@@ -21,8 +26,10 @@ import { TicketsGlobalController } from './tickets-global.controller.js';
     IntegrationsController,
     CloudflareListsController,
     TicketsGlobalController,
+    IntegrationOAuthAppsController,
+    IntegrationOAuthController,
   ],
-  providers: [IntegrationSyncQueueRegistrar],
+  providers: [IntegrationSyncQueueRegistrar, IntegrationOAuthService],
   exports: [IntegrationsCoreModule],
 })
 export class IntegrationsModule {}

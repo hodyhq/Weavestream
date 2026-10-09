@@ -10,8 +10,9 @@ import type {
   ReconstructionGapDetails,
   ReconstructionInput,
 } from '../reconstruction/reconstruction-target.js';
-import type { ReconstructionGapKind } from '@weavestream/shared';
+import type { IntegrationSetupCheck, ReconstructionGapKind } from '@weavestream/shared';
 import type { FieldType } from '@prisma/client';
+import type { OAuthClientCredentials } from '../oauth/oauth-token.js';
 
 /**
  * Phase 11 — universal integration driver port.
@@ -62,6 +63,19 @@ export interface IntegrationContext {
    * resolves that from `IntegrationCompanyMapping`.
    */
   readonly integrationId?: string;
+  /**
+   * Instance OAuth app credentials, set by the framework only for drivers
+   * whose descriptor declares `oauth`. Drivers never read it directly:
+   * `getOAuthAccessToken` / `oauthFetch` (oauth/oauth-token.ts) do.
+   */
+  readonly oauthClient?: OAuthClientCredentials;
+  /**
+   * Non-secret marker of the stored credential row and instance OAuth app
+   * (row ids + updatedAt). Changes on every reconnect or app save, so the
+   * OAuth access-token cache keys on it instead of hashing a secret. When
+   * absent, access tokens are not cached.
+   */
+  readonly credentialVersion?: string;
 }
 
 export interface FetchRecordsContext extends IntegrationContext {
@@ -92,8 +106,20 @@ export interface LegacyDriverRecord {
   externalId: string;
   /** Driver-side display name; used as the asset's primary name fallback. */
   displayName: string | null;
-  /** Flat map of source-field key → raw value. */
+  /**
+   * Flat map of source-field key → raw value. Drivers whose resources
+   * declare `minimalFields` put ONLY those fields here (normally the name
+   * and the match key) so a sync never writes anything else into the
+   * operator's layout fields; every other detail goes into `section`.
+   */
   fields: Record<string, unknown>;
+  /**
+   * Optional read-only detail card for the asset page, validated by the
+   * runner against `integrationSectionSchema` (shared). Plain data only,
+   * never HTML. Replaced on every sync (omit it to clear); an invalid
+   * section is dropped with a run warning and never fails the record.
+   */
+  section?: unknown;
   /**
    * Optional immutable source definition key used to select exactly one
    * configured field mapping. Records without a matching mapping are skipped.
@@ -259,7 +285,25 @@ export interface IntegrationDriver {
   ): Promise<TicketListResponse>;
 
   getTicket?(ctx: TicketContext, ticketId: string): Promise<TicketDetailDto>;
+
+  /**
+   * Optional "Check setup" for drivers that ship a `setupGuide`. `client`
+   * verifies the instance OAuth app without a customer token; `connection`
+   * probes a connected integration. Read-only, and failures carry fixed
+   * messages naming a guide step (never provider error text).
+   */
+  diagnose?(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck>;
 }
+
+export type DriverDiagnoseInput =
+  | {
+      mode: 'client';
+      oauthClient: OAuthClientCredentials;
+      redirectUri: string;
+      http: IntegrationContext['http'];
+      correlationId: string;
+    }
+  | { mode: 'connection'; ctx: IntegrationContext };
 
 /**
  * Type guard for drivers that advertise the optional ticket surface.

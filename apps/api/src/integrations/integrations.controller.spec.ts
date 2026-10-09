@@ -1,9 +1,11 @@
 import { IntegrationsController } from './integrations.controller.js';
 import { IntegrationsService } from './integrations.service.js';
+import { OAUTH_CALLBACK_HOST_WARNING } from './oauth/integration-oauth-app.service.js';
 import { REQUIRE_PERMISSION_KEY } from '../rbac/require-permission.decorator.js';
 import { REQUIRE_STEP_UP_KEY } from '../auth/step-up/require-step-up.decorator.js';
 import { integrationSecretAad } from '../crypto/integration-secret-encryption.service.js';
 import { Logger } from '@nestjs/common';
+import { DriverAuthError, DriverRateLimitError } from './drivers/integration-driver.js';
 
 describe('IntegrationsController security contract', () => {
   const metadata = (key: string, handler: keyof IntegrationsController) =>
@@ -24,6 +26,7 @@ describe('IntegrationsController security contract', () => {
     ['list', 'integration.manage'],
     ['get', 'integration.manage'],
     ['testConnection', 'integration.manage'],
+    ['checkSetup', 'integration.manage'],
     ['listSourceOrgs', 'integration.manage'],
     ['listMappings', 'integration.manage'],
     ['createMapping', 'integration.manage'],
@@ -32,6 +35,7 @@ describe('IntegrationsController security contract', () => {
     ['deleteMapping', 'integration.manage'],
     ['getCompleteness', 'integration.manage'],
     ['listGaps', 'integration.manage'],
+    ['createResourceDestination', 'integration.manage'],
     ['triggerSync', 'sync.trigger'],
   ] as const)('%s retains the %s permission contract', (handler, action) => {
     expect(metadata(REQUIRE_PERMISSION_KEY, handler)).toEqual({
@@ -57,6 +61,64 @@ describe('IntegrationsController security contract', () => {
     );
 
     await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs });
+  });
+
+  function checkSetupController(env: { API_URL: string; APP_URL: string }) {
+    const diagnose = jest.fn().mockResolvedValue({
+      ok: false, passedStepIds: ['project'], failures: [{ stepId: 'apis', message: 'Enable it.' }],
+    });
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const controller = new IntegrationsController(
+      { loadDriverContext: jest.fn().mockResolvedValue({ integrationId: 'i-1', driver: 'google-workspace', config: {}, secret: { refreshToken: 'r' } }) } as never,
+      {} as never,
+      {} as never,
+      { get: jest.fn().mockReturnValue({ diagnose }), describe: () => ({ oauth: { provider: 'google' } }) } as never,
+      { values: { ...env, INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
+      audit as never,
+      {} as never,
+      {} as never,
+    );
+    const run = () => controller.checkSetup({ id: 'actor' } as never, '00000000-0000-4000-8000-000000000001', { ip: '127.0.0.1', headers: {} } as never);
+    return { diagnose, audit, run };
+  }
+
+  it('runs the driver connection check and audits only the outcome and step ids', async () => {
+    const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    const result = await run();
+    expect(result.failures).toEqual([{ stepId: 'apis', message: 'Enable it.' }]);
+    expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ mode: 'connection', ctx: expect.objectContaining({ integrationId: 'i-1' }) }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.setup_check', after: { ok: false, failedStepIds: ['apis'] },
+    }));
+  });
+
+  it('adds the fixed host warning to an OAuth check when API_URL and APP_URL hosts differ', async () => {
+    const { audit, run } = checkSetupController({ API_URL: 'https://api.example.test', APP_URL: 'https://ws.example.test' });
+    const result = await run();
+    expect(result.failures).toContainEqual({ stepId: null, message: OAUTH_CALLBACK_HOST_WARNING });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      after: { ok: false, failedStepIds: ['apis', null] },
+    }));
+  });
+
+  it.each([
+    ['auth', new DriverAuthError('refused'), 'The provider refused the connection. Reconnect the integration and try again.'],
+    ['rate limit', new DriverRateLimitError('slow down'), 'The provider is rate limiting requests. Try again in a minute.'],
+  ])('turns a driver %s error from diagnose into an audited failed check', async (_kind, error, message) => {
+    const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    diagnose.mockRejectedValueOnce(error);
+    const result = await run();
+    expect(result).toEqual({ ok: false, passedStepIds: [], failures: [{ stepId: null, message }] });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.setup_check', after: { ok: false, failedStepIds: [null] },
+    }));
+  });
+
+  it('lets an unexpected diagnose error surface as a server error', async () => {
+    const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    diagnose.mockRejectedValueOnce(new Error('boom'));
+    await expect(run()).rejects.toThrow('boom');
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it.each([true, false])('propagates dryRun=%s through the existing sync route', async (dryRun) => {

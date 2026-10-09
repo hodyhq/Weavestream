@@ -9,14 +9,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   integrationProvenanceSchema,
   integrationReconstructionGapInputSchema,
+  integrationSectionSchema,
   integrationTransformSchema,
   stripNul,
 } from '@weavestream/shared';
 import type {
+  IntegrationSection,
   SafeIntegrationProvenance,
   SyncRunConflict,
   SyncRunTotals,
 } from '@weavestream/shared';
+import type { MatchFirstIndexCache } from '../assets/assets.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService, type AuditEntry } from '../audit/audit.service.js';
 import { EnvService } from '../config/env.service.js';
@@ -274,11 +277,20 @@ export class IntegrationSyncRunnerService {
       },
     });
     const driver = this.drivers.get(mapping.integration.driver);
+    const claimUnboundMatches = driver.descriptor?.resources?.some(
+      (candidate) =>
+        candidate.key === resource.resourceKey && candidate.matchSuggestions !== undefined,
+    ) ?? false;
+    // One lowercased match-first index per run, shared by every record.
+    const matchFirstIndexes: MatchFirstIndexCache = new Map();
     const loaded = await this.integrations.loadDriverContext(mapping.integrationId);
     const traversalStartedAt = new Date().toISOString();
     const fetchCtx: FetchRecordsContext = {
       config: loaded.config,
       secret: loaded.secret,
+      oauthClient: loaded.oauthClient,
+      credentialVersion: loaded.credentialVersion,
+      integrationId: loaded.integrationId,
       http: {
         timeoutMs: this.env.values.INTEGRATION_HTTP_TIMEOUT_MS,
         maxRetries: this.env.values.INTEGRATION_HTTP_MAX_RETRIES,
@@ -467,6 +479,19 @@ export class IntegrationSyncRunnerService {
             const legacyRawId = safeRecord.reconstructionInput === undefined
               ? safeRecord.externalId
               : null;
+            // Typed inputs carry no section; legacy records replace theirs on
+            // every sync (absent clears it). An invalid section is dropped
+            // with a run warning and never fails the record.
+            const section = safeRecord.reconstructionInput === undefined
+              ? parseRecordSection(safeRecord.section)
+              : undefined;
+            if (section === 'invalid') {
+              pageConflicts.push({
+                kind: 'validation_error',
+                externalId: reconstruction.externalId,
+                message: 'Integration section failed validation and was dropped.',
+              });
+            }
             const writeNow = new Date();
             const existing = await this.findAndMigrateBinding(
               tx,
@@ -525,6 +550,9 @@ export class IntegrationSyncRunnerService {
               previousChecksum: existing?.checksum ?? null,
               previousFieldChecksums: (existing?.lastSyncedFieldChecksums ?? {}) as Record<string, string>,
               previousProvenance: parseProvenance(existing?.provenance),
+              claimUnboundMatches: claimUnboundMatches,
+              previousAdopted: existing?.adopted === true,
+              matchFirstIndexes,
               resolveBinding: (ref) => this.resolveBinding(tx, mapping.id, mapping.companyId, mapping.integrationId, ref),
             };
             const writer = this.writers.get(reconstruction.targetKind) as ReconstructionWriter<ReconstructionInput>;
@@ -607,8 +635,8 @@ export class IntegrationSyncRunnerService {
                   externalId: reconstruction.externalId,
                 },
               },
-              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow),
-              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow),
+              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section),
+              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section),
             });
             for (const gap of outcome.gaps) observeGap({
               externalId: reconstruction.externalId,
@@ -1132,8 +1160,16 @@ function bindingData(
   provenance: SafeIntegrationProvenance,
   observedAt: Date,
   syncedAt: Date,
+  section?: IntegrationSection | 'invalid' | null,
 ) {
   return {
+    ...(section === undefined || outcome.targetKind !== 'asset'
+      ? {}
+      : {
+          sectionData: section === null || section === 'invalid'
+            ? Prisma.DbNull
+            : (section as unknown as Prisma.InputJsonValue),
+        }),
     integrationCompanyMappingId: mappingId,
     resourceId,
     syncRunId,
@@ -1153,7 +1189,25 @@ function bindingData(
     provenance: provenance as unknown as Prisma.InputJsonValue,
     checksum: outcome.checksum,
     lastSyncedFieldChecksums: (outcome.fieldChecksums ?? {}) as Prisma.InputJsonValue,
+    // Sticky: set once when the binding adopts an operator asset, never cleared.
+    ...(outcome.adopted ? { adopted: true } : {}),
   };
+}
+
+/**
+ * Validate a legacy record's optional `section`. Returns null when absent,
+ * 'invalid' when it fails the shared schema or carries credential-shaped
+ * material (scanned per row so a full-size section stays within the
+ * scanner's entry budget).
+ */
+export function parseRecordSection(raw: unknown): IntegrationSection | 'invalid' | null {
+  if (raw === undefined || raw === null) return null;
+  const parsed = integrationSectionSchema.safeParse(raw);
+  if (!parsed.success) return 'invalid';
+  const { groups, ...head } = parsed.data;
+  const parts: unknown[] = [head];
+  for (const { rows, ...group } of groups) parts.push(group, ...rows);
+  return parts.every((part) => scanSensitiveMaterial(part) === 'safe') ? parsed.data : 'invalid';
 }
 
 function deriveLegacyHighWater(records: DriverRecord[]): string | null {
