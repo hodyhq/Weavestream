@@ -20,7 +20,8 @@ function app(over: Partial<IntegrationOAuthApp> = {}): IntegrationOAuthApp {
     provider: 'google',
     configured: false,
     clientId: null,
-    secretFingerprint: null,
+    secretMask: null,
+    callbackHostWarning: null,
     redirectUri: REDIRECT,
     scopes: ['openid', 'scope.read'],
     updatedAt: null,
@@ -60,7 +61,7 @@ describe('IntegrationOAuthAppCard', () => {
     apiFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      data: app({ configured: true, clientId: 'client-1', secretFingerprint: 'abc123def456' }),
+      data: app({ configured: true, clientId: 'client-1', secretMask: '••••f456' }),
     });
     renderCard(app());
     const save = screen.getByRole('button', { name: 'Save OAuth app' });
@@ -75,12 +76,12 @@ describe('IntegrationOAuthAppCard', () => {
       body: JSON.stringify({ clientId: 'client-1', clientSecret: 'typed-secret' }),
     });
     expect(screen.getByLabelText('Client secret')).toHaveValue('');
-    expect(screen.getByText(/abc123def456/)).toBeInTheDocument();
+    expect(screen.getByText(/ends in ••••f456/)).toBeInTheDocument();
     expect(screen.getByText('configured')).toBeInTheDocument();
   });
 
   it('saves a changed client ID without re-entering a stored secret', async () => {
-    const configured = app({ configured: true, clientId: 'client-1', secretFingerprint: 'abc123def456' });
+    const configured = app({ configured: true, clientId: 'client-1', secretMask: '••••f456' });
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: { ...configured, clientId: 'client-2' } });
     renderCard(configured);
     const save = screen.getByRole('button', { name: 'Save OAuth app' });
@@ -130,7 +131,7 @@ describe('IntegrationOAuthAppCard', () => {
       ok: true, status: 200,
       data: { ok: false, passedStepIds: ['client'], failures: [{ stepId: 'credentials', message: 'Copy both again.' }] },
     });
-    renderCard(app({ configured: true, clientId: 'client-1', secretFingerprint: 'abc', setupGuide: guide }));
+    renderCard(app({ configured: true, clientId: 'client-1', secretMask: '••••', setupGuide: guide }));
     // Configured: the guide starts collapsed.
     fireEvent.click(screen.getByRole('button', { name: /Setup guide/ }));
     await act(async () => {
@@ -146,5 +147,16 @@ describe('IntegrationOAuthAppCard', () => {
     renderCard(app({ setupGuide: [{ id: 'project', title: 'Create a project', body: 'Do it.' }] }));
     expect(screen.getByText('Create a project')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Check setup/ })).toBeDisabled();
+  });
+
+  it('warns when API_URL and APP_URL are on different hosts', () => {
+    const warning = 'API_URL and APP_URL must share a host for Connect with Google to keep you signed in.';
+    renderCard(app({ callbackHostWarning: warning }));
+    expect(screen.getByText(warning)).toBeInTheDocument();
+  });
+
+  it('shows no host warning on a same-host install', () => {
+    renderCard(app());
+    expect(screen.queryByText(/must share a host/)).not.toBeInTheDocument();
   });
 });

@@ -51,7 +51,7 @@ export const AUDIT_ACTIONS = {
     // `after` carry `{ apiKeysEnabled }`.
     apiKeysToggle: 'settings.api_keys.toggle',
     // Instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`).
-    // `after` carries the provider, client id and secret fingerprint only.
+    // `after` carries the provider, client id and the secret's last-four mask only.
     integrationOAuthAppUpdate: 'settings.integration_oauth_app.update',
     // Check setup on the OAuth app: outcome and failed step ids only.
     integrationOAuthAppCheck: 'settings.integration_oauth_app.check',

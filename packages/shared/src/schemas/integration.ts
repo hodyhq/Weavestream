@@ -1205,15 +1205,20 @@ export type IntegrationTargetProvenance = z.infer<typeof integrationTargetProven
 
 /**
  * Admin view of an instance-wide OAuth app. The client secret is
- * write-only: only `secretFingerprint` (a SHA-256 prefix) is returned.
+ * write-only: only `secretMask` (its last four characters) is returned.
  */
 export const integrationOAuthAppSchema = z.object({
   provider: integrationOAuthProviderSchema,
   configured: z.boolean(),
   clientId: z.string().nullable(),
-  secretFingerprint: z.string().nullable(),
+  secretMask: z.string().nullable(),
   /** Callback URL to register with the provider (computed from `API_URL`). */
   redirectUri: z.string(),
+  /**
+   * Fixed warning when `API_URL` and `APP_URL` are on different hosts: the
+   * host-only session cookie is not sent to the callback. Null when fine.
+   */
+  callbackHostWarning: z.string().nullable(),
   /** Union of the scopes every registered driver of this provider requests. */
   scopes: z.array(z.string()),
   updatedAt: z.string().nullable(),
@@ -1241,6 +1246,11 @@ export const integrationOAuthStatusSchema = z.object({
   appConfigured: z.boolean(),
   /** Callback URL registered with the provider (shown in the setup guide). */
   redirectUri: z.string(),
+  /**
+   * A stored grant exists but cannot be decrypted or parsed (e.g. key
+   * rotated). `connection` is null; the UI offers Reconnect and Disconnect.
+   */
+  needsReconnect: z.boolean(),
   connection: z
     .object({
       connectedAs: z.string().nullable(),

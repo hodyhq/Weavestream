@@ -69,6 +69,13 @@ export interface IntegrationContext {
    * `getOAuthAccessToken` / `oauthFetch` (oauth/oauth-token.ts) do.
    */
   readonly oauthClient?: OAuthClientCredentials;
+  /**
+   * Non-secret marker of the stored credential row and instance OAuth app
+   * (row ids + updatedAt). Changes on every reconnect or app save, so the
+   * OAuth access-token cache keys on it instead of hashing a secret. When
+   * absent, access tokens are not cached.
+   */
+  readonly credentialVersion?: string;
 }
 
 export interface FetchRecordsContext extends IntegrationContext {

@@ -25,7 +25,7 @@ const oauth: DriverOAuthDescriptor = {
 };
 
 function status(over: Record<string, unknown> = {}) {
-  return { ok: true, status: 200, data: { provider: 'google', appConfigured: true, redirectUri: 'https://ws.example.test/cb', connection: null, ...over } };
+  return { ok: true, status: 200, data: { provider: 'google', appConfigured: true, redirectUri: 'https://ws.example.test/cb', needsReconnect: false, connection: null, ...over } };
 }
 
 async function renderIt() {
@@ -73,6 +73,15 @@ describe('OAuthConnection', () => {
     expect(screen.getByText('admin@example.test')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reconnect/ })).toBeEnabled();
     expect(screen.getByRole('button', { name: /Disconnect/ })).toBeInTheDocument();
+  });
+
+  it('offers Reconnect and Disconnect when the saved grant is unreadable', async () => {
+    apiFetch.mockResolvedValueOnce(status({ needsReconnect: true }));
+    await renderIt();
+    expect(screen.getByText('needs reconnect')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Reconnect/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Disconnect/ })).toBeInTheDocument();
+    expect(screen.queryByText('not connected')).not.toBeInTheDocument();
   });
 
   it('disables connecting and links to Settings when the OAuth app is missing', async () => {

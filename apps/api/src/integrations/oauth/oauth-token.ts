@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { decodeJwt } from 'jose';
 import type { DriverOAuthDescriptor } from '@weavestream/shared';
@@ -21,6 +20,8 @@ import { fetchWithRetry, type FetchWithRetryOpts } from '../drivers/driver-utils
 export interface OAuthClientCredentials {
   readonly clientId: string;
   readonly clientSecret: string;
+  /** Non-secret marker of the stored app row (id + updatedAt); changes on every save. */
+  readonly version?: string;
 }
 
 /** Decrypted shape of an OAuth integration's `IntegrationSecret`. */
@@ -171,8 +172,8 @@ export async function revokeOAuthToken(
 interface CachedAccessToken {
   token: string;
   expiresAt: number;
-  /** Hash of (client id, refresh token): a reconnect or app change misses the cache. */
-  fingerprint: string;
+  /** `IntegrationContext.credentialVersion` it was minted under: a reconnect or app change misses the cache. */
+  version: string;
 }
 
 /** Refresh this long before the provider's stated expiry. */
@@ -190,18 +191,11 @@ export function __resetOAuthAccessTokenCacheForTests(): void {
   accessTokenCache.clear();
 }
 
-function fingerprintOf(client: OAuthClientCredentials, refreshToken: string): string {
-  return createHash('sha256')
-    .update(`${client.clientId}\0${refreshToken}`)
-    .digest('hex')
-    .slice(0, 32);
-}
-
 function requireOAuthMaterial(ctx: IntegrationContext): {
   client: OAuthClientCredentials;
   stored: StoredOAuthSecret;
-  fingerprint: string;
-  cacheKey: string;
+  /** Null when the context lacks an integration id or version marker: no caching then. */
+  cache: { key: string; version: string } | null;
 } {
   if (!ctx.oauthClient) {
     throw new DriverAuthError(
@@ -212,12 +206,14 @@ function requireOAuthMaterial(ctx: IntegrationContext): {
   if (!stored) {
     throw new DriverAuthError('This integration is not connected. Connect it from its Credentials tab.');
   }
-  const fingerprint = fingerprintOf(ctx.oauthClient, stored.refreshToken);
+  // Keyed by non-secret row markers, never by a hash of the token or client secret.
   return {
     client: ctx.oauthClient,
     stored,
-    fingerprint,
-    cacheKey: ctx.integrationId ? `id:${ctx.integrationId}` : `fp:${fingerprint}`,
+    cache:
+      ctx.integrationId && ctx.credentialVersion
+        ? { key: `id:${ctx.integrationId}`, version: ctx.credentialVersion }
+        : null,
   };
 }
 
@@ -233,17 +229,18 @@ export async function getOAuthAccessToken(
   oauth: DriverOAuthDescriptor,
   opts: { forceRefresh?: boolean } = {},
 ): Promise<string> {
-  const { client, stored, fingerprint, cacheKey } = requireOAuthMaterial(ctx);
-  const cached = accessTokenCache.get(cacheKey);
+  const { client, stored, cache } = requireOAuthMaterial(ctx);
+  const cached = cache ? accessTokenCache.get(cache.key) : undefined;
   if (
     !opts.forceRefresh &&
+    cache &&
     cached &&
-    cached.fingerprint === fingerprint &&
+    cached.version === cache.version &&
     cached.expiresAt > Date.now()
   ) {
     return cached.token;
   }
-  accessTokenCache.delete(cacheKey);
+  if (cache) accessTokenCache.delete(cache.key);
 
   let tokens: OAuthTokenResponse;
   try {
@@ -275,11 +272,13 @@ export async function getOAuthAccessToken(
   }
 
   const ttlMs = tokens.expires_in ? tokens.expires_in * 1_000 : DEFAULT_TTL_MS;
-  accessTokenCache.set(cacheKey, {
-    token: tokens.access_token,
-    fingerprint,
-    expiresAt: Date.now() + Math.max(ttlMs - EXPIRY_SKEW_MS, 0),
-  });
+  if (cache) {
+    accessTokenCache.set(cache.key, {
+      token: tokens.access_token,
+      version: cache.version,
+      expiresAt: Date.now() + Math.max(ttlMs - EXPIRY_SKEW_MS, 0),
+    });
+  }
   return tokens.access_token;
 }
 

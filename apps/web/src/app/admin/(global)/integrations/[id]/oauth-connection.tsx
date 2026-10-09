@@ -130,6 +130,9 @@ export function OAuthConnection({
   }
 
   const connection = status?.connection ?? null;
+  // An unreadable stored grant still occupies the slot: offer Reconnect and Disconnect.
+  const needsReconnect = status?.needsReconnect ?? false;
+  const hasGrant = Boolean(connection) || needsReconnect;
   const appConfigured = status?.appConfigured ?? false;
 
   return (
@@ -153,6 +156,11 @@ export function OAuthConnection({
               )}
               <FormattedDate value={connection.connectedAt} />.
             </p>
+          ) : needsReconnect ? (
+            <p style={{ margin: 0, fontSize: 13 }}>
+              <Tag tone="danger">needs reconnect</Tag> The saved connection can&apos;t be read. Reconnect,
+              or disconnect to remove it.
+            </p>
           ) : (
             <p style={{ margin: 0, fontSize: 13 }}>
               <Tag tone="warn">not connected</Tag> Sign in with an administrator account of the
@@ -170,16 +178,16 @@ export function OAuthConnection({
           )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Btn
-              kind={connection ? 'outline' : 'primary'}
+              kind={hasGrant ? 'outline' : 'primary'}
               size="sm"
-              icon={connection ? Icon.refresh : Icon.plug}
+              icon={hasGrant ? Icon.refresh : Icon.plug}
               onClick={() => void connect()}
               loading={busy === 'connect'}
               disabled={!appConfigured || busy !== null}
             >
-              {connection ? 'Reconnect' : `Connect with ${label}`}
+              {hasGrant ? 'Reconnect' : `Connect with ${label}`}
             </Btn>
-            {connection && (
+            {hasGrant && (
               <Btn
                 kind="ghost"
                 size="sm"

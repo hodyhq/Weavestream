@@ -62,6 +62,7 @@ import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PermissionService } from '../rbac/permission.service.js';
 import { describeError } from '../common/describe-error.js';
+import { withCallbackHostWarning } from './oauth/integration-oauth-app.service.js';
 
 /**
  * Phase 11 — admin integrations API.
@@ -249,6 +250,7 @@ export class IntegrationsController {
               secret: ctx.secret,
               integrationId: ctx.integrationId,
               oauthClient: ctx.oauthClient,
+              credentialVersion: ctx.credentialVersion,
               http,
               correlationId,
             } satisfies IntegrationContext);
@@ -307,17 +309,22 @@ export class IntegrationsController {
     const ctx = await this.integrations.loadDriverContext(id);
     const driver = this.drivers.get(ctx.driver);
     if (!driver.diagnose) throw new BadRequestException('This integration has no setup check.');
-    const result = await driver.diagnose({
+    const diagnosed = await driver.diagnose({
       mode: 'connection',
       ctx: {
         config: ctx.config,
         secret: ctx.secret,
         integrationId: ctx.integrationId,
         oauthClient: ctx.oauthClient,
+        credentialVersion: ctx.credentialVersion,
         http: this.httpDefaults(),
         correlationId: randomUUID(),
       },
     });
+    // OAuth drivers connect through the callback, which needs the session cookie.
+    const result = this.drivers.describe(ctx.driver).oauth
+      ? withCallbackHostWarning(this.env.values, diagnosed)
+      : diagnosed;
     await this.audit.log({
       actorId: user.id,
       action: AUDIT_ACTIONS.integration.setupCheck,
@@ -341,6 +348,7 @@ export class IntegrationsController {
       secret: ctx.secret,
       integrationId: ctx.integrationId,
       oauthClient: ctx.oauthClient,
+      credentialVersion: ctx.credentialVersion,
       http: this.httpDefaults(),
       correlationId: randomUUID(),
     };
@@ -489,6 +497,7 @@ export class IntegrationsController {
       secret: ctx.secret,
       integrationId: ctx.integrationId,
       oauthClient: ctx.oauthClient,
+      credentialVersion: ctx.credentialVersion,
       http: this.httpDefaults(),
       correlationId: randomUUID(),
       externalOrgId: resolvedOrgId,

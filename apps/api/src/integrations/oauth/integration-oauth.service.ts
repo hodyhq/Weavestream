@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -113,11 +112,12 @@ export class IntegrationOAuthService {
       where: { provider: oauth.provider },
       select: { id: true },
     });
-    const stored = row.secret ? this.decryptStored(row.id, row.secret.ciphertext) : null;
+    const { stored, unreadable } = this.readStored(row.id, row.secret?.ciphertext);
     return {
       provider: oauth.provider,
       appConfigured: Boolean(client),
       redirectUri: this.apps.redirectUri(),
+      needsReconnect: unreadable,
       connection: stored
         ? {
             connectedAs: stored.connectedAs ?? null,
@@ -272,7 +272,9 @@ export class IntegrationOAuthService {
 
   async disconnect(actor: AuthedUser, integrationId: string, meta: RequestMeta): Promise<void> {
     const { row, oauth } = await this.requireOAuthIntegration(integrationId);
-    const stored = row.secret ? this.decryptStored(row.id, row.secret.ciphertext) : null;
+    // An unreadable secret is still wiped: revocation is skipped (no token
+    // to send), and the audit row says why.
+    const { stored, unreadable } = this.readStored(row.id, row.secret?.ciphertext);
     let revoked = false;
     if (stored && oauth.revokeUrl) {
       const correlationId = randomUUID();
@@ -296,7 +298,11 @@ export class IntegrationOAuthService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: { connected: Boolean(stored) },
-      after: { provider: oauth.provider, revoked },
+      after: {
+        provider: oauth.provider,
+        revoked,
+        ...(unreadable ? { reason: 'secret_unreadable' } : {}),
+      },
     });
   }
 
@@ -311,9 +317,19 @@ export class IntegrationOAuthService {
     return { row, oauth };
   }
 
-  private decryptStored(integrationId: string, ciphertext: string): StoredOAuthSecret | null {
+  /**
+   * Decrypt and parse the stored grant. `unreadable` is true when a secret
+   * row exists but cannot be decrypted or parsed (key rotated, damaged):
+   * the UI then offers Reconnect / Disconnect instead of failing.
+   */
+  private readStored(
+    integrationId: string,
+    ciphertext: string | undefined,
+  ): { stored: StoredOAuthSecret | null; unreadable: boolean } {
+    if (ciphertext === undefined) return { stored: null, unreadable: false };
+    let stored: StoredOAuthSecret | null;
     try {
-      return parseStoredOAuthSecret(
+      stored = parseStoredOAuthSecret(
         JSON.parse(this.crypto.decrypt(ciphertext, integrationSecretAad(integrationId))),
       );
     } catch (e) {
@@ -321,8 +337,10 @@ export class IntegrationOAuthService {
         { err: (e as Error).message, integrationId },
         'failed to decrypt integration secret',
       );
-      throw new ConflictException('Stored integration secret could not be decrypted (key rotated?).');
+      return { stored: null, unreadable: true };
     }
+    if (!stored) this.logger.warn({ integrationId }, 'stored OAuth grant does not parse; reconnect needed');
+    return { stored, unreadable: !stored };
   }
 
   private landing(integrationId: string | null, ok: boolean): string {

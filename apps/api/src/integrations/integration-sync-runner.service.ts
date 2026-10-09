@@ -289,6 +289,7 @@ export class IntegrationSyncRunnerService {
       config: loaded.config,
       secret: loaded.secret,
       oauthClient: loaded.oauthClient,
+      credentialVersion: loaded.credentialVersion,
       integrationId: loaded.integrationId,
       http: {
         timeoutMs: this.env.values.INTEGRATION_HTTP_TIMEOUT_MS,

@@ -53,12 +53,16 @@ const crypto = {
   },
 };
 
-function setup(opts: { driver?: DriverDescriptor; client?: typeof CLIENT | null; secret?: object | null } = {}) {
+function setup(
+  opts: { driver?: DriverDescriptor; client?: typeof CLIENT | null; secret?: object | null; ciphertext?: string } = {},
+) {
   const redis = makeRedis();
   const secretRow =
-    opts.secret === undefined || opts.secret === null
-      ? null
-      : { ciphertext: crypto.encrypt(JSON.stringify(opts.secret), integrationSecretAad(INTEGRATION_ID)) };
+    opts.ciphertext !== undefined
+      ? { ciphertext: opts.ciphertext }
+      : opts.secret === undefined || opts.secret === null
+        ? null
+        : { ciphertext: crypto.encrypt(JSON.stringify(opts.secret), integrationSecretAad(INTEGRATION_ID)) };
   const prisma = {
     integration: {
       findUnique: jest.fn(async ({ where }: { where: { id: string } }) =>
@@ -350,6 +354,7 @@ describe('IntegrationOAuthService.disconnect and status', () => {
       provider: 'google',
       appConfigured: true,
       redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
+      needsReconnect: false,
       connection: {
         connectedAs: 'admin@example.test',
         connectedAt: '2026-01-01T00:00:00.000Z',
@@ -383,6 +388,43 @@ describe('IntegrationOAuthService.disconnect and status', () => {
     expect(ctx.prisma.integrationSecret.deleteMany).toHaveBeenCalled();
     expect(ctx.audit.log).toHaveBeenCalledWith(
       expect.objectContaining({ after: { provider: 'google', revoked: false } }),
+    );
+  });
+
+  // Encrypted under another integration's AAD: decrypt fails, as after a key rotation.
+  const undecryptable = crypto.encrypt(JSON.stringify(stored), integrationSecretAad('00000000-0000-4000-8000-000000000099'));
+  const wrongShape = crypto.encrypt(JSON.stringify({ unexpected: true }), integrationSecretAad(INTEGRATION_ID));
+
+  it.each([
+    ['cannot be decrypted', undecryptable],
+    ['does not parse', wrongShape],
+  ])('reports needsReconnect instead of throwing when the stored grant %s', async (_label, ciphertext) => {
+    const status = await setup({ ciphertext }).service.status(INTEGRATION_ID);
+    expect(status).toMatchObject({ needsReconnect: true, connection: null });
+  });
+
+  it('reports no reconnect need when nothing is stored', async () => {
+    await expect(setup().service.status(INTEGRATION_ID)).resolves.toMatchObject({
+      needsReconnect: false,
+      connection: null,
+    });
+  });
+
+  it.each([
+    ['cannot be decrypted', undecryptable],
+    ['does not parse', wrongShape],
+  ])('wipes a stored grant that %s without calling the provider, and audits why', async (_label, ciphertext) => {
+    const ctx = setup({ ciphertext });
+    const calls = scriptFetch([]);
+    await ctx.service.disconnect(USER, INTEGRATION_ID, META);
+    expect(calls).toHaveLength(0);
+    expect(ctx.prisma.integrationSecret.deleteMany).toHaveBeenCalled();
+    expect(ctx.audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'integration.oauth.disconnect',
+        before: { connected: false },
+        after: { provider: 'google', revoked: false, reason: 'secret_unreadable' },
+      }),
     );
   });
 });

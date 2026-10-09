@@ -1067,14 +1067,17 @@ describe('IntegrationsService OAuth drivers', () => {
     oauth: { provider: 'google', scopes: ['s'] },
   } as unknown as DriverDescriptor;
 
-  function setup(client: { clientId: string; clientSecret: string } | null) {
+  function setup(
+    client: { clientId: string; clientSecret: string; version?: string } | null,
+    secretRow = { id: 'secret-1', ciphertext: 'blob', updatedAt: new Date('2026-01-01T00:00:00Z') },
+  ) {
     const prisma = {
       integration: {
         findUnique: jest.fn(async () => ({
           id,
           driver: 'fake-oauth',
           config: {},
-          secret: { ciphertext: 'blob' },
+          secret: secretRow,
           resources: [],
           _count: { companyMappings: 0 },
           createdAt: new Date(0),
@@ -1098,6 +1101,20 @@ describe('IntegrationsService OAuth drivers', () => {
     const ctx = await service.loadDriverContext(id);
     expect(oauthApps.getClient).toHaveBeenCalledWith('google');
     expect(ctx.oauthClient).toEqual(client);
+  });
+
+  it('stamps a non-secret credential version that changes on reconnect or app save', async () => {
+    const client = { clientId: 'client-1', clientSecret: 'test-client-secret', version: 'app-1@2026-01-01T00:00:00.000Z' };
+    const base = await setup(client).service.loadDriverContext(id);
+    expect(base.credentialVersion).toBe('secret-1@2026-01-01T00:00:00.000Z|app-1@2026-01-01T00:00:00.000Z');
+    expect(base.credentialVersion).not.toContain('test-client-secret');
+    expect(base.credentialVersion).not.toContain('test-refresh-tail');
+    const reconnected = await setup(client, {
+      id: 'secret-1', ciphertext: 'blob', updatedAt: new Date('2026-01-02T00:00:00Z'),
+    }).service.loadDriverContext(id);
+    expect(reconnected.credentialVersion).not.toBe(base.credentialVersion);
+    const appSaved = await setup({ ...client, version: 'app-1@2026-01-03T00:00:00.000Z' }).service.loadDriverContext(id);
+    expect(appSaved.credentialVersion).not.toBe(base.credentialVersion);
   });
 
   it('omits the OAuth app when none is configured', async () => {

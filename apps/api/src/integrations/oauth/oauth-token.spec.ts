@@ -62,6 +62,7 @@ function ctx(overrides: Partial<IntegrationContext> = {}): IntegrationContext {
       connectedAt: '2026-01-01T00:00:00.000Z',
     },
     oauthClient: { clientId: 'client-1', clientSecret: 'test-client-secret' },
+    credentialVersion: 'secret-1@2026-01-01T00:00:00.000Z|app-1@2026-01-01T00:00:00.000Z',
     http: HTTP,
     correlationId: 'corr',
     ...overrides,
@@ -103,25 +104,32 @@ describe('getOAuthAccessToken', () => {
     expect(calls).toHaveLength(2);
   });
 
-  it('misses the cache when the stored grant changes (reconnect)', async () => {
+  // The cache keys on non-secret row markers, so a changed marker must miss
+  // even when the refresh token and client are byte-for-byte the same.
+  it.each([
+    ['the stored grant is replaced (reconnect)', 'secret-2@2026-02-01T00:00:00.000Z|app-1@2026-01-01T00:00:00.000Z'],
+    ['the instance OAuth app is saved again', 'secret-1@2026-01-01T00:00:00.000Z|app-1@2026-02-01T00:00:00.000Z'],
+  ])('misses the cache when %s', async (_label, credentialVersion) => {
     const calls = script([
       { body: { access_token: 'access-1', expires_in: 3600 } },
       { body: { access_token: 'access-2', expires_in: 3600 } },
     ]);
     await getOAuthAccessToken(ctx(), OAUTH);
-    const reconnected = ctx({
-      secret: { refreshToken: 'test-refresh-2', grantedScopes: [], connectedAt: 'x' },
-    });
-    await expect(getOAuthAccessToken(reconnected, OAUTH)).resolves.toBe('access-2');
+    await expect(getOAuthAccessToken(ctx({ credentialVersion }), OAUTH)).resolves.toBe('access-2');
     expect(calls).toHaveLength(2);
   });
 
-  it('keys by fingerprint when no integration id is supplied', async () => {
-    const calls = script([{ body: { access_token: 'access-1', expires_in: 3600 } }]);
-    const anon = ctx({ integrationId: undefined });
-    await getOAuthAccessToken(anon, OAUTH);
-    await getOAuthAccessToken(anon, OAUTH);
-    expect(calls).toHaveLength(1);
+  it.each([
+    ['an integration id', { integrationId: undefined }],
+    ['a credential version', { credentialVersion: undefined }],
+  ])('does not cache without %s', async (_label, overrides) => {
+    const calls = script([
+      { body: { access_token: 'access-1', expires_in: 3600 } },
+      { body: { access_token: 'access-2', expires_in: 3600 } },
+    ]);
+    await getOAuthAccessToken(ctx(overrides), OAUTH);
+    await expect(getOAuthAccessToken(ctx(overrides), OAUTH)).resolves.toBe('access-2');
+    expect(calls).toHaveLength(2);
   });
 
   it('maps invalid_grant to DriverAuthError (Reconnect)', async () => {

@@ -1146,6 +1146,10 @@ export class AssetsService {
                 // edit.
                 archivedAt: target!.archivedAt,
                 updatedAt: target!.updatedAt,
+                // Match-first adoption is an atomic claim: it only lands while
+                // the asset still has no external identity, so two mappings or
+                // resources racing for the same manual asset cannot both adopt it.
+                ...(claimed ? { externalSource: null, externalId: null } : {}),
               },
               data: {
                 ...(restored ? { archivedAt: null } : {}),
@@ -1171,6 +1175,17 @@ export class AssetsService {
             throw error;
           }
           if (guarded.count === 0) {
+            if (claimed) {
+              const now = await tx.asset.findUnique({
+                where: { id: target!.id },
+                select: { externalSource: true, externalId: true },
+              });
+              // Another writer adopted it first: never overwrite its identity
+              // or fields, and never fall through to creating a duplicate.
+              if (now && (now.externalSource !== null || now.externalId !== null)) {
+                return { status: 'claim_lost' as const };
+              }
+            }
             return { status: 'conflict' as const };
           }
           // Side-effecting field resolution is safe only after the guarded
@@ -1214,6 +1229,15 @@ export class AssetsService {
       }
       if (outcome.status === 'conflict') {
         return 'revision_conflict';
+      }
+      if (outcome.status === 'claim_lost') {
+        return integrationAssetBlocked(
+          input.companyId,
+          'ambiguous',
+          'Another integration record adopted the matching asset at the same time; link this record manually.',
+          'match_first_claim_lost',
+          target.id,
+        );
       }
       this.updateIntegrationFieldChecksums(
         directionByFieldId,

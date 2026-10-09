@@ -89,7 +89,9 @@ The card shows:
 | Scopes | Add them to the consent screen. The list is the union of what the available integrations of that provider request. |
 | Client ID / Client secret | Paste them from the provider and save. |
 
-The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again. The card shows a short SHA-256 fingerprint so you can tell which secret is saved. To change only the client ID, leave the secret blank and the saved secret is kept (enter the new client's secret too if it differs). Saving needs the **Settings** permission and a fresh step-up confirmation, and is recorded in the audit log as `settings.integration_oauth_app.update`.
+`API_URL` and `APP_URL` must share a host (for example `APP_URL=https://ws.example.com` and `API_URL=https://ws.example.com/api`). Session cookies are host-only, so on a different API host the browser arrives at the callback signed out and the connect fails. When the hosts differ, the card and **Check setup** show "API_URL and APP_URL must share a host for Connect with Google to keep you signed in."
+
+The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again. The card shows its last four characters so you can tell which secret is saved. To change only the client ID, leave the secret blank and the saved secret is kept (enter the new client's secret too if it differs). Saving needs the **Settings** permission and a fresh step-up confirmation, and is recorded in the audit log as `settings.integration_oauth_app.update`.
 
 Below the form, the card shows the provider's step-by-step **setup guide** (for Google, see [Google Workspace](/integrations/google-workspace/)) with copy buttons and links. **Check setup** verifies the saved client against the provider without any customer data and turns passed steps green; a failed step shows a fixed message saying what to fix. It is recorded as `settings.integration_oauth_app.check` (outcome and step ids only). The same guide, with a check that probes each provider API, is on every connected integration (recorded as `integration.setup_check`).
 

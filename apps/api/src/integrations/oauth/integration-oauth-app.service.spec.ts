@@ -1,6 +1,10 @@
 import { ConflictException, Logger } from '@nestjs/common';
 import { integrationOAuthAppSecretAad } from '../../crypto/integration-secret-encryption.service.js';
-import { IntegrationOAuthAppService } from './integration-oauth-app.service.js';
+import {
+  IntegrationOAuthAppService,
+  OAUTH_CALLBACK_HOST_WARNING,
+  callbackHostWarning,
+} from './integration-oauth-app.service.js';
 
 const crypto = {
   encrypt: (plaintext: string, aad: string) => `enc[${aad}]${plaintext}`,
@@ -11,13 +15,13 @@ const crypto = {
   },
 };
 
-function setup(row: { clientId: string; secretCiphertext: string; updatedAt: Date } | null = null) {
+function setup(row: { id?: string; clientId: string; secretCiphertext: string; updatedAt: Date } | null = null) {
   let stored = row;
   const prisma = {
     integrationOAuthApp: {
       findUnique: jest.fn(async () => stored),
       upsert: jest.fn(async ({ create }: { create: { clientId: string; secretCiphertext: string } }) => {
-        stored = { ...create, updatedAt: new Date('2026-01-02T00:00:00Z') };
+        stored = { id: 'app-1', ...create, updatedAt: new Date('2026-01-02T00:00:00Z') };
         return stored;
       }),
       update: jest.fn(async ({ data }: { data: { clientId: string } }) => {
@@ -34,7 +38,7 @@ function setup(row: { clientId: string; secretCiphertext: string; updatedAt: Dat
       { key: 'c' },
     ],
   };
-  const env = { values: { API_URL: 'https://ws.example.test/api/' } };
+  const env = { values: { API_URL: 'https://ws.example.test/api/', APP_URL: 'https://ws.example.test' } };
   const service = new IntegrationOAuthAppService(
     prisma as never,
     crypto as never,
@@ -55,8 +59,9 @@ describe('IntegrationOAuthAppService', () => {
       provider: 'google',
       configured: false,
       clientId: null,
-      secretFingerprint: null,
+      secretMask: null,
       redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
+      callbackHostWarning: null,
       scopes: ['openid', 'scope.a', 'scope.b'],
       updatedAt: null,
     });
@@ -78,7 +83,8 @@ describe('IntegrationOAuthAppService', () => {
     );
     expect(call[0].create.updatedBy).toBe('user-1');
     expect(dto.configured).toBe(true);
-    expect(dto.secretFingerprint).toMatch(/^[0-9a-f]{12}$/);
+    // The last-four mask of the existing secret helpers, never a hash of the secret.
+    expect(dto.secretMask).toBe('••••cret');
     expect(JSON.stringify(dto)).not.toContain('test-client-secret');
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -87,6 +93,9 @@ describe('IntegrationOAuthAppService', () => {
       }),
     );
     expect(JSON.stringify(audit.log.mock.calls)).not.toContain('test-client-secret');
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      after: { provider: 'google', clientId: 'client-1', secretMask: '••••cret' },
+    }));
   });
 
   it('keeps the stored secret when only the client ID changes', async () => {
@@ -101,7 +110,7 @@ describe('IntegrationOAuthAppService', () => {
       data: { clientId: 'new-client', updatedBy: 'user-1' },
     });
     expect(dto.clientId).toBe('new-client');
-    await expect(service.getClient('google')).resolves.toEqual({ clientId: 'new-client', clientSecret: 'kept-secret' });
+    await expect(service.getClient('google')).resolves.toMatchObject({ clientId: 'new-client', clientSecret: 'kept-secret' });
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
       after: { provider: 'google', clientId: 'new-client', secretKept: true },
     }));
@@ -117,13 +126,16 @@ describe('IntegrationOAuthAppService', () => {
 
   it('decrypts client credentials for runtime use', async () => {
     const { service } = setup({
+      id: 'app-1',
       clientId: 'client-1',
       secretCiphertext: crypto.encrypt('test-client-secret', integrationOAuthAppSecretAad('google')),
-      updatedAt: new Date(),
+      updatedAt: new Date('2026-01-02T00:00:00Z'),
     });
     await expect(service.getClient('google')).resolves.toEqual({
       clientId: 'client-1',
       clientSecret: 'test-client-secret',
+      // Non-secret cache marker: row id + updatedAt, never derived from the secret.
+      version: 'app-1@2026-01-02T00:00:00.000Z',
     });
   });
 
@@ -140,7 +152,7 @@ describe('IntegrationOAuthAppService', () => {
     await expect(service.getClient('google')).rejects.toBeInstanceOf(ConflictException);
     await expect(service.get('google')).resolves.toMatchObject({
       configured: true,
-      secretFingerprint: null,
+      secretMask: null,
     });
   });
 
@@ -157,7 +169,7 @@ describe('IntegrationOAuthAppService', () => {
       drivers.kindOf = () => 'pull';
       drivers.get = (key: string) => (key === 'gw' ? { diagnose } : {});
       (ctx.service as unknown as { env: { values: Record<string, unknown> } }).env.values = {
-        API_URL: 'https://ws.example.test/api/', INTEGRATION_HTTP_TIMEOUT_MS: 5_000, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1,
+        API_URL: 'https://ws.example.test/api/', APP_URL: 'https://ws.example.test', INTEGRATION_HTTP_TIMEOUT_MS: 5_000, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1,
       };
       return { ...ctx, diagnose };
     }
@@ -171,7 +183,7 @@ describe('IntegrationOAuthAppService', () => {
       await expect(service.check(actor, 'google', meta)).resolves.toEqual({ ok: true, passedStepIds: ['client'], failures: [] });
       expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({
         mode: 'client',
-        oauthClient: { clientId: 'client-1', clientSecret: 'shh-secret' },
+        oauthClient: expect.objectContaining({ clientId: 'client-1', clientSecret: 'shh-secret' }),
         redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
       }));
       expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
@@ -189,9 +201,36 @@ describe('IntegrationOAuthAppService', () => {
       expect(diagnose).not.toHaveBeenCalled();
     });
 
+    it('fails with the fixed host warning when API_URL and APP_URL differ in host', async () => {
+      const { service, audit } = checkSetup({
+        clientId: 'client-1', secretCiphertext: `enc[${integrationOAuthAppSecretAad('google')}]shh-secret`, updatedAt: new Date(),
+      });
+      const env = (service as unknown as { env: { values: Record<string, unknown> } }).env.values;
+      env.API_URL = 'https://api.example.test';
+      await expect(service.check(actor, 'google', meta)).resolves.toEqual({
+        ok: false,
+        passedStepIds: ['client'],
+        failures: [{ stepId: null, message: OAUTH_CALLBACK_HOST_WARNING }],
+      });
+      await expect(service.get('google')).resolves.toMatchObject({ callbackHostWarning: OAUTH_CALLBACK_HOST_WARNING });
+      expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ after: expect.objectContaining({ ok: false }) }));
+    });
+
     it('returns the driver setup guide with the app view', async () => {
       const { service } = checkSetup(null);
       await expect(service.get('google')).resolves.toMatchObject({ setupGuide: guide });
     });
+  });
+});
+
+describe('callbackHostWarning', () => {
+  it('is null for the normal same-host setup, ports ignored', () => {
+    expect(callbackHostWarning('https://ws.example.test/api', 'https://ws.example.test')).toBeNull();
+    expect(callbackHostWarning('http://localhost:4000', 'http://localhost:3000')).toBeNull();
+  });
+
+  it('warns when the hosts differ or a URL is unparseable', () => {
+    expect(callbackHostWarning('https://api.example.test', 'https://ws.example.test')).toBe(OAUTH_CALLBACK_HOST_WARNING);
+    expect(callbackHostWarning('not a url', 'https://ws.example.test')).toBe(OAUTH_CALLBACK_HOST_WARNING);
   });
 });

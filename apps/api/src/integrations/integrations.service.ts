@@ -42,6 +42,7 @@ import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.se
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { Prisma } from '@prisma/client';
 import { assertStringIdList } from '../common/safe-id-list.js';
+import { maskSecretTail } from '../common/redact-secrets.js';
 import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
@@ -583,6 +584,8 @@ export class IntegrationsService {
     secret: Record<string, unknown>;
     /** Instance OAuth app credentials; set only for OAuth drivers with an app configured. */
     oauthClient?: OAuthClientCredentials;
+    /** Non-secret marker of the secret row and OAuth app; see `IntegrationContext.credentialVersion`. */
+    credentialVersion: string;
   }> {
     const row = await this.prisma.integration.findUnique({
       where: { id },
@@ -619,6 +622,7 @@ export class IntegrationsService {
       config: (row.config ?? {}) as Record<string, unknown>,
       secret,
       ...(oauthClient ? { oauthClient } : {}),
+      credentialVersion: `${row.secret.id}@${row.secret.updatedAt.toISOString()}|${oauthClient?.version ?? 'no-app'}`,
     };
   }
 
@@ -1472,7 +1476,7 @@ export class IntegrationsService {
         secretMask = {};
         for (const [k, v] of Object.entries(parsed ?? {})) {
           if (typeof v === 'string' && v.length > 0) {
-            secretMask[k] = v.length <= 4 ? '••••' : `••••${v.slice(-4)}`;
+            secretMask[k] = maskSecretTail(v);
           }
         }
       } catch {

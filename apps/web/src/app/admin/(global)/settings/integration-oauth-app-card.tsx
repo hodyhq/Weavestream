@@ -14,7 +14,7 @@ import { SectionHeader } from './settings-form';
  *
  * Shows the redirect URI and scopes to register with the provider, and
  * saves the client ID + secret through a step-up gated route. The secret
- * is write-only: once saved, only its fingerprint is shown.
+ * is write-only: once saved, only its last four characters are shown.
  */
 export function IntegrationOAuthAppCard({
   initial,
@@ -98,6 +98,8 @@ export function IntegrationOAuthAppCard({
         <Tag tone={app.configured ? 'ok' : 'warn'}>{app.configured ? 'configured' : 'not configured'}</Tag>
       </div>
 
+      {app.callbackHostWarning && <Tag tone="danger">{app.callbackHostWarning}</Tag>}
+
       <CopyRow
         label="Authorized redirect URI"
         help={`Add this exact URL to the OAuth client in the ${label} Cloud console.`}
@@ -132,7 +134,7 @@ export function IntegrationOAuthAppCard({
           htmlFor="oauth-client-secret"
           help={
             app.configured
-              ? `Saved secret fingerprint: ${app.secretFingerprint ?? 'unreadable, save it again'}. Leave blank to keep it. If you change the client ID, the saved secret is kept, so enter the new client's secret too unless it is the same.`
+              ? `Saved secret ends in ${app.secretMask ?? '(unreadable, save it again)'}. Leave blank to keep it. If you change the client ID, the saved secret is kept, so enter the new client's secret too unless it is the same.`
               : 'Stored encrypted. It is never shown again after saving.'
           }
         >

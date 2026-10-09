@@ -1025,6 +1025,52 @@ describe('AssetsService integration system writes', () => {
       }));
     });
 
+    it('lets only one of two racing mappings adopt the same unbound asset', async () => {
+      const manual = asset({ id: ids.manual, name: 'Manual edge', externalSource: null, externalId: null });
+      const { service, tx } = setup({ match: [manual] });
+      // One shared row. Both writers resolved it while it was still unbound
+      // (the match query keeps returning that snapshot); updatedAt is left
+      // untouched to model two writes landing in the same millisecond, so
+      // only the identity condition can stop the second adoption.
+      const row = { ...manual };
+      tx.asset.updateMany.mockImplementation(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const matches = Object.entries(where).every(([key, value]) => {
+          const current = (row as Record<string, unknown>)[key];
+          return value instanceof Date && current instanceof Date ? value.getTime() === current.getTime() : current === value;
+        });
+        if (!matches) return { count: 0 };
+        Object.assign(row, { externalId: data.externalId ?? row.externalId, externalSource: data.externalSource ?? row.externalSource });
+        return { count: 1 };
+      });
+      tx.asset.findUnique.mockImplementation(async () => ({ ...row }));
+      const first = await service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      });
+      const second = await service.writeFromIntegration({
+        ...input,
+        integrationCompanyMappingId: '54000000-0000-0000-0000-000000000011',
+        externalId: 'org-2:devices:edge-01',
+        externalSource: 'ninjaone',
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      });
+      expect(first).toMatchObject({ targetId: ids.manual, change: 'updated', adopted: true });
+      expect(second).toMatchObject({
+        targetId: ids.manual,
+        change: 'blocked',
+        gap: { kind: 'ambiguous', details: { reasonCode: 'match_first_claim_lost' } },
+      });
+      // The winner's identity stands; the loser wrote no field values.
+      expect(row).toMatchObject({ externalId: input.externalId, externalSource: 'breeze' });
+      expect(tx.asset.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ id: ids.manual, externalSource: null, externalId: null }),
+      }));
+      expect(tx.assetFieldValue.upsert).toHaveBeenCalledTimes(1);
+      expect(tx.asset.create).not.toHaveBeenCalled();
+    });
+
     it('never adopts a candidate that carries another source identity', async () => {
       const owned = asset({ id: ids.manual, externalSource: 'ninjaone', externalId: 'other-1' });
       const { service, tx } = setup({ match: [owned] });

@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type {
   IntegrationOAuthApp,
   IntegrationOAuthProvider,
@@ -18,10 +18,38 @@ import { EnvService } from '../../config/env.service.js';
 import { IntegrationDriverRegistry } from '../drivers/integration-driver.registry.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
 import type { RequestMeta } from '../../common/request-meta.js';
+import { maskSecretTail } from '../../common/redact-secrets.js';
 import type { OAuthClientCredentials } from './oauth-token.js';
 
 /** Path (under `API_URL`) the provider redirects back to after consent. */
 export const OAUTH_CALLBACK_PATH = '/v1/admin/integrations/oauth/callback';
+
+export const OAUTH_CALLBACK_HOST_WARNING =
+  'API_URL and APP_URL must share a host for Connect with Google to keep you signed in.';
+
+/**
+ * Session cookies are host-only, so the browser sends them to the callback
+ * (built from `API_URL`) only when it is on the same hostname as the web
+ * app (`APP_URL`). Ports do not matter to cookies.
+ */
+export function callbackHostWarning(apiUrl: string, appUrl: string): string | null {
+  try {
+    return new URL(apiUrl).hostname === new URL(appUrl).hostname ? null : OAUTH_CALLBACK_HOST_WARNING;
+  } catch {
+    return OAUTH_CALLBACK_HOST_WARNING;
+  }
+}
+
+/** Append the host warning (if any) to a setup check result as a general failure. */
+export function withCallbackHostWarning(
+  env: { API_URL: string; APP_URL: string },
+  result: IntegrationSetupCheck,
+): IntegrationSetupCheck {
+  const warning = callbackHostWarning(env.API_URL, env.APP_URL);
+  return warning
+    ? { ...result, ok: false, failures: [...result.failures, { stepId: null, message: warning }] }
+    : result;
+}
 
 /**
  * Instance-wide OAuth apps (one client per provider, e.g. Google), shared
@@ -29,7 +57,8 @@ export const OAUTH_CALLBACK_PATH = '/v1/admin/integrations/oauth/callback';
  *
  * The client secret is write-only: encrypted under the integrations key
  * with AAD bound to the provider, never returned, never logged. Admins
- * see a SHA-256 prefix to confirm which secret is saved.
+ * see its last four characters (`maskSecretTail`, the same mask as
+ * integration credentials) to confirm which secret is saved.
  */
 @Injectable()
 export class IntegrationOAuthAppService {
@@ -46,6 +75,11 @@ export class IntegrationOAuthAppService {
   /** The callback URL to register with every provider. */
   redirectUri(): string {
     return `${this.env.values.API_URL.replace(/\/+$/, '')}${OAUTH_CALLBACK_PATH}`;
+  }
+
+  /** Fixed warning when the callback host cannot see the session cookie, else null. */
+  callbackHostWarning(): string | null {
+    return callbackHostWarning(this.env.values.API_URL, this.env.values.APP_URL);
   }
 
   /** Union of the scopes requested by every registered driver of `provider`. */
@@ -65,14 +99,14 @@ export class IntegrationOAuthAppService {
   async get(provider: IntegrationOAuthProvider): Promise<IntegrationOAuthApp> {
     const row = await this.prisma.integrationOAuthApp.findUnique({ where: { provider } });
     const setupGuide = this.setupGuideFor(provider);
-    let secretFingerprint: string | null = null;
+    let secretMask: string | null = null;
     if (row) {
       try {
-        secretFingerprint = fingerprint(
+        secretMask = maskSecretTail(
           this.crypto.decrypt(row.secretCiphertext, integrationOAuthAppSecretAad(provider)),
         );
       } catch (e) {
-        // The row stays "configured"; the missing fingerprint tells the
+        // The row stays "configured"; the missing mask tells the
         // admin to save the secret again.
         this.logger.error(
           { err: (e as Error).message, provider },
@@ -84,8 +118,9 @@ export class IntegrationOAuthAppService {
       provider,
       configured: Boolean(row),
       clientId: row?.clientId ?? null,
-      secretFingerprint,
+      secretMask,
       redirectUri: this.redirectUri(),
+      callbackHostWarning: this.callbackHostWarning(),
       scopes: this.scopesFor(provider),
       updatedAt: row ? row.updatedAt.toISOString() : null,
       ...(setupGuide ? { setupGuide } : {}),
@@ -135,7 +170,7 @@ export class IntegrationOAuthAppService {
         clientId: input.clientId,
         ...(input.clientSecret === undefined
           ? { secretKept: true }
-          : { secretFingerprint: fingerprint(input.clientSecret) }),
+          : { secretMask: maskSecretTail(input.clientSecret) }),
       },
     });
     return this.get(provider);
@@ -154,7 +189,7 @@ export class IntegrationOAuthAppService {
       .find((d) => d.diagnose);
     if (!driver?.diagnose) throw new BadRequestException('This provider has no setup check.');
     const client = await this.getClient(provider);
-    const result: IntegrationSetupCheck = client
+    const result: IntegrationSetupCheck = withCallbackHostWarning(this.env.values, client
       ? await driver.diagnose({
           mode: 'client',
           oauthClient: client,
@@ -170,7 +205,7 @@ export class IntegrationOAuthAppService {
           ok: false,
           passedStepIds: [],
           failures: [{ stepId: 'credentials', message: 'Save the client ID and client secret first, then check again.' }],
-        };
+        });
     await this.audit.log({
       actorId: actor.id,
       action: AUDIT_ACTIONS.settings.integrationOAuthAppCheck,
@@ -198,6 +233,7 @@ export class IntegrationOAuthAppService {
           row.secretCiphertext,
           integrationOAuthAppSecretAad(provider),
         ),
+        version: `${row.id}@${row.updatedAt.toISOString()}`,
       };
     } catch (e) {
       this.logger.error(
@@ -209,8 +245,4 @@ export class IntegrationOAuthAppService {
       );
     }
   }
-}
-
-function fingerprint(secret: string): string {
-  return createHash('sha256').update(secret).digest('hex').slice(0, 12);
 }
