@@ -51,13 +51,18 @@ function setup(found: unknown = record()) {
     integration: { findUnique: jest.fn() },
     $transaction: jest.fn(),
   };
-  prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma));
-  const audit = { log: jest.fn().mockResolvedValue(undefined) };
+  let commits = 0;
+  prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+    const result = await callback(prisma);
+    commits += 1;
+    return result;
+  });
+  const audit = { log: jest.fn().mockResolvedValue(undefined), logWithClient: jest.fn().mockResolvedValue(undefined) };
   const assets = { update: jest.fn().mockResolvedValue({}) };
   const provenance = { lockScope: jest.fn().mockResolvedValue(undefined) };
   const permissions = { can: jest.fn().mockResolvedValue({ allowed: true }) };
   const service = new IntegrationDifferencesService(prisma as never, audit as never, assets as never, provenance as never, permissions as never);
-  return { service, prisma, audit, assets, provenance, permissions };
+  return { service, prisma, audit, assets, provenance, permissions, commits: () => commits };
 }
 
 const input = (choice: 'source' | 'local') => ({ syncRecordId: RECORD, assetFieldId: FIELD, choice });
@@ -81,7 +86,11 @@ describe('IntegrationDifferencesService.resolve', () => {
       where: { id: RECORD, companyId: COMPANY, updatedAt: UPDATED_AT },
       data: { fieldDiffs: {}, fieldResolutions: {}, lastSyncedFieldChecksums: { [FIELD]: checksum('host-b') } },
     });
-    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+    // Written with the transaction client, after the asset write.
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(audit.logWithClient).toHaveBeenCalledTimes(1);
+    expect(assets.update.mock.invocationCallOrder[0]).toBeLessThan(audit.logWithClient.mock.invocationCallOrder[0]!);
+    expect(audit.logWithClient).toHaveBeenCalledWith(prisma, expect.objectContaining({
       action: 'integration.difference.resolve',
       companyId: COMPANY,
       entityId: ASSET,
@@ -121,13 +130,24 @@ describe('IntegrationDifferencesService.resolve', () => {
     const { service, prisma, audit } = setup();
     prisma.integrationSyncRecord.updateMany.mockResolvedValue({ count: 0 });
     await expect(service.resolve(ADMIN, COMPANY, ASSET, input('local'), META)).rejects.toBeInstanceOf(ConflictException);
-    expect(audit.log).not.toHaveBeenCalled();
+    expect(audit.logWithClient).not.toHaveBeenCalled();
   });
 
   it('rolls back with the asset write when it fails, and logs no resolution', async () => {
     const { service, assets, audit } = setup();
     assets.update.mockRejectedValue(new Error('invalid value'));
     await expect(service.resolve(ADMIN, COMPANY, ASSET, input('source'), META)).rejects.toThrow('invalid value');
+    expect(audit.logWithClient).not.toHaveBeenCalled();
+  });
+
+  it('rolls the resolution back when its audit row cannot be written', async () => {
+    const { service, prisma, audit, assets, commits } = setup();
+    audit.logWithClient.mockRejectedValue(new Error('audit down'));
+    await expect(service.resolve(ADMIN, COMPANY, ASSET, input('source'), META)).rejects.toThrow('audit down');
+    // The failure happens inside the transaction, so the record and asset writes never commit.
+    expect(prisma.integrationSyncRecord.updateMany).toHaveBeenCalled();
+    expect(assets.update).toHaveBeenCalled();
+    expect(commits()).toBe(0);
     expect(audit.log).not.toHaveBeenCalled();
   });
 
@@ -136,7 +156,7 @@ describe('IntegrationDifferencesService.resolve', () => {
     prisma.integrationSyncRecord.updateMany.mockResolvedValue({ count: 0 });
     await expect(service.resolve(ADMIN, COMPANY, ASSET, input('source'), META)).rejects.toBeInstanceOf(ConflictException);
     expect(assets.update).not.toHaveBeenCalled();
-    expect(audit.log).not.toHaveBeenCalled();
+    expect(audit.logWithClient).not.toHaveBeenCalled();
   });
 
   it('requires asset.write on the path company (no asset.write -> 403 from the guard)', () => {
@@ -257,8 +277,9 @@ describe('IntegrationDifferencesService.resolveBulk', () => {
     // The skipped company's record is never read or written.
     expect(prisma.integrationSyncRecord.findFirst).not.toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ companyId: OTHER }) }));
     expect(assets.update).not.toHaveBeenCalled();
-    // One row per resolved item plus one summary row.
-    expect(audit.log).toHaveBeenCalledTimes(3);
+    // One in-transaction row per resolved item plus one summary row.
+    expect(audit.logWithClient).toHaveBeenCalledTimes(2);
+    expect(audit.log).toHaveBeenCalledTimes(1);
     expect(audit.log).toHaveBeenLastCalledWith(expect.objectContaining({
       action: 'integration.difference.resolve_bulk',
       entityType: 'Integration',
@@ -278,6 +299,31 @@ describe('IntegrationDifferencesService.resolveBulk', () => {
     expect(query.where).toMatchObject({ companyId: { in: [COMPANY] }, id: { gt: id(0) }, companyMapping: { integrationId: 'int-1' } });
     expect(query.take).toBe(501);
     expect(query.orderBy).toEqual({ id: 'asc' });
+  });
+
+  it('keeps a record whole in a filter batch even when it alone holds more than 500 differences', async () => {
+    const fields = Array.from({ length: 501 }, (_, i) => id(1000 + i));
+    const { service } = bulkSetup([row(id(1), COMPANY, fields), row(id(2))]);
+    const result = await service.resolveBulk(ADMIN, 'int-1', { choice: 'local', filter: { companyId: COMPANY } }, META);
+    expect(result).toMatchObject({ applied: 501, nextCursor: id(1) });
+  });
+
+  it('reports an item whose audit row fails as failed, uncommitted, and audits each success once', async () => {
+    const rows = [row(id(1)), row(id(2)), row(id(3))];
+    const { service, audit, commits } = bulkSetup(rows);
+    audit.logWithClient
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('audit down')) // record 2
+      .mockResolvedValue(undefined);
+    const result = await service.resolveBulk(ADMIN, 'int-1', { choice: 'local', items: rows.map((r) => ({ syncRecordId: r.id, assetFieldId: FIELD })) }, META);
+    expect(result.applied).toBe(2);
+    expect(result.failed).toEqual([{ syncRecordId: id(2), assetFieldId: FIELD, assetName: 'Asset 02', reason: 'Could not resolve this difference.' }]);
+    expect(commits()).toBe(2);
+    const perItem = audit.logWithClient.mock.calls.map(([, entry]) => entry as { action: string; after: { syncRecordId: string } });
+    expect(perItem.every((entry) => entry.action === 'integration.difference.resolve')).toBe(true);
+    expect(perItem.map((entry) => entry.after.syncRecordId)).toEqual([id(1), id(2), id(3)]);
+    expect(audit.log).toHaveBeenCalledTimes(1); // summary only
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ after: expect.objectContaining({ applied: 2, failed: 1 }) }));
   });
 
   it('ends the filter walk when the last batch fits', async () => {

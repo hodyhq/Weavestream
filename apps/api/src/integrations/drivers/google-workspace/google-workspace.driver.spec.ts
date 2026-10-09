@@ -300,9 +300,10 @@ describe('GoogleWorkspaceDriver users', () => {
     expect(row(a, 'account', 'Status')).toMatchObject({ kind: 'badge', value: 'Active' });
     // Org unit stays in the block; the mapped facts do not.
     expect(row(a, 'account', 'Org unit')).toMatchObject({ value: '/Staff' });
-    expect(a.groups.flatMap((g) => g.rows.map((r) => r.label))).not.toEqual(
-      expect.arrayContaining(['Name', 'Email', 'Job title', 'Department', 'Phone']),
-    );
+    const labels = a.groups.flatMap((g) => g.rows.map((r) => r.label));
+    for (const mapped of ['Name', 'Email', 'Job title', 'Department', 'Phone']) {
+      expect(labels).not.toContain(mapped);
+    }
     expect(row(a, 'licences', 'Assigned')).toEqual({ kind: 'list', label: 'Assigned', value: ['Google Workspace Business Standard'] });
     expect(row(a, 'mailbox', 'Mailbox storage')).toEqual({ kind: 'meter', label: 'Mailbox storage', used: 4_000, total: 30_720, unit: 'mb' });
     expect(row(a, 'drive', 'Drive storage')).toMatchObject({ kind: 'meter', used: 8_000 });

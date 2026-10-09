@@ -28,7 +28,7 @@ import type { FileFieldEntry } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
-import { AuditLogService } from '../audit/audit.service.js';
+import { AuditLogService, type AuditEntry } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { RelationsService } from '../relations/relations.service.js';
 import { getTenantContext } from '@weavestream/shared/server';
@@ -801,7 +801,7 @@ export class AssetsService {
       await this.searchIndex.upsertAsset(tx, id);
     });
 
-    await this.audit.log({
+    const entry: AuditEntry = {
       actorId: actor.id,
       action: 'asset.update',
       entityType: 'Asset',
@@ -821,7 +821,10 @@ export class AssetsService {
         // fields. Secondary store; see docs/security/data-retention.md.
         fieldValues: validated,
       },
-    });
+    };
+    // A caller transaction owns the commit: the row goes in with it, so a
+    // rollback leaves no audit of a write that never happened.
+    await (client ? this.audit.logWithClient(client, entry) : this.audit.log(entry));
 
     return this.get(actor, companyId, id);
   }

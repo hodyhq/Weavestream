@@ -1363,13 +1363,19 @@ export const resolveIntegrationDifferenceSchema = z
   .strict();
 export type ResolveIntegrationDifferenceInput = z.infer<typeof resolveIntegrationDifferenceSchema>;
 
-/** Most differences one bulk request resolves; the UI loops for more. */
+/**
+ * Most differences one bulk request resolves; the UI loops for more. A
+ * filter batch keeps whole sync records, so one record holding more
+ * differences than this is resolved in a single, larger batch.
+ */
 export const INTEGRATION_DIFFERENCES_BULK_MAX = 500;
 
 /**
  * Differences tab bulk resolve: either the ticked rows (`items`) or every
  * open difference matching the tab's company filter (`filter`, walked in
- * batches through `cursor`). Exactly one of the two.
+ * batches through `cursor`). Exactly one of the two. A filter batch never
+ * splits a sync record, so it can exceed INTEGRATION_DIFFERENCES_BULK_MAX
+ * when a single record has more differences than the cap.
  */
 export const resolveIntegrationDifferencesBulkSchema = z
   .object({

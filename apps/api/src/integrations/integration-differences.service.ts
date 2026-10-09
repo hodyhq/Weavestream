@@ -131,22 +131,24 @@ export class IntegrationDifferencesService {
         // edit; a failure rolls the record change back with it.
         await this.assets.update(actor, companyId, assetId, { fieldValues: { [slug]: diff.sourceValue } }, meta, tx);
       }
-    });
-    await this.audit.log({
-      actorId: actor.id,
-      action: AUDIT_ACTIONS.integration.differenceResolve,
-      entityType: 'Asset',
-      entityId: assetId,
-      companyId,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: null,
-      after: {
-        integrationId: record.companyMapping.integrationId,
-        syncRecordId: record.id,
-        assetFieldId: input.assetFieldId,
-        choice: input.choice,
-      },
+      // Same transaction: a failed audit write rolls the resolution back,
+      // so no resolution commits without its row.
+      await this.audit.logWithClient(tx, {
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.integration.differenceResolve,
+        entityType: 'Asset',
+        entityId: assetId,
+        companyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: {
+          integrationId: record.companyMapping.integrationId,
+          syncRecordId: record.id,
+          assetFieldId: input.assetFieldId,
+          choice: input.choice,
+        },
+      });
     });
     return { ok: true };
   }
@@ -155,9 +157,12 @@ export class IntegrationDifferencesService {
    * Differences tab bulk action (route guard: integration.manage). Each
    * difference goes through `resolve` (same transaction, sync lock and
    * audit row); asset.write is checked once per company, and differences
-   * in a company the actor cannot edit are skipped and reported. At most
-   * INTEGRATION_DIFFERENCES_BULK_MAX per request: filter mode returns a
-   * `nextCursor` for the next batch.
+   * in a company the actor cannot edit are skipped and reported. Items
+   * mode takes at most INTEGRATION_DIFFERENCES_BULK_MAX differences. Filter
+   * mode returns a `nextCursor` for the next batch and never splits a sync
+   * record across batches, so a batch whose first record alone holds more
+   * than INTEGRATION_DIFFERENCES_BULK_MAX differences takes them all and
+   * exceeds the cap.
    */
   async resolveBulk(
     actor: AuthedUser,
