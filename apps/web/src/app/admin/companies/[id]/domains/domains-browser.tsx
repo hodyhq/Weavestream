@@ -797,17 +797,14 @@ export function SourceTags({ row }: { row: MonitoredDomainDto }) {
   const role = workspaceRoleLabel(row);
   const workspaceGone = !role && row.workspaceMissingSince !== null;
   if (!cloudflare && !role && !workspaceGone) return null;
+  // Cloudflare (the registrar) always comes first, then every other source.
   return (
-    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
-      {cloudflare && <Tag tone="cloudflare">Cloudflare</Tag>}
+    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      {cloudflare && <SourceIcon src="/integrations/icons/cloudflare.svg" label="Synced from Cloudflare" />}
       {cloudflare && row.registrarMissingSince && (
         <Tag tone="warn">not on account since {fmtDate(row.registrarMissingSince)}</Tag>
       )}
-      {role && (
-        <span title={`Google Workspace: ${role}`}>
-          <Tag tone="info">Google · {shortWorkspaceRole(row)}</Tag>
-        </span>
-      )}
+      {role && <SourceIcon src="/integrations/icons/google.svg" label={`Google Workspace: ${role}`} />}
       {workspaceGone && (
         <Tag tone="warn">not in Google Workspace since {fmtDate(row.workspaceMissingSince)}</Tag>
       )}
@@ -815,11 +812,14 @@ export function SourceTags({ row }: { row: MonitoredDomainDto }) {
   );
 }
 
-/** Compact role for list tags; the full label stays in the tooltip and on the domain page. */
-function shortWorkspaceRole(row: Pick<MonitoredDomainDto, 'workspaceRole' | 'workspaceAliasOf'>): string {
-  if (row.workspaceRole === 'PRIMARY') return 'Primary';
-  if (row.workspaceRole === 'SECONDARY') return 'Secondary';
-  return row.workspaceAliasOf ? `Alias of ${row.workspaceAliasOf}` : 'Alias';
+/** Source logo in place of a word tag; the label is the tooltip and the accessible name. */
+function SourceIcon({ src, label }: { src: string; label: string }) {
+  return (
+    <span role="img" aria-label={label} title={label} style={{ display: 'inline-flex', lineHeight: 0 }}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- local public SVG icons; next/image SVG needs config */}
+      <img src={src} alt="" width={16} height={16} style={{ display: 'block' }} />
+    </span>
+  );
 }
 
 /** Registrar expiry plus auto-renew state; an expiry with auto-renew off is the one to act on. */
