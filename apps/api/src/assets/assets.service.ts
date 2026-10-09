@@ -983,11 +983,10 @@ export class AssetsService {
     const existingValues = target
       ? this.currentValuesAsMap(layout, target.fieldValues)
       : {};
-    // A binding that already holds a baseline for other fields: a field
-    // newly mapped onto it has no baseline of its own, but the value it
-    // holds was put there by a person, not by this integration.
-    const establishedBinding =
-      input.recordFieldDiffs === true && Object.keys(input.previousFieldChecksums).length > 0;
+    // An existing binding (not a first sync or a match-first adoption): a
+    // field newly mapped onto it has no baseline of its own, but the value
+    // it holds was put there by a person, not by this integration.
+    const establishedBinding = input.recordFieldDiffs === true && !!input.existingTargetId;
     for (const [fieldId, entry] of directionByFieldId) {
       const field = fieldById.get(fieldId)!;
       const stored = existingValues[field.slug];

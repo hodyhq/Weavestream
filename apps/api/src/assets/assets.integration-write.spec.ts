@@ -1464,11 +1464,11 @@ describe('AssetsService standard-field write policy (recordFieldDiffs)', () => {
     expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
   });
 
-  it('first sync of an adopted asset (no baseline) overwrites the person value', async () => {
+  it('an existing binding with no field baseline yet keeps the person value', async () => {
     const { service, tx } = setup({ target: withValue('typed-by-hand'), binding: binding() });
     await expect(service.writeFromIntegration(standard('host-a', {})))
-      .resolves.toMatchObject({ change: 'updated', fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('host-a') } });
-    expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+      .resolves.toMatchObject({ fieldDiffs: { [ids.field]: { sourceValue: 'host-a' } } });
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
   });
 
   it('a field newly mapped onto an established binding keeps the person value and records a difference', async () => {
