@@ -12,10 +12,13 @@ import {
   encodeCursor,
   listMicrosoftDomains,
 } from './microsoft-365.driver.js';
-import { MICROSOFT_PERMISSIONS, MICROSOFT_REQUIRED_PERMISSIONS, graphReportCsv } from './microsoft-365.graph.js';
+import { GraphRequestError, MICROSOFT_PERMISSIONS, MICROSOFT_REQUIRED_PERMISSIONS, graphReportCsv } from './microsoft-365.graph.js';
 import { writeReportConcealment } from './microsoft-365.report-settings.js';
 import { CONCEALED_NOTE } from './microsoft-365.sections.js';
-import { OPTIONAL_WRITE_NOTE, diagnoseMicrosoftClient, diagnoseMicrosoftConnection } from './microsoft-365.diagnose.js';
+import { INTUNE_UNREADABLE_NOTE, OPTIONAL_WRITE_NOTE, diagnoseMicrosoftClient, diagnoseMicrosoftConnection } from './microsoft-365.diagnose.js';
+
+/** Graph's answer for a tenant without an Intune licence (learn.microsoft.com/en-us/answers/questions/1063413). */
+const NOT_LICENSED = { status: 400, body: { error: { code: 'BadRequest', message: 'Request not applicable to target tenant.' } } };
 
 const G = 'https://graph.microsoft.com/v1.0';
 const TENANT = '11111111-2222-4333-8444-555555555555';
@@ -398,11 +401,23 @@ describe('Microsoft365Driver devices', () => {
     expect(mobile[0]!.fields).toMatchObject({ imei: '351234567890123', phone_number: '+14255550111', operating_system: 'iOS 18.1' });
   });
 
-  it('skips the resource as unlicensed when the Intune permission is granted', async () => {
-    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: { status: 400, body: { error: { code: 'BadRequest' } } } }));
+  it('skips the resource as unlicensed on Graph\'s "not applicable to target tenant" answer', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: NOT_LICENSED }));
     const fetched = driver.fetchRecords(fetchCtx(makeCtx(), 'computers'), null);
     await expect(fetched).rejects.toBeInstanceOf(DriverResourceUnavailableError);
     await expect(fetched).rejects.toThrow('Intune is not licensed in this tenant, so computers and mobile devices are skipped.');
+  });
+
+  it('fails the run on any other 400 instead of skipping it as unlicensed', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: { status: 400, body: { error: { code: 'BadRequest', message: 'Invalid filter clause' } } } }));
+    const fetched = driver.fetchRecords(fetchCtx(makeCtx(), 'computers'), null);
+    await expect(fetched).rejects.toBeInstanceOf(GraphRequestError);
+    await expect(fetched).rejects.not.toBeInstanceOf(DriverResourceUnavailableError);
+  });
+
+  it('fails the run on a 403 while the Intune permission is granted', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: { status: 403, body: { error: { code: 'Forbidden' } } } }));
+    await expect(driver.fetchRecords(fetchCtx(makeCtx(), 'computers'), null)).rejects.not.toBeInstanceOf(DriverResourceUnavailableError);
   });
 
   it('names the missing permission when the Intune permission is not granted', async () => {
@@ -620,7 +635,15 @@ describe('Check setup', () => {
     expect(result.passedStepIds).toEqual(expect.arrayContaining(['register', 'secret', 'credentials', 'permissions', 'connect']));
     const notes = (result.notes ?? []).map((n) => n.message).join(' | ');
     expect(notes).toContain('Entra ID P1');
-    expect(notes).toMatch(/Intune is not licensed in this tenant|needs Microsoft Intune/);
+    expect(notes).toContain(INTUNE_UNREADABLE_NOTE);
+    expect(notes).not.toMatch(/Intune is not licensed/);
     expect(notes).toContain('"Conceal user, group, and site names in all reports" is on');
+  });
+
+  it('notes the Intune licence only on Graph\'s "not applicable to target tenant" answer', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: NOT_LICENSED }));
+    const notes = ((await diagnoseMicrosoftConnection(makeCtx())).notes ?? []).map((n) => n.message);
+    expect(notes).toContain('Intune is not licensed in this tenant, so computers and mobile devices are skipped.');
+    expect(notes).not.toContain(INTUNE_UNREADABLE_NOTE);
   });
 });

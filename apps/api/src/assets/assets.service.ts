@@ -2271,10 +2271,10 @@ export class AssetsService {
     ) return false;
     // Two mappings of one integration can sync the same company at once:
     // serialize the check with the binding write (same page transaction)
-    // per integration and asset, so only one record co-binds it.
-    if (input.tx) {
-      await input.tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`cobind:${input.integrationId}:${target.id}`}, 0))`;
-    }
+    // per integration and asset, so only one record co-binds it. Without
+    // that transaction the check cannot be serialized: refuse to co-bind.
+    if (!input.tx) return false;
+    await input.tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`cobind:${input.integrationId}:${target.id}`}, 0))`;
     const own = await client.integrationSyncRecord.findFirst({
       where: { companyId: input.companyId, assetId: target.id, companyMapping: { integrationId: input.integrationId } },
       select: { id: true },
@@ -2300,7 +2300,8 @@ export class AssetsService {
         lastSyncedFieldChecksums: true,
         companyMapping: { select: { integration: { select: { driver: true } } } },
       },
-      take: 50,
+      // No cap: a cap could drop the highest-priority provider. The set is
+      // bounded by the integrations bound to this one asset.
     });
     return rows.map((row) => ({
       rank: priorityRank(input.priority, row.companyMapping.integration.driver),

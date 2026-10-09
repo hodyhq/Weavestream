@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { z } from 'zod';
 import type {
   DriverDescriptor,
@@ -89,6 +90,8 @@ interface ResourceSpec {
   layout: RecommendedDestination['layout'];
   standardFields?: DriverStandardField[];
 }
+
+const logger = new Logger('Microsoft365Driver');
 
 const MODEL: DriverStandardField = { sourceField: 'model', label: 'Model', fieldType: 'TEXT', fieldHints: ['model'] };
 const MANUFACTURER: DriverStandardField = { sourceField: 'manufacturer', label: 'Manufacturer', fieldType: 'TEXT', fieldHints: ['manufacturer', 'make', 'vendor', 'brand'] };
@@ -655,14 +658,13 @@ export class Microsoft365Driver implements IntegrationDriver {
         try {
           body = await graphGet<GraphPage<ManagedDevice>>(ctx, url, 'Intune devices');
         } catch (e) {
-          // No Intune licence or permission (403, or 400 "not applicable to
-          // target tenant"): the resource is skipped with a run warning,
-          // never a failed run or a paused integration.
-          const intuneMissing = e instanceof GraphAccessError || (e instanceof GraphRequestError && e.status === 400);
-          if (!nextLink && intuneMissing) {
-            throw new DriverResourceUnavailableError(
-              intuneUnavailableMessage(requireAdminConsent(ctx).grantedRoles),
-            );
+          // An identified missing Intune licence or permission skips the
+          // resource with a run warning; any other Graph error fails the run.
+          const unavailable = nextLink ? null : intuneUnavailableMessage(e, requireAdminConsent(ctx).grantedRoles);
+          if (unavailable) throw new DriverResourceUnavailableError(unavailable);
+          if (e instanceof GraphRequestError || e instanceof GraphAccessError) {
+            const code = e instanceof GraphRequestError ? e.code : e.graphCode;
+            logger.warn(`Intune devices read failed: HTTP ${e.status ?? 'unknown'}, Graph code ${code ?? 'none'}`);
           }
           throw e;
         }
