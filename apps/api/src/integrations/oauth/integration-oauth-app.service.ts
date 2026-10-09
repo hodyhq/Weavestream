@@ -147,8 +147,11 @@ export class IntegrationOAuthAppService {
    * the provider. Audited by outcome and failed step ids only.
    */
   async check(actor: AuthedUser, provider: IntegrationOAuthProvider, meta: RequestMeta): Promise<IntegrationSetupCheck> {
-    const descriptor = this.drivers.list().find((d) => d.oauth?.provider === provider);
-    const driver = descriptor && this.drivers.kindOf(descriptor.key) === 'pull' ? this.drivers.get(descriptor.key) : null;
+    const driver = this.drivers
+      .list()
+      .filter((d) => d.oauth?.provider === provider && this.drivers.kindOf(d.key) === 'pull')
+      .map((d) => this.drivers.get(d.key))
+      .find((d) => d.diagnose);
     if (!driver?.diagnose) throw new BadRequestException('This provider has no setup check.');
     const client = await this.getClient(provider);
     const result: IntegrationSetupCheck = client

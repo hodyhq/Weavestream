@@ -153,6 +153,8 @@ describe('diagnose: connection check', () => {
     expect(result).toMatchObject({ ok: false, failures: [{ stepId: 'apis' }] });
     expect(result.failures[0]!.message).toContain(api);
     expect(result.passedStepIds).not.toContain('apis');
+    expect(result.passedStepIds).toContain('trust');
+    expect(result.passedStepIds).not.toContain('scopes');
     noRawText(result);
   });
 

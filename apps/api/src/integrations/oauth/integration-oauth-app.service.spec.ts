@@ -149,9 +149,13 @@ describe('IntegrationOAuthAppService', () => {
     function checkSetup(row: Parameters<typeof setup>[0], diagnose = jest.fn(async () => ({ ok: true, passedStepIds: ['client'], failures: [] }))) {
       const ctx = setup(row);
       const drivers = (ctx.service as unknown as { drivers: Record<string, unknown> }).drivers;
-      drivers.list = () => [{ key: 'gw', oauth: { provider: 'google', scopes: ['openid'] }, setupGuide: guide }];
+      // A first Google driver without diagnose() must not hide the one that has it.
+      drivers.list = () => [
+        { key: 'other', oauth: { provider: 'google', scopes: ['openid'] } },
+        { key: 'gw', oauth: { provider: 'google', scopes: ['openid'] }, setupGuide: guide },
+      ];
       drivers.kindOf = () => 'pull';
-      drivers.get = () => ({ diagnose });
+      drivers.get = (key: string) => (key === 'gw' ? { diagnose } : {});
       (ctx.service as unknown as { env: { values: Record<string, unknown> } }).env.values = {
         API_URL: 'https://ws.example.test/api/', INTEGRATION_HTTP_TIMEOUT_MS: 5_000, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1,
       };

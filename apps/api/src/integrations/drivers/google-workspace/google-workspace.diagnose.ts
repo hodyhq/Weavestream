@@ -159,7 +159,9 @@ export async function diagnoseGoogleConnection(ctx: IntegrationContext): Promise
   const passed: string[] = [S.project, S.consent, S.client, S.credentials];
   if (!failed.has(S.apis)) passed.push(S.apis);
   if (!failed.has(S.connect)) passed.push(S.connect);
-  if (failures.length === 0) passed.push(S.scopes, S.trust);
+  // A disabled API hides whether its scope was granted, so scopes also wait for step 2.
+  if (!failed.has(S.connect) && !failed.has(S.apis)) passed.push(S.scopes);
+  if (!failed.has(S.trust)) passed.push(S.trust);
   return result(passed, failures);
 }
 
