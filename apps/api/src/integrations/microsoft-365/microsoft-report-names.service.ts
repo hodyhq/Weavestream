@@ -233,18 +233,20 @@ export class MicrosoftReportNamesService {
   }
 
   private async storeChoice(integrationId: string, consent: StoredAdminConsent, reportNames: 'shown' | 'hidden'): Promise<void> {
+    // Merge into the full stored object: the parsed consent drops fields this schema does not know.
     // A reconnect while the Graph calls ran must not be overwritten with the old consent.
     const row = await this.prisma.integrationSecret.findUnique({ where: { integrationId }, select: { ciphertext: true } });
-    let current: StoredAdminConsent | null = null;
+    let raw: unknown = null;
     try {
-      current = row ? parseStoredAdminConsent(JSON.parse(this.crypto.decrypt(row.ciphertext, integrationSecretAad(integrationId)))) : null;
+      raw = row ? JSON.parse(this.crypto.decrypt(row.ciphertext, integrationSecretAad(integrationId))) : null;
     } catch (e) {
       this.logger.error({ err: (e as Error).message, integrationId }, 'failed to decrypt integration secret');
     }
+    const current = parseStoredAdminConsent(raw);
     if (!current || current.tenantId !== consent.tenantId || current.consentedAt !== consent.consentedAt) {
       throw new ConflictException(CONNECTION_CHANGED);
     }
-    const ciphertext = this.crypto.encrypt(JSON.stringify({ ...consent, reportNames }), integrationSecretAad(integrationId));
+    const ciphertext = this.crypto.encrypt(JSON.stringify({ ...(raw as Record<string, unknown>), reportNames }), integrationSecretAad(integrationId));
     // Compare-and-set on the ciphertext just read: a reconnect landing in between updates no row.
     const { count } = await this.prisma.integrationSecret.updateMany({
       where: { integrationId, ciphertext: row!.ciphertext },

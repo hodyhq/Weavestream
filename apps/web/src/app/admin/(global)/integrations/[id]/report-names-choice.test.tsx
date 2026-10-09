@@ -108,6 +108,19 @@ describe('ReportNamesChoice', () => {
     expect(apiFetch).toHaveBeenLastCalledWith(URL_, { method: 'POST', body: JSON.stringify({ action: 'conceal' }) });
   });
 
+  it('re-enables the buttons and shows an error toast when the request throws', async () => {
+    apiFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { concealed: true, choice: null, readError: null, canChange: true } })
+      .mockRejectedValueOnce(new Error('network down'));
+    await renderIt();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /No, keep names hidden/ }));
+    });
+    expect(screen.getByText('Could not change the report setting.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /No, keep names hidden/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Yes, show real names/ })).toBeEnabled();
+  });
+
   it('disables the change when the setting could not be read', async () => {
     apiFetch.mockResolvedValueOnce({ ok: true, status: 200, data: { concealed: null, choice: null, readError: 'Weavestream could not read it.', canChange: true } });
     await renderIt();

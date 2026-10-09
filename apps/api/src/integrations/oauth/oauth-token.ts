@@ -266,6 +266,17 @@ export function adminConsentTokenMessage(e: OAuthTokenError): { reconnect: boole
   }
 }
 
+/** AADSTS codes `adminConsentTokenMessage` maps to a fix the operator must make (secret, app, consent, tenant). */
+const ADMIN_CONSENT_AUTH_AADSTS = new Set([7000215, 7000222, 700016, 65001, 500011, 7000112, 90002]);
+
+export function isAdminConsentAuthFailure(e: OAuthTokenError): boolean {
+  return (
+    (e.aadsts !== null && ADMIN_CONSENT_AUTH_AADSTS.has(e.aadsts)) ||
+    e.code === 'invalid_client' ||
+    e.code === 'unauthorized_client'
+  );
+}
+
 /** Best-effort revocation; the caller wipes the stored secret regardless. */
 export async function revokeOAuthToken(
   oauth: DriverOAuthDescriptor,
@@ -445,7 +456,8 @@ async function getAdminConsentAccessToken(
   try {
     tokens = await mintClientCredentialsToken(oauth, ctx.oauthClient, stored.tenantId, ctx.http, ctx.correlationId);
   } catch (e) {
-    if (e instanceof OAuthTokenError && e.status !== 429 && e.status < 500) {
+    // Only a known credential or consent failure pauses the integration; anything else is retried.
+    if (e instanceof OAuthTokenError && isAdminConsentAuthFailure(e)) {
       throw new DriverAuthError(adminConsentTokenMessage(e).message);
     }
     throw e;

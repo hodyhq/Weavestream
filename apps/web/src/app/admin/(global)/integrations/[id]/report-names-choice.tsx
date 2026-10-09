@@ -65,11 +65,18 @@ export function ReportNamesChoice({ integrationId, choice: initialChoice }: { in
     if (action === 'show' && !window.confirm(`Show real names in usage reports?\n\n${SHOW_EXPLANATION}`)) return;
     if (action === 'conceal' && !window.confirm(`Turn concealment back on?\n\n${CONCEAL_EXPLANATION}`)) return;
     setBusy(action);
-    const res = await apiFetch<MicrosoftReportNames>(`/admin/integrations/${integrationId}/microsoft/report-names`, {
-      method: 'POST',
-      body: JSON.stringify({ action }),
-    });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof apiFetch<MicrosoftReportNames>>>;
+    try {
+      res = await apiFetch<MicrosoftReportNames>(`/admin/integrations/${integrationId}/microsoft/report-names`, {
+        method: 'POST',
+        body: JSON.stringify({ action }),
+      });
+    } catch {
+      toast.push('Could not change the report setting.', 'danger');
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok || !res.data) {
       if (!res.stepUpCancelled) toast.push(problemMessage(res.problem) ?? 'Could not change the report setting.', 'danger');
       return;

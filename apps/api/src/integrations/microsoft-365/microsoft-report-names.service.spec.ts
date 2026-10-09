@@ -203,6 +203,14 @@ describe('MicrosoftReportNamesService', () => {
     expect(calls).toEqual([]);
   });
 
+  it('keeps stored fields this schema does not know when saving the choice', async () => {
+    graph(true);
+    const { service, secret, setSecret } = setup();
+    setSecret({ ...secret(), futureField: { kept: true } });
+    await service.apply(ACTOR, ID, { action: 'keep' }, META);
+    expect(secret()).toMatchObject({ reportNames: 'hidden', futureField: { kept: true } });
+  });
+
   it('refuses to store the choice over a reconnect that happened meanwhile', async () => {
     graph(true);
     const { service, prisma, setSecret } = setup();
