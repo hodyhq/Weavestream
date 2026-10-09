@@ -137,6 +137,7 @@ function baseTable(overrides: Record<string, Entry> = {}): Record<string, Entry>
         { skuId: SKU_BP, skuPartNumber: 'SPB', capabilityStatus: 'Enabled', consumedUnits: 3, prepaidUnits: { enabled: 5 } },
         { skuId: 'x', skuPartNumber: 'CONTOSO_CUSTOM_SKU', capabilityStatus: 'Suspended', consumedUnits: 1, prepaidUnits: { enabled: 0 } },
         { skuId: 'y', skuPartNumber: 'WIN_DEF_ATP', capabilityStatus: 'Enabled', consumedUnits: 3, prepaidUnits: { enabled: 2, warning: 1 } },
+        { skuId: 'z', skuPartNumber: 'INTUNE_A', capabilityStatus: 'Warning', consumedUnits: 2, prepaidUnits: { enabled: 0, warning: 4 } },
       ] },
     },
     [`${G}/reports/authenticationMethods/userRegistrationDetails`]: {
@@ -430,6 +431,8 @@ describe('Microsoft365Driver tenant', () => {
     expect(rowOf(rec, 'licences', 'Microsoft 365 Business Premium')).toEqual({ kind: 'meter', label: 'Microsoft 365 Business Premium', used: 3, total: 5, unit: 'count' });
     // Grace-period (warning) units count as purchased, so the meter never runs past full.
     expect(rowOf(rec, 'licences', 'Microsoft Defender for Endpoint P2')).toEqual({ kind: 'meter', label: 'Microsoft Defender for Endpoint P2', used: 3, total: 3, unit: 'count' });
+    // A SKU in its grace period still shows purchased vs assigned.
+    expect(rowOf(rec, 'licences', 'Microsoft Intune Plan 1')).toEqual({ kind: 'meter', label: 'Microsoft Intune Plan 1', used: 2, total: 4, unit: 'count' });
     // Unknown part number falls back to itself.
     expect(rowOf(rec, 'licences', 'CONTOSO_CUSTOM_SKU')).toMatchObject({ kind: 'text', value: 'Suspended, 1 assigned' });
     expect(rowOf(rec, 'subscriptions', 'Microsoft 365 Business Premium')).toMatchObject({ value: 'Enabled, 5 licences, next lifecycle date 2027-01-31' });
@@ -566,6 +569,13 @@ describe('Check setup', () => {
     expect(failure.message).toMatch(/^Not granted in this tenant: .*AuditLog\.Read\.All/);
     expect(failure.message).toContain('Reconnect');
     expect(failure.message).not.toContain('User.Read.All,');
+  });
+
+  it('says a granted report setting could not be read, without blaming the permission', async () => {
+    installFetchTable(baseTable({ [`${G}/admin/reportSettings`]: { status: 503, body: {} } }));
+    const notes = ((await diagnoseMicrosoftConnection(makeCtx())).notes ?? []).map((n) => n.message).join(' | ');
+    expect(notes).toContain('could not be read right now');
+    expect(notes).not.toContain('not granted');
   });
 
   it('passes a tenant that granted no optional report-settings permission, without reading the setting', async () => {

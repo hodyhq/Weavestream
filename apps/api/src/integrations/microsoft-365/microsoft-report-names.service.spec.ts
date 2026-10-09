@@ -55,9 +55,10 @@ function setup(choice?: 'shown' | 'hidden', grantedRoles: string[] = ['ReportSet
   const prisma = {
     integrationSecret: {
       findUnique: jest.fn(async () => ({ ciphertext: crypto.encrypt(JSON.stringify(secret), integrationSecretAad(ID)) })),
-      update: jest.fn(async ({ data }: { data: { ciphertext: string } }) => {
+      updateMany: jest.fn(async ({ where, data }: { where: { ciphertext: string }; data: { ciphertext: string } }) => {
+        if (where.ciphertext !== crypto.encrypt(JSON.stringify(secret), integrationSecretAad(ID))) return { count: 0 };
         secret = JSON.parse(crypto.decrypt(data.ciphertext, integrationSecretAad(ID)));
-        return {};
+        return { count: 1 };
       }),
     },
   };
@@ -211,6 +212,19 @@ describe('MicrosoftReportNamesService', () => {
       return { ciphertext: crypto.encrypt(JSON.stringify(other), integrationSecretAad(ID)) };
     });
     await expect(service.apply(ACTOR, ID, { action: 'keep' }, META)).rejects.toBeInstanceOf(ConflictException);
-    expect(prisma.integrationSecret.update).not.toHaveBeenCalled();
+    expect(prisma.integrationSecret.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses when a reconnect lands between the re-read and the write (compare-and-set)', async () => {
+    graph(true);
+    const { service, prisma, secret, setSecret } = setup();
+    const original = secret();
+    prisma.integrationSecret.findUnique.mockImplementationOnce(async () => {
+      const read = { ciphertext: crypto.encrypt(JSON.stringify(original), integrationSecretAad(ID)) };
+      setSecret({ ...original, consentedAt: '2026-10-03T00:00:00.000Z' });
+      return read;
+    });
+    await expect(service.apply(ACTOR, ID, { action: 'keep' }, META)).rejects.toBeInstanceOf(ConflictException);
+    expect(secret().consentedAt).toBe('2026-10-03T00:00:00.000Z');
   });
 });

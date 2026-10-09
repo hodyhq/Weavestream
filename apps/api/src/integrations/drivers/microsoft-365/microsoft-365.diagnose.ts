@@ -170,11 +170,15 @@ export async function diagnoseMicrosoftConnection(ctx: IntegrationContext): Prom
     notes.push({ stepId: S.layouts, message: 'Intune devices are not available (needs Microsoft Intune and DeviceManagementManagedDevices.Read.All); Computers and Mobile devices sync nothing.' });
   }
 
-  const concealed = roles !== null && !canReadReportSettings(roles)
-    ? ({ ok: false, error: null } as const)
-    : await probe(() => readReportConcealment(ctx));
+  const readable = roles === null || canReadReportSettings(roles);
+  const concealed = readable ? await probe(() => readReportConcealment(ctx)) : ({ ok: false, error: null } as const);
   if (!concealed.ok) {
-    notes.push({ stepId: S.names, message: `The report setting "${MICROSOFT_REPORT_SETTING.label}" could not be read (optional ReportSettings.Read.All not granted).` });
+    notes.push({
+      stepId: S.names,
+      message: readable
+        ? `The report setting "${MICROSOFT_REPORT_SETTING.label}" could not be read right now. Try Check setup again later.`
+        : `The report setting "${MICROSOFT_REPORT_SETTING.label}" could not be read (optional ReportSettings.Read.All not granted).`,
+    });
   } else if (concealed.value) {
     notes.push({
       stepId: S.names,

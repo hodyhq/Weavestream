@@ -37,6 +37,8 @@ export const REPORT_NAMES_NOT_READABLE =
 export const REPORT_NAMES_NOT_CHANGEABLE =
   'This tenant did not grant the optional ReportSettings.ReadWrite.All, so Weavestream cannot change the setting. Change it by hand in the Microsoft 365 admin center (steps on this page).';
 
+const CONNECTION_CHANGED = 'The Microsoft connection changed while saving. Reload the page and choose again.';
+
 function canChange(consent: StoredAdminConsent): boolean {
   return consent.grantedRoles.includes(REPORT_SETTINGS_WRITE);
 }
@@ -232,9 +234,14 @@ export class MicrosoftReportNamesService {
       this.logger.error({ err: (e as Error).message, integrationId }, 'failed to decrypt integration secret');
     }
     if (!current || current.tenantId !== consent.tenantId || current.consentedAt !== consent.consentedAt) {
-      throw new ConflictException('The Microsoft connection changed while saving. Reload the page and choose again.');
+      throw new ConflictException(CONNECTION_CHANGED);
     }
     const ciphertext = this.crypto.encrypt(JSON.stringify({ ...consent, reportNames }), integrationSecretAad(integrationId));
-    await this.prisma.integrationSecret.update({ where: { integrationId }, data: { ciphertext } });
+    // Compare-and-set on the ciphertext just read: a reconnect landing in between updates no row.
+    const { count } = await this.prisma.integrationSecret.updateMany({
+      where: { integrationId, ciphertext: row!.ciphertext },
+      data: { ciphertext },
+    });
+    if (count !== 1) throw new ConflictException(CONNECTION_CHANGED);
   }
 }
