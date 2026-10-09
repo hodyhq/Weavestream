@@ -1668,6 +1668,10 @@ model IntegrationSyncRecord {
   /// Per-field SHA-256 checksums — keyed by `AssetField.id`. Drives
   /// `preserve_manual` conflict detection.
   lastSyncedFieldChecksums    Json                  @default("{}") @map("last_synced_field_checksums")
+  /// Driver-supplied integration section (shared `integrationSectionSchema`)
+  /// rendered on the asset page. Validated plain data, replaced on every
+  /// sync; deleted with the binding.
+  sectionData                 Json?                 @map("section_data")
   createdAt                   DateTime              @default(now()) @map("created_at")
   updatedAt                   DateTime              @updatedAt @map("updated_at")
 

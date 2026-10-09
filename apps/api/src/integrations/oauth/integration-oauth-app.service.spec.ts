@@ -20,6 +20,10 @@ function setup(row: { clientId: string; secretCiphertext: string; updatedAt: Dat
         stored = { ...create, updatedAt: new Date('2026-01-02T00:00:00Z') };
         return stored;
       }),
+      update: jest.fn(async ({ data }: { data: { clientId: string } }) => {
+        stored = { ...stored!, clientId: data.clientId };
+        return stored;
+      }),
     },
   };
   const audit = { log: jest.fn(async () => undefined) };
@@ -83,6 +87,32 @@ describe('IntegrationOAuthAppService', () => {
       }),
     );
     expect(JSON.stringify(audit.log.mock.calls)).not.toContain('test-client-secret');
+  });
+
+  it('keeps the stored secret when only the client ID changes', async () => {
+    const secretCiphertext = `enc[${integrationOAuthAppSecretAad('google')}]kept-secret`;
+    const { service, prisma, audit } = setup({ clientId: 'old-client', secretCiphertext, updatedAt: new Date() });
+    const dto = await service.update(
+      { id: 'user-1' } as never, 'google', { clientId: 'new-client' }, { ip: '127.0.0.1', userAgent: 'jest' },
+    );
+    expect(prisma.integrationOAuthApp.upsert).not.toHaveBeenCalled();
+    expect(prisma.integrationOAuthApp.update).toHaveBeenCalledWith({
+      where: { provider: 'google' },
+      data: { clientId: 'new-client', updatedBy: 'user-1' },
+    });
+    expect(dto.clientId).toBe('new-client');
+    await expect(service.getClient('google')).resolves.toEqual({ clientId: 'new-client', clientSecret: 'kept-secret' });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      after: { provider: 'google', clientId: 'new-client', secretKept: true },
+    }));
+  });
+
+  it('requires a secret on the first save', async () => {
+    const { service, prisma } = setup();
+    await expect(service.update(
+      { id: 'user-1' } as never, 'google', { clientId: 'client-1' }, { ip: '127.0.0.1', userAgent: 'jest' },
+    )).rejects.toThrow('Enter the client secret.');
+    expect(prisma.integrationOAuthApp.upsert).not.toHaveBeenCalled();
   });
 
   it('decrypts client credentials for runtime use', async () => {

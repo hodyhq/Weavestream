@@ -1110,3 +1110,107 @@ describe('IntegrationsService OAuth drivers', () => {
     expect(dto.secretMask).toBeNull();
   });
 });
+
+describe('Map layouts: recommended destinations for match-first resources', () => {
+  const ids = {
+    actor: '00000000-0000-4000-8000-000000000001',
+    integration: '00000000-0000-4000-8000-000000000002',
+    resource: '00000000-0000-4000-8000-000000000003',
+    layout: '00000000-0000-4000-8000-000000000004',
+  };
+  const users = {
+    key: 'users', label: 'Users', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+    matchSuggestions: { sourceField: 'primaryEmail', layoutHints: ['people'], fieldHints: ['email'] },
+    minimalFields: ['fullName', 'primaryEmail'],
+  };
+  const recommendation: RecommendedDestination = {
+    layout: { name: 'Workspace Users', slug: 'workspace_users', icon: 'user', color: 'iris' },
+    fields: [
+      { sourceField: 'fullName', name: 'Name', slug: 'name', fieldType: 'TEXT', syncDirection: 'source_wins', isPrimary: true, showInTable: true, options: {} },
+      { sourceField: 'primaryEmail', name: 'Email', slug: 'email', fieldType: 'EMAIL', syncDirection: 'source_wins', isPrimary: false, showInTable: true, options: {} },
+      { sourceField: 'orgUnit', name: 'Org unit', slug: 'org_unit', fieldType: 'TEXT', syncDirection: 'source_wins', isPrimary: false, showInTable: false, options: {} },
+    ],
+  };
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  function setup(state: { assetLayoutId?: string | null; mappings?: number } = {}) {
+    const row = {
+      id: ids.resource, integrationId: ids.integration, resourceKey: 'users', enabled: false,
+      targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+      assetLayoutId: state.assetLayoutId ?? null, assetLayout: null, matchKeyFieldIds: [],
+      _count: { fieldMappings: state.mappings ?? 0 }, createdAt: new Date(0), updatedAt: new Date(0),
+    };
+    const createdFields: Array<{ slug: string; fieldType: string }> = [];
+    const prisma: any = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: ids.integration, driver: 'gw' }) },
+      integrationResource: {
+        findUnique: jest.fn().mockResolvedValue(row),
+        updateMany: jest.fn(async () => { row.assetLayoutId = ids.layout; return { count: 1 }; }),
+        update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => Object.assign(row, data)),
+        findUniqueOrThrow: jest.fn(async () => ({
+          assetLayoutId: row.assetLayoutId,
+          fieldMappings: row.assetLayoutId
+            ? createdFields.map((f) => ({ sourceField: recommendation.fields.find((r) => r.slug === f.slug)!.sourceField, targetFieldId: `field-${f.slug}` }))
+            : [],
+        })),
+      },
+      assetLayout: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: ids.layout, slug: 'workspace_users', isActive: true }),
+      },
+      assetField: {
+        createMany: jest.fn(async ({ data }: { data: Array<{ slug: string; fieldType: string }> }) => {
+          createdFields.push(...data);
+          return { count: data.length };
+        }),
+        findMany: jest.fn(async () => createdFields.map((f) => ({ id: `field-${f.slug}`, slug: f.slug, fieldType: f.fieldType }))),
+      },
+      integrationFieldMapping: {
+        count: jest.fn().mockResolvedValue(state.mappings ?? 0),
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
+    };
+    prisma.$transaction = jest.fn(async (callback: (tx: unknown) => Promise<void>) => callback(prisma));
+    const drivers = {
+      get: jest.fn().mockReturnValue({
+        descriptor: { ...baseDescriptor, resources: [users] },
+        recommendedDestinations: { users: recommendation },
+      }),
+    };
+    const audit = { logChange: jest.fn().mockResolvedValue(undefined) };
+    const service = new IntegrationsService(
+      prisma as never, {} as never, audit as never, drivers as never,
+      {} as never, {} as never, { has: () => true } as never,
+    );
+    return { prisma, service, audit, createdFields };
+  }
+
+  it('creates only the minimal fields, sets the match key and enables the resource', async () => {
+    const { prisma, service, audit, createdFields } = setup();
+    await service.createResourceDestination({ id: ids.actor } as never, ids.integration, 'users', meta);
+    expect(createdFields.map((f) => f.slug)).toEqual(['name', 'email']);
+    expect(prisma.integrationResource.update).toHaveBeenCalledWith({
+      where: { id: ids.resource },
+      data: { enabled: true, matchKeyFieldIds: ['field-email'] },
+    });
+    expect(audit.logChange).toHaveBeenCalledWith(expect.objectContaining({
+      after: expect.objectContaining({ assetLayoutId: ids.layout, matchKeyFieldIds: ['field-email'] }),
+    }));
+  });
+
+  it('refuses a resource that already has a layout or mappings', async () => {
+    const { service, prisma } = setup({ assetLayoutId: ids.layout, mappings: 1 });
+    await expect(
+      service.createResourceDestination({ id: ids.actor } as never, ids.integration, 'users', meta),
+    ).rejects.toThrow(/Remove the layout/);
+    expect(prisma.assetLayout.create).not.toHaveBeenCalled();
+  });
+
+  it('never auto-applies a recommendation to a match-first resource on reconcile', async () => {
+    const { service, prisma } = setup();
+    prisma.integrationResource.upsert = jest.fn().mockResolvedValue({});
+    await service.reconcileResources(ids.integration);
+    expect(prisma.assetLayout.create).not.toHaveBeenCalled();
+    expect(prisma.integrationResource.updateMany).not.toHaveBeenCalled();
+  });
+});

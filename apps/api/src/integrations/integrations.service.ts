@@ -182,6 +182,32 @@ export async function ensureResourceDestination(
 }
 
 /**
+ * Recommendation applied automatically on create / reconcile. Resources
+ * that declare `matchSuggestions` wait for the operator's "Map layouts"
+ * choice instead (match-first), so a skipped resource stays skipped.
+ */
+function autoRecommendation(
+  driver: { recommendedDestinations?: Readonly<Record<string, RecommendedDestination>> },
+  resource: DriverResourceDescriptor,
+): RecommendedDestination | undefined {
+  if (resource.matchSuggestions) return undefined;
+  return driver.recommendedDestinations?.[resource.key];
+}
+
+/** A recommendation narrowed to the resource's declared `minimalFields`. */
+export function minimalRecommendation(
+  recommendation: RecommendedDestination,
+  resource: DriverResourceDescriptor,
+): RecommendedDestination {
+  if (!resource.minimalFields) return recommendation;
+  const allowed = new Set(resource.minimalFields);
+  return {
+    ...recommendation,
+    fields: recommendation.fields.filter((field) => allowed.has(field.sourceField)),
+  };
+}
+
+/**
  * Phase 11 — global Integration CRUD.
  *
  * `Integration` and `IntegrationSecret` rows are GLOBAL — every method
@@ -305,7 +331,7 @@ export class IntegrationsService {
     if (descriptor.resources.length > 0) {
       const driver = this.drivers.get(input.driver);
       for (const resource of descriptor.resources) {
-        const recommendation = driver.recommendedDestinations?.[resource.key];
+        const recommendation = autoRecommendation(driver, resource);
         if (recommendation) {
           await ensureResourceDestination(this.prisma, created.id, resource.key, recommendation);
         }
@@ -631,7 +657,7 @@ export class IntegrationsService {
           dependsOnResourceKeys: r.dependsOnResourceKeys,
         },
       });
-      const recommendation = driver.recommendedDestinations?.[r.key];
+      const recommendation = autoRecommendation(driver, r);
       if (recommendation) {
         await ensureResourceDestination(this.prisma, integrationId, r.key, recommendation);
       }
@@ -809,6 +835,83 @@ export class IntegrationsService {
         targetConfig: fresh.targetConfig,
       },
       fields: ['enabled', 'assetLayoutId', 'matchKeyFieldIds', 'targetConfig'],
+    });
+    return fresh;
+  }
+
+  /**
+   * "Map layouts" → "Create new layout": apply the driver's recommended
+   * destination (minimal fields only) to an untouched asset resource, then
+   * set its match key from `matchSuggestions` and enable it.
+   */
+  async createResourceDestination(
+    actor: AuthedUser,
+    integrationId: string,
+    resourceKey: string,
+    meta: AuditMeta,
+  ): Promise<IntegrationResourceDto> {
+    const integration = await this.requireIntegration(integrationId);
+    const driver = this.drivers.get(integration.driver);
+    this.assertResourceKey(driver.descriptor, resourceKey);
+    const descriptor = driver.descriptor.resources.find((resource) => resource.key === resourceKey)!;
+    const recommendation = driver.recommendedDestinations?.[resourceKey];
+    if (descriptor.targetKind !== 'asset' || !recommendation) {
+      throw new BadRequestException('This resource has no recommended layout to create.');
+    }
+    const existing = await this.findOrCreateResource(integrationId, resourceKey, driver.descriptor);
+    const mappingCount = await this.prisma.integrationFieldMapping.count({
+      where: { resourceId: existing.id },
+    });
+    if (existing.assetLayoutId || mappingCount > 0) {
+      throw new BadRequestException(
+        'Remove the layout and field mappings before creating a new layout.',
+      );
+    }
+    await ensureResourceDestination(
+      this.prisma,
+      integrationId,
+      resourceKey,
+      minimalRecommendation(recommendation, descriptor),
+    );
+    const applied = await this.prisma.integrationResource.findUniqueOrThrow({
+      where: { id: existing.id },
+      select: {
+        assetLayoutId: true,
+        fieldMappings: { select: { sourceField: true, targetFieldId: true } },
+      },
+    });
+    if (!applied.assetLayoutId) {
+      throw new BadRequestException(
+        'The recommended layout could not be applied. A layout with the same slug may be inactive or use different fields.',
+      );
+    }
+    const matchSource = descriptor.matchSuggestions?.sourceField;
+    const matchFieldId = applied.fieldMappings.find(
+      (mapping) => mapping.sourceField === matchSource,
+    )?.targetFieldId;
+    await this.prisma.integrationResource.update({
+      where: { id: existing.id },
+      data: { enabled: true, ...(matchFieldId ? { matchKeyFieldIds: [matchFieldId] } : {}) },
+    });
+    const fresh = await this.getResource(integrationId, resourceKey);
+    await this.audit.logChange({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.integration.resourceUpdate,
+      entityType: 'Integration',
+      entityId: integrationId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: {
+        enabled: existing.enabled,
+        assetLayoutId: existing.assetLayoutId,
+        matchKeyFieldIds: existing.matchKeyFieldIds,
+      },
+      after: {
+        enabled: fresh.enabled,
+        assetLayoutId: fresh.assetLayoutId,
+        matchKeyFieldIds: fresh.matchKeyFieldIds,
+      },
+      fields: ['enabled', 'assetLayoutId', 'matchKeyFieldIds'],
     });
     return fresh;
   }

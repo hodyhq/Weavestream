@@ -7,12 +7,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import type {
+import {
   Prisma,
-  Asset,
-  AssetField,
-  AssetFieldValue,
-  AssetLayout,
+  type Asset,
+  type AssetField,
+  type AssetFieldValue,
+  type AssetLayout,
 } from '@prisma/client';
 import type {
   BulkAssetResult,
@@ -22,7 +22,8 @@ import type {
 } from '@weavestream/shared';
 import type { FieldType, IntegrationTargetProvenance } from '@weavestream/shared';
 import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
-import { FILTERABLE_FIELD_TYPES } from '@weavestream/shared';
+import { FILTERABLE_FIELD_TYPES, integrationSectionSchema } from '@weavestream/shared';
+import type { AssetIntegrationSection } from '@weavestream/shared';
 import type { FileFieldEntry } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
@@ -99,6 +100,13 @@ export interface IntegrationAssetWriteInput {
   name: string;
   assetLayoutId: string;
   matchKeyFieldIds: string[];
+  /**
+   * Match-first (runner-controlled, see ReconstructionWriteContext): adopt
+   * a single unbound asset with no external identity whose match-key
+   * values equal the record's. Off by default: an integration otherwise
+   * never takes over a manually created asset.
+   */
+  claimUnboundMatch?: boolean;
   fieldValues: Array<{
     targetFieldId: string;
     value: unknown;
@@ -248,6 +256,11 @@ export interface SerializedAsset {
   }>;
   /** Safe, tenant-scoped reconstruction provenance for the exact native target. */
   provenance: IntegrationTargetProvenance[];
+  /**
+   * Driver-supplied integration sections, one per binding that carries
+   * one. Detail only, and never for CLIENT_USER (see `get`).
+   */
+  integrationSections?: Array<Omit<AssetIntegrationSection, 'lastSyncedAt'> & { lastSyncedAt: Date }>;
   fieldValues: Record<string, unknown>;
   fields: Array<{
     id: string;
@@ -472,7 +485,48 @@ export class AssetsService {
       targetKind: 'asset',
       targetId: id,
     });
+    // Sections carry MSP-internal posture (admin roles, 2SV, alerts,
+    // licences) with no per-row client visibility, so client users never
+    // receive them, even on an asset they can read.
+    if (actor.role !== 'CLIENT_USER') {
+      serialized.integrationSections = await this.readIntegrationSections(companyId, id);
+    }
     return serialized;
+  }
+
+  private async readIntegrationSections(
+    companyId: string,
+    assetId: string,
+  ): Promise<NonNullable<SerializedAsset['integrationSections']>> {
+    const rows = await this.prisma.integrationSyncRecord.findMany({
+      where: { companyId, assetId, sectionData: { not: Prisma.DbNull } },
+      select: {
+        lastSyncedAt: true,
+        sectionData: true,
+        companyMapping: {
+          select: { integration: { select: { id: true, driver: true, name: true } } },
+        },
+      },
+      orderBy: { lastSyncedAt: 'desc' },
+    });
+    const out: NonNullable<SerializedAsset['integrationSections']> = [];
+    for (const row of rows) {
+      // Re-validated on read: the column is only ever written validated,
+      // but the renderer must never see anything outside the schema.
+      const parsed = integrationSectionSchema.safeParse(row.sectionData);
+      if (!parsed.success) continue;
+      const { integration } = row.companyMapping;
+      out.push({
+        integrationId: integration.id,
+        driver: integration.driver,
+        integrationName: integration.name,
+        lastSyncedAt: row.lastSyncedAt,
+        section: parsed.data,
+      });
+    }
+    // ponytail: section values are not indexed for search in v1; add them
+    // to SearchIndex (upsertAsset) when operators ask to search them.
+    return out;
   }
 
   // --------------------------------------------------------------------
@@ -809,6 +863,7 @@ export class AssetsService {
       );
     }
     const target = resolution.target;
+    const claimed = resolution.claimed === true;
     if (input.existingTargetId && !target) {
       return integrationAssetBlocked(
         input.companyId,
@@ -911,7 +966,7 @@ export class AssetsService {
           )
         : null;
     if (input.dryRun) {
-      if (target && !(await this.hasEligibleAssetBinding(readClient, input, target.id))) {
+      if (target && !claimed && !(await this.hasEligibleAssetBinding(readClient, input, target.id))) {
         return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
       }
       const dryRunValues = classificationValues!;
@@ -1017,7 +1072,7 @@ export class AssetsService {
     } else {
       targetId = target.id;
       const outcome = await runTransaction(async (tx) => {
-        if (!(await this.hasEligibleAssetBinding(tx, input, target.id))) {
+        if (!claimed && !(await this.hasEligibleAssetBinding(tx, input, target.id))) {
           return { status: 'blocked' as const };
         }
         let canonicalValues = classificationValues!;
@@ -1803,6 +1858,8 @@ export class AssetsService {
   ): Promise<{
     target: (Asset & { fieldValues: AssetFieldValue[] }) | null;
     ambiguous: boolean;
+    /** Match-first adoption of an unbound, identity-free asset. */
+    claimed?: boolean;
   }> {
     const byId = async (id: string) =>
       client.asset.findUnique({ where: { id }, include: { fieldValues: true } });
@@ -1880,10 +1937,16 @@ export class AssetsService {
         candidate.externalSource === (input.externalSource ?? null) &&
         candidate.externalId === input.externalId,
     );
-    return {
-      target: compatible.length === 1 ? compatible[0]! : null,
-      ambiguous: candidates.length > 1,
-    };
+    if (candidates.length > 1) return { target: null, ambiguous: true };
+    if (compatible.length === 1) return { target: compatible[0]!, ambiguous: false };
+    // Match-first: a single candidate nobody owns (no external identity,
+    // no binding from this mapping/resource per the query above) is
+    // adopted. Assets carrying another source's identity are never taken.
+    const only = candidates[0];
+    if (input.claimUnboundMatch === true && only && only.externalSource === null && only.externalId === null) {
+      return { target: only, ambiguous: false, claimed: true };
+    }
+    return { target: null, ambiguous: false };
   }
 
   private async loadLayout(
@@ -2548,6 +2611,7 @@ export class AssetsService {
       syncedFieldIds: [],
       syncSources: [],
       provenance: [],
+      integrationSections: [],
       fieldValues,
       fields: visibleFields
         .sort((a, b) => a.position - b.position)

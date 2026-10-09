@@ -1,4 +1,6 @@
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { EXCEPTION_FILTERS_METADATA } from '@nestjs/common/constants.js';
+import { OAuthCallbackRedirectFilter } from './oauth-callback-redirect.filter.js';
 import { REQUIRE_PERMISSION_KEY } from '../../rbac/require-permission.decorator.js';
 import { REQUIRE_STEP_UP_KEY } from '../../auth/step-up/require-step-up.decorator.js';
 import { INTERACTIVE_ONLY_KEY } from '../../auth/interactive-only.decorator.js';
@@ -74,5 +76,28 @@ describe('IntegrationOAuthController security contract', () => {
       302,
       'https://ws.example.test/admin/integrations/x?oauth=failed',
     );
+  });
+});
+
+describe('OAuth callback guard failures redirect the browser', () => {
+  const env = { values: { APP_URL: 'https://app.example.com/' } };
+  function run(exception: unknown) {
+    const redirect = jest.fn();
+    const host = { switchToHttp: () => ({ getResponse: () => ({ redirect }) }) };
+    new OAuthCallbackRedirectFilter(env as never).catch(exception, host as never);
+    return redirect;
+  }
+
+  it('is bound to the callback route', () => {
+    expect(Reflect.getMetadata(EXCEPTION_FILTERS_METADATA, IntegrationOAuthController.prototype.callback))
+      .toEqual([OAuthCallbackRedirectFilter]);
+  });
+
+  it('sends an expired session to the login page instead of a JSON 401', () => {
+    expect(run(new UnauthorizedException())).toHaveBeenCalledWith(302, 'https://app.example.com/login');
+  });
+
+  it.each([new ForbiddenException(), new Error('boom')])('sends other failures to the failure landing (%s)', (error) => {
+    expect(run(error)).toHaveBeenCalledWith(302, 'https://app.example.com/admin/integrations?oauth=failed');
   });
 });

@@ -155,6 +155,29 @@ const resourceDescriptorBaseShape = {
    */
   defaultEnabled: z.boolean().optional(),
   dependsOnResourceKeys: z.array(driverResourceKeySchema).max(64).default([]),
+  /**
+   * Guided layout matching ("Map layouts"). `sourceField` is the driver
+   * field records are matched on; `layoutHints` / `fieldHints` are
+   * lower-case layout and field slug/name hints used to pre-select an
+   * existing layout and its match-key field. Declaring this also opts the
+   * resource into match-first: on a sync, an unbound asset with no
+   * external identity whose match-key value equals the record's is
+   * adopted instead of creating a duplicate.
+   */
+  matchSuggestions: z
+    .object({
+      sourceField: z.string().min(1).max(128),
+      layoutHints: z.array(z.string().min(1).max(64)).max(16),
+      fieldHints: z.array(z.string().min(1).max(64)).max(16),
+    })
+    .strict()
+    .optional(),
+  /**
+   * Source fields the driver writes into layout fields (normally the name
+   * and the match key). Everything else a record carries goes into its
+   * integration `section`. "Create new layout" only creates these fields.
+   */
+  minimalFields: z.array(z.string().min(1).max(128)).max(8).optional(),
 } as const;
 
 const assetTargetConfigSchema = z
@@ -1140,7 +1163,12 @@ export type IntegrationOAuthApp = z.infer<typeof integrationOAuthAppSchema>;
 export const updateIntegrationOAuthAppSchema = z
   .object({
     clientId: z.string().trim().min(1).max(512),
-    clientSecret: z.string().trim().min(1).max(512),
+    /**
+     * Required on first save. Omit it to keep the stored secret (e.g. to
+     * correct the client ID); the API rejects an omitted secret when none
+     * is stored yet.
+     */
+    clientSecret: z.string().trim().min(1).max(512).optional(),
   })
   .strict();
 export type UpdateIntegrationOAuthAppInput = z.infer<typeof updateIntegrationOAuthAppSchema>;

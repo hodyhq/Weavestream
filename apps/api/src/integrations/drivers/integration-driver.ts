@@ -99,8 +99,20 @@ export interface LegacyDriverRecord {
   externalId: string;
   /** Driver-side display name; used as the asset's primary name fallback. */
   displayName: string | null;
-  /** Flat map of source-field key → raw value. */
+  /**
+   * Flat map of source-field key → raw value. Drivers whose resources
+   * declare `minimalFields` put ONLY those fields here (normally the name
+   * and the match key) so a sync never writes anything else into the
+   * operator's layout fields; every other detail goes into `section`.
+   */
   fields: Record<string, unknown>;
+  /**
+   * Optional read-only detail card for the asset page, validated by the
+   * runner against `integrationSectionSchema` (shared). Plain data only,
+   * never HTML. Replaced on every sync (omit it to clear); an invalid
+   * section is dropped with a run warning and never fails the record.
+   */
+  section?: unknown;
   /**
    * Optional immutable source definition key used to select exactly one
    * configured field mapping. Records without a matching mapping are skipped.

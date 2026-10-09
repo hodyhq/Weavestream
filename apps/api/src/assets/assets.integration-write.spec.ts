@@ -1009,6 +1009,74 @@ describe('AssetsService integration system writes', () => {
     })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
   });
 
+  describe('match-first (claimUnboundMatch)', () => {
+    it('adopts a single unbound manual candidate instead of creating a duplicate', async () => {
+      const manual = asset({ id: ids.manual, name: 'Manual edge', externalSource: null, externalId: null });
+      const { service, tx } = setup({ match: [manual] });
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      })).resolves.toMatchObject({ targetId: ids.manual, change: 'updated' });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+      expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ id: ids.manual }),
+        data: expect.objectContaining({ externalId: input.externalId, externalSource: 'breeze' }),
+      }));
+    });
+
+    it('never adopts a candidate that carries another source identity', async () => {
+      const owned = asset({ id: ids.manual, externalSource: 'ninjaone', externalId: 'other-1' });
+      const { service, tx } = setup({ match: [owned] });
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
+      expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('still reports two unbound candidates as ambiguous and binds nothing', async () => {
+      const first = asset({ id: ids.manual, externalSource: null, externalId: null });
+      const second = asset({ id: '00000000-0000-0000-0000-000000000099', externalSource: null, externalId: null });
+      const { service, tx } = setup({ match: [first, second] });
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+      })).resolves.toMatchObject({
+        change: 'blocked',
+        gap: { kind: 'ambiguous', details: { reasonCode: 'ambiguous_match' } },
+      });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+      expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('matches emails case-insensitively and trimmed through the EMAIL strategy', async () => {
+      const emailField = { ...field, fieldType: 'EMAIL', slug: 'email' };
+      const manual = asset({
+        id: ids.manual, externalSource: null, externalId: null,
+        fieldValues: [{ id: 'fv-1', companyId: ids.company, assetId: ids.manual, assetFieldId: ids.field, value: 'alice@example.com' }],
+      });
+      const { EmailStrategy } = await import('../field-types/strategies/contact.strategy.js');
+      const { service, prisma } = setup({
+        match: [manual],
+        layout: { ...layout, fields: [emailField] },
+        strategy: new EmailStrategy(),
+      });
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+        // The runner projects raw driver values through the strategy first.
+        fieldValues: [{ targetFieldId: ids.field, value: new EmailStrategy().normalize('  Alice@Example.COM '), syncDirection: 'source_wins' }],
+      })).resolves.toMatchObject({ targetId: ids.manual });
+      const where = prisma.asset.findMany.mock.calls[0][0].where;
+      const variants = where.AND[0].fieldValues.some.OR.map((clause: { value: { equals: unknown } }) => clause.value.equals);
+      expect(variants).toContain('alice@example.com');
+    });
+  });
+
   it('blocks multiple unbound natural-key candidates as ambiguous', async () => {
     const first = asset({ id: ids.manual, externalSource: null, externalId: null });
     const second = asset({ id: '00000000-0000-0000-0000-000000000099', externalSource: null, externalId: null });

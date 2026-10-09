@@ -197,6 +197,13 @@ export interface ReconstructionWriteContext {
   previousChecksum?: string | null;
   previousFieldChecksums?: Readonly<Record<string, string>>;
   previousProvenance?: SafeIntegrationProvenance | null;
+  /**
+   * Match-first: set by the runner (never by driver data) for resources
+   * whose descriptor declares `matchSuggestions`. Lets the asset writer
+   * adopt one unbound, identity-free asset whose match keys equal the
+   * record's instead of creating a duplicate.
+   */
+  claimUnboundMatches?: boolean;
   resolveBinding(
     ref: ReconstructionDependencyRef,
   ): Promise<ResolvedReconstructionTarget | null>;

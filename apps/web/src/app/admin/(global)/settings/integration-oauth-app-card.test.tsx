@@ -79,6 +79,25 @@ describe('IntegrationOAuthAppCard', () => {
     expect(screen.getByText('configured')).toBeInTheDocument();
   });
 
+  it('saves a changed client ID without re-entering a stored secret', async () => {
+    const configured = app({ configured: true, clientId: 'client-1', secretFingerprint: 'abc123def456' });
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: { ...configured, clientId: 'client-2' } });
+    renderCard(configured);
+    const save = screen.getByRole('button', { name: 'Save OAuth app' });
+    // Nothing changed yet: nothing to save.
+    expect(save).toBeDisabled();
+    expect(screen.getByText(/Leave blank to keep it/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client-2' } });
+    expect(save).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(save);
+    });
+    expect(apiFetch).toHaveBeenCalledWith('/settings/integration-oauth-apps/google', {
+      method: 'PUT',
+      body: JSON.stringify({ clientId: 'client-2' }),
+    });
+  });
+
   it('stays silent when the step-up prompt is dismissed', async () => {
     apiFetch.mockResolvedValue({ ok: false, status: 403, data: null, stepUpCancelled: true });
     renderCard(app());

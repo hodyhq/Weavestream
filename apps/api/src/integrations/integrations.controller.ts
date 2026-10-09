@@ -402,6 +402,17 @@ export class IntegrationsController {
     return this.integrations.updateResource(user, id, resourceKey, dto, meta(req));
   }
 
+  @Post(':id/resources/:resourceKey/destination')
+  @RequirePermission('integration.manage')
+  createResourceDestination(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('resourceKey') resourceKey: string,
+    @Req() req: Request,
+  ) {
+    return this.integrations.createResourceDestination(user, id, resourceKey, meta(req));
+  }
+
   @Get(':id/resources/:resourceKey/source-fields')
   @RequirePermission('integration.manage')
   async listResourceSourceFields(

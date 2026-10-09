@@ -89,7 +89,7 @@ The card shows:
 | Scopes | Add them to the consent screen. The list is the union of what the available integrations of that provider request. |
 | Client ID / Client secret | Paste them from the provider and save. |
 
-The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again. The card shows a short SHA-256 fingerprint so you can tell which secret is saved. To change either value, enter both again. Saving needs the **Settings** permission and a fresh step-up confirmation, and is recorded in the audit log as `settings.integration_oauth_app.update`.
+The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again. The card shows a short SHA-256 fingerprint so you can tell which secret is saved. To change only the client ID, leave the secret blank and the saved secret is kept (enter the new client's secret too if it differs). Saving needs the **Settings** permission and a fresh step-up confirmation, and is recorded in the audit log as `settings.integration_oauth_app.update`.
 
 Connecting, reconnecting and disconnecting an integration are recorded as `integration.oauth.connect`, `integration.oauth.connect.failed` (with a reason category, never the provider's error text) and `integration.oauth.disconnect`.
 

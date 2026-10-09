@@ -11,6 +11,7 @@ import {
   Query,
   Req,
   Res,
+  UseFilters,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import {
@@ -27,6 +28,7 @@ import { InteractiveOnly } from '../../auth/interactive-only.decorator.js';
 import { requestMetaOf as meta } from '../../common/request-meta.js';
 import { IntegrationOAuthAppService } from './integration-oauth-app.service.js';
 import { IntegrationOAuthService, type OAuthCallbackQuery } from './integration-oauth.service.js';
+import { OAuthCallbackRedirectFilter } from './oauth-callback-redirect.filter.js';
 
 function parseProvider(raw: string): IntegrationOAuthProvider {
   const parsed = integrationOAuthProviderSchema.safeParse(raw);
@@ -79,6 +81,7 @@ export class IntegrationOAuthController {
 
   @Get('oauth/callback')
   @RequirePermission('integration.manage')
+  @UseFilters(OAuthCallbackRedirectFilter)
   async callback(
     @CurrentUser() user: AuthedUser,
     @Query() query: OAuthCallbackQuery,

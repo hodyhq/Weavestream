@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type {
   IntegrationOAuthApp,
@@ -93,15 +93,26 @@ export class IntegrationOAuthAppService {
       where: { provider },
       select: { clientId: true },
     });
-    const secretCiphertext = this.crypto.encrypt(
-      input.clientSecret,
-      integrationOAuthAppSecretAad(provider),
-    );
-    await this.prisma.integrationOAuthApp.upsert({
-      where: { provider },
-      create: { provider, clientId: input.clientId, secretCiphertext, updatedBy: actor.id },
-      update: { clientId: input.clientId, secretCiphertext, updatedBy: actor.id },
-    });
+    if (input.clientSecret === undefined) {
+      if (!before) {
+        throw new BadRequestException('Enter the client secret.');
+      }
+      // Keep the stored secret; only the client ID changes.
+      await this.prisma.integrationOAuthApp.update({
+        where: { provider },
+        data: { clientId: input.clientId, updatedBy: actor.id },
+      });
+    } else {
+      const secretCiphertext = this.crypto.encrypt(
+        input.clientSecret,
+        integrationOAuthAppSecretAad(provider),
+      );
+      await this.prisma.integrationOAuthApp.upsert({
+        where: { provider },
+        create: { provider, clientId: input.clientId, secretCiphertext, updatedBy: actor.id },
+        update: { clientId: input.clientId, secretCiphertext, updatedBy: actor.id },
+      });
+    }
     await this.audit.log({
       actorId: actor.id,
       action: AUDIT_ACTIONS.settings.integrationOAuthAppUpdate,
@@ -113,7 +124,9 @@ export class IntegrationOAuthAppService {
       after: {
         provider,
         clientId: input.clientId,
-        secretFingerprint: fingerprint(input.clientSecret),
+        ...(input.clientSecret === undefined
+          ? { secretKept: true }
+          : { secretFingerprint: fingerprint(input.clientSecret) }),
       },
     });
     return this.get(provider);

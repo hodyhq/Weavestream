@@ -38,14 +38,19 @@ export function IntegrationOAuthAppCard({
     );
   }
 
-  const canSave = clientId.trim().length > 0 && clientSecret.trim().length > 0 && !pending;
+  // A stored secret may be kept: leaving the field blank changes only the client ID.
+  const secret = clientSecret.trim();
+  const canSave =
+    clientId.trim().length > 0 &&
+    (secret.length > 0 || (app.configured && clientId.trim() !== (app.clientId ?? ''))) &&
+    !pending;
 
   async function save() {
     if (!canSave) return;
     setPending(true);
     const res = await apiFetch<IntegrationOAuthApp>(`/settings/integration-oauth-apps/${provider}`, {
       method: 'PUT',
-      body: JSON.stringify({ clientId: clientId.trim(), clientSecret: clientSecret.trim() }),
+      body: JSON.stringify({ clientId: clientId.trim(), ...(secret ? { clientSecret: secret } : {}) }),
     });
     setPending(false);
     if (!res.ok || !res.data) {
@@ -109,7 +114,7 @@ export function IntegrationOAuthAppCard({
           htmlFor="oauth-client-secret"
           help={
             app.configured
-              ? `Saved secret fingerprint: ${app.secretFingerprint ?? 'unreadable, save it again'}. Enter the secret again to change either value.`
+              ? `Saved secret fingerprint: ${app.secretFingerprint ?? 'unreadable, save it again'}. Leave blank to keep it. If you change the client ID, the saved secret is kept, so enter the new client's secret too unless it is the same.`
               : 'Stored encrypted. It is never shown again after saving.'
           }
         >
