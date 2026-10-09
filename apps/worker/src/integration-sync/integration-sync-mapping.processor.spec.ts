@@ -355,7 +355,7 @@ function totalsForWorker() {
   };
 }
 
-describe('IntegrationSyncMappingWorker Google Workspace domains', () => {
+describe('IntegrationSyncMappingWorker provider domains', () => {
   const runId = '00000000-0000-0000-0000-000000000041';
   const mappingId = '00000000-0000-0000-0000-000000000042';
   const resourceId = '00000000-0000-0000-0000-000000000043';
@@ -405,6 +405,20 @@ describe('IntegrationSyncMappingWorker Google Workspace domains', () => {
     const other = jest.fn();
     await arrange('breeze', other).handle(job());
     expect(other).not.toHaveBeenCalled();
+  });
+
+  it('syncs Microsoft 365 domains the same way', async () => {
+    const syncMapping = jest.fn().mockResolvedValue({});
+    await arrange('microsoft-365', syncMapping).handle(job());
+    expect(syncMapping).toHaveBeenCalledWith(mappingId, 'actor');
+  });
+
+  it('labels a failed Microsoft 365 domain sync warning with its provider', async () => {
+    const syncMapping = jest.fn().mockRejectedValue(new Error('db detail'));
+    const { handle, sync } = arrange('microsoft-365', syncMapping);
+    await handle(job());
+    const merged = sync.mergeResourceResult.mock.calls[0]![0] as { conflicts: Array<{ message: string }> };
+    expect(merged.conflicts[0]!.message).toContain('Microsoft 365 domains were not synced');
   });
 
   it('skips the domain sync on a dry run and on legacy per-resource jobs', async () => {

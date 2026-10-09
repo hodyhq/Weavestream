@@ -55,6 +55,7 @@ export function SettingsTabs({
   emailSettings,
   aiSettings,
   googleOAuthApp,
+  microsoftOAuthApp,
   currentUserEmail,
 }: {
   initialTab: TabId;
@@ -62,6 +63,7 @@ export function SettingsTabs({
   emailSettings: EmailSettings;
   aiSettings: AiSettings;
   googleOAuthApp: IntegrationOAuthApp | null;
+  microsoftOAuthApp: IntegrationOAuthApp | null;
   currentUserEmail: string;
 }) {
   const router = useRouter();
@@ -136,7 +138,12 @@ export function SettingsTabs({
           />
         )}
         {tab === 'ai' && <AiSettingsForm initial={aiSettings} />}
-        {tab === 'integrations' && <IntegrationOAuthAppCard initial={googleOAuthApp} provider="google" />}
+        {tab === 'integrations' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+            <IntegrationOAuthAppCard initial={googleOAuthApp} provider="google" />
+            <IntegrationOAuthAppCard initial={microsoftOAuthApp} provider="microsoft" />
+          </div>
+        )}
       </div>
     </div>
   );

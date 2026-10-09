@@ -1,11 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import type {
-  IntegrationOAuthApp,
-  IntegrationOAuthProvider,
-  IntegrationSetupCheck,
-  SetupGuideStep,
-  UpdateIntegrationOAuthAppInput,
+import {
+  oauthSecretExpiryWarning,
+  type IntegrationOAuthApp,
+  type IntegrationOAuthProvider,
+  type IntegrationSetupCheck,
+  type SetupGuideStep,
+  type UpdateIntegrationOAuthAppInput,
 } from '@weavestream/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
@@ -25,7 +26,7 @@ import type { OAuthClientCredentials } from './oauth-token.js';
 export const OAUTH_CALLBACK_PATH = '/v1/admin/integrations/oauth/callback';
 
 export const OAUTH_CALLBACK_HOST_WARNING =
-  'API_URL and APP_URL must share a host for Connect with Google to keep you signed in.';
+  'API_URL and APP_URL must share a host for Connect with Google or Microsoft to keep you signed in.';
 
 /**
  * Session cookies are host-only, so the browser sends them to the callback
@@ -96,6 +97,10 @@ export class IntegrationOAuthAppService {
    * lists scopes no earlier group covers; a driver adding none is skipped.
    */
   scopeGroupsFor(provider: IntegrationOAuthProvider): { label: string; scopes: string[] }[] {
+    // A driver may group its own permissions by purpose (Microsoft); the
+    // first driver of the provider that does so decides the grouping.
+    const declared = this.drivers.list().find((d) => d.oauth?.provider === provider && d.oauth.scopeGroups)?.oauth?.scopeGroups;
+    if (declared) return declared.map((g) => ({ label: g.label, scopes: [...g.scopes] }));
     const seen = new Set<string>();
     const groups: { label: string; scopes: string[] }[] = [];
     for (const d of this.drivers.list().filter((x) => x.oauth?.provider === provider)) {
@@ -131,8 +136,12 @@ export class IntegrationOAuthAppService {
         );
       }
     }
+    const secretExpiresAt = row?.secretExpiresAt ? row.secretExpiresAt.toISOString().slice(0, 10) : null;
     return {
       provider,
+      secretExpiresAt,
+      secretExpiryWarning: oauthSecretExpiryWarning(secretExpiresAt),
+      tenantId: row?.tenantId ?? null,
       configured: Boolean(row),
       clientId: row?.clientId ?? null,
       secretMask,
@@ -153,16 +162,23 @@ export class IntegrationOAuthAppService {
   ): Promise<IntegrationOAuthApp> {
     const before = await this.prisma.integrationOAuthApp.findUnique({
       where: { provider },
-      select: { clientId: true },
+      select: { clientId: true, secretExpiresAt: true, tenantId: true },
     });
+    // Omitted = keep, null = clear. Stored as a DATE (UTC midnight).
+    const extra = {
+      ...(input.secretExpiresAt !== undefined
+        ? { secretExpiresAt: input.secretExpiresAt === null ? null : new Date(`${input.secretExpiresAt}T00:00:00.000Z`) }
+        : {}),
+      ...(input.tenantId !== undefined ? { tenantId: input.tenantId === null ? null : input.tenantId.toLowerCase() } : {}),
+    };
     if (input.clientSecret === undefined) {
       if (!before) {
         throw new BadRequestException('Enter the client secret.');
       }
-      // Keep the stored secret; only the client ID changes.
+      // Keep the stored secret; only the client ID (and the plain fields) change.
       await this.prisma.integrationOAuthApp.update({
         where: { provider },
-        data: { clientId: input.clientId, updatedBy: actor.id },
+        data: { clientId: input.clientId, ...extra, updatedBy: actor.id },
       });
     } else {
       const secretCiphertext = this.crypto.encrypt(
@@ -171,10 +187,11 @@ export class IntegrationOAuthAppService {
       );
       await this.prisma.integrationOAuthApp.upsert({
         where: { provider },
-        create: { provider, clientId: input.clientId, secretCiphertext, updatedBy: actor.id },
-        update: { clientId: input.clientId, secretCiphertext, updatedBy: actor.id },
+        create: { provider, clientId: input.clientId, secretCiphertext, ...extra, updatedBy: actor.id },
+        update: { clientId: input.clientId, secretCiphertext, ...extra, updatedBy: actor.id },
       });
     }
+    const day = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
     await this.audit.log({
       actorId: actor.id,
       action: AUDIT_ACTIONS.settings.integrationOAuthAppUpdate,
@@ -182,10 +199,14 @@ export class IntegrationOAuthAppService {
       entityId: provider,
       ip: meta.ip,
       userAgent: meta.userAgent,
-      before: before ? { provider, clientId: before.clientId } : null,
+      before: before
+        ? { provider, clientId: before.clientId, secretExpiresAt: day(before.secretExpiresAt), tenantId: before.tenantId }
+        : null,
       after: {
         provider,
         clientId: input.clientId,
+        ...(input.secretExpiresAt !== undefined ? { secretExpiresAt: input.secretExpiresAt } : {}),
+        ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),
         ...(input.clientSecret === undefined
           ? { secretKept: true }
           : { secretMask: maskSecretTail(input.clientSecret) }),
@@ -207,11 +228,15 @@ export class IntegrationOAuthAppService {
       .find((d) => d.diagnose);
     if (!driver?.diagnose) throw new BadRequestException('This provider has no setup check.');
     const client = await this.getClient(provider);
+    const home = client
+      ? await this.prisma.integrationOAuthApp.findUnique({ where: { provider }, select: { tenantId: true } })
+      : null;
     const result: IntegrationSetupCheck = withCallbackHostWarning(this.env.values, client
       ? await driver.diagnose({
           mode: 'client',
           oauthClient: client,
           redirectUri: this.redirectUri(),
+          homeTenantId: home?.tenantId ?? null,
           http: {
             timeoutMs: this.env.values.INTEGRATION_HTTP_TIMEOUT_MS,
             maxRetries: this.env.values.INTEGRATION_HTTP_MAX_RETRIES,

@@ -26,11 +26,12 @@ export default async function SettingsPage({
   const me = await requireMe();
   if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
-  const [settings, emailSettings, aiSettings, googleOAuthApp] = await Promise.all([
+  const [settings, emailSettings, aiSettings, googleOAuthApp, microsoftOAuthApp] = await Promise.all([
     getSettings(),
     getEmailSettings(),
     getAiSettings(),
     getIntegrationOAuthApp('google'),
+    getIntegrationOAuthApp('microsoft'),
   ]);
 
   return (
@@ -51,6 +52,7 @@ export default async function SettingsPage({
             emailSettings={emailSettings}
             aiSettings={aiSettings}
             googleOAuthApp={googleOAuthApp}
+            microsoftOAuthApp={microsoftOAuthApp}
             currentUserEmail={me.email}
           />
         </Panel>

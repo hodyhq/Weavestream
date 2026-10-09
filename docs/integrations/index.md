@@ -45,6 +45,8 @@ Select an integration below for provider-specific setup guides, resource capabil
 
 [!card title="Level RMM" text="Sync Level RMM devices per top-level group: hardware, OS and network facts fill your layout fields; status, storage, security, patches and alerts show on the asset (read-only)." icon="plug" layout="compact"](/integrations/level/)
 
+[!card title="Microsoft 365" text="Admin-consent connect per customer to sync users, licences, storage, sign-in and MFA, groups, Intune devices, tenant security and domains (read-only)." icon="plug" layout="compact"](/integrations/microsoft-365/)
+
 [!card title="NinjaOne" text="Sync agent-managed workstations, servers, SNMP network gear, and guest VMs with dual-resource mapping." icon="plug" layout="compact"](/integrations/ninjaone/)
 
 [!card title="UniFi" text="Import Ubiquiti UniFi network gateways, switches, access points, and connected client devices into asset records." icon="plug" layout="compact"](/integrations/unifi/)

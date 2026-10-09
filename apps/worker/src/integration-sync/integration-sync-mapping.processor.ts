@@ -18,8 +18,9 @@ import {
   IntegrationSyncRunnerService,
   type MappingRunOutcome,
   IntegrationProvenanceService,
-  GoogleWorkspaceDomainSyncService,
-  workspaceDomainSyncWarning,
+  IntegrationDomainSyncService,
+  domainSyncWarning,
+  hasDomainFeed,
 } from '@weavestream/api/integrations';
 import {
   createManagedWorker,
@@ -55,7 +56,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     private readonly runner: IntegrationSyncRunnerService,
     private readonly provenance: IntegrationProvenanceService,
     private readonly audit: AuditLogService,
-    private readonly workspaceDomains: GoogleWorkspaceDomainSyncService,
+    private readonly providerDomains: IntegrationDomainSyncService,
   ) {}
 
   async start(): Promise<void> {
@@ -271,15 +272,15 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     if (retryable && !isFinalAttempt(job)) {
       throw new Error(retryable.error ?? `Resource ${retryable.resourceKey} failed.`);
     }
-    // Google Workspace domains feed Domains monitoring (not an asset
-    // resource): once per mapping run, after the resources. A failure is a
-    // run warning on the last resource, never a failed mapping. Legacy
-    // per-resource jobs would run it once per resource, so they skip it.
-    if (run.integration.driver === 'google-workspace' && !legacy && !payload.dryRun) {
+    // Google Workspace and Microsoft 365 domains feed Domains monitoring
+    // (not an asset resource): once per mapping run, after the resources. A
+    // failure is a run warning on the last resource, never a failed mapping.
+    // Legacy per-resource jobs would run it once per resource, so they skip it.
+    if (hasDomainFeed(run.integration.driver) && !legacy && !payload.dryRun) {
       try {
-        await this.workspaceDomains.syncMapping(mapping.id, auditActorId);
+        await this.providerDomains.syncMapping(mapping.id, auditActorId);
       } catch (err) {
-        const message = workspaceDomainSyncWarning(err);
+        const message = domainSyncWarning(err, run.integration.driver);
         this.logger.warn(
           `${message} (mapping=${mapping.id}): ${err instanceof Error ? err.message : String(err)}`,
         );

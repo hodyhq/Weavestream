@@ -15,6 +15,22 @@ import { apiFetch } from '../../../../../lib/api';
 import { FormattedDate } from '../../../../../lib/timezone-context';
 import { Btn, Icon, Tag, useToast } from '../../../../../components/ui';
 import { SetupGuide } from '../../../../../components/integrations/setup-guide';
+import { ReportNamesChoice } from './report-names-choice';
+
+/**
+ * Fixed text for the `reason` the API callback may add to `?oauth=failed`
+ * (admin consent). Anything else falls back to the generic failure toast.
+ */
+export const OAUTH_FAILURE_REASONS: Record<string, string> = {
+  consent_declined: 'Microsoft did not grant consent. Connect again and press Accept on the Microsoft page.',
+  admin_required:
+    'A Global Administrator or Privileged Role Administrator of the customer tenant must approve. Sign in with one of those roles and connect again.',
+  tenant_unverified: 'Weavestream could not verify the tenant Microsoft returned, so nothing was saved. Connect again.',
+  excess_permissions:
+    'The app has more permissions than Weavestream uses. Remove the extra permissions from the app registration, then connect again.',
+  app_not_configured: 'The Microsoft app is not set up for this Weavestream install. An administrator can set it up under Settings.',
+  token_failed: 'Microsoft did not issue a token for the tenant. Run Check setup on the Microsoft app under Settings, then connect again.',
+};
 
 /**
  * Connect / Reconnect / Disconnect for drivers whose descriptor declares
@@ -57,16 +73,19 @@ export function OAuthConnection({
   }, [load]);
 
   const flag = sp.get('oauth');
+  const reason = sp.get('reason');
   useEffect(() => {
     if (flag !== 'connected' && flag !== 'failed') return;
     toast.push(
       flag === 'connected'
         ? `Connected with ${label}.`
-        : `Could not connect with ${label}. Try again, or check the OAuth app under Settings.`,
+        : (reason ? OAUTH_FAILURE_REASONS[reason] : undefined) ??
+            `Could not connect with ${label}. Try again, or check the OAuth app under Settings.`,
       flag === 'connected' ? 'ok' : 'danger',
     );
     const params = new URLSearchParams(sp.toString());
     params.delete('oauth');
+    params.delete('reason');
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname);
     // Fire once per flag value; toast/router identities are irrelevant here.
@@ -105,11 +124,10 @@ export function OAuthConnection({
   }
 
   async function disconnect() {
-    if (
-      !window.confirm(
-        `Disconnect from ${label}?\n\nWeavestream revokes its access and forgets the connection. Syncs stop until you connect again.`,
-      )
-    ) {
+    const consequence = adminConsent
+      ? 'Weavestream forgets the connection. To remove its access in the tenant too, delete the Weavestream enterprise application there.'
+      : 'Weavestream revokes its access and forgets the connection.';
+    if (!window.confirm(`Disconnect from ${label}?\n\n${consequence} Syncs stop until you connect again.`)) {
       return;
     }
     setBusy('disconnect');
@@ -134,6 +152,7 @@ export function OAuthConnection({
   const needsReconnect = status?.needsReconnect ?? false;
   const hasGrant = Boolean(connection) || needsReconnect;
   const appConfigured = status?.appConfigured ?? false;
+  const adminConsent = oauth.consentFlow === 'admin_consent';
 
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -144,7 +163,18 @@ export function OAuthConnection({
         <p style={mutedStyle}>Loading connection status…</p>
       ) : (
         <>
-          {connection ? (
+          {status.appSecretExpiryWarning && (
+            <p role="alert" style={{ margin: 0, fontSize: 12.5, color: 'var(--danger)', fontWeight: 600 }}>
+              {status.appSecretExpiryWarning}
+            </p>
+          )}
+          {connection && adminConsent ? (
+            <p style={{ margin: 0, fontSize: 13 }}>
+              <Tag tone="ok">connected</Tag> Connected to{' '}
+              <strong>{connection.connectedAs ?? connection.tenantId ?? 'the tenant'}</strong> on{' '}
+              <FormattedDate value={connection.connectedAt} />.
+            </p>
+          ) : connection ? (
             <p style={{ margin: 0, fontSize: 13 }}>
               <Tag tone="ok">connected</Tag>{' '}
               {connection.connectedAs ? (
@@ -163,8 +193,10 @@ export function OAuthConnection({
             </p>
           ) : (
             <p style={{ margin: 0, fontSize: 13 }}>
-              <Tag tone="warn">not connected</Tag> Sign in with an administrator account of the
-              organization to connect.
+              <Tag tone="warn">not connected</Tag>{' '}
+              {adminConsent
+                ? 'A Global Administrator or Privileged Role Administrator of the customer tenant approves the app to connect.'
+                : 'Sign in with an administrator account of the organization to connect.'}
             </p>
           )}
           {!appConfigured && (
@@ -200,11 +232,14 @@ export function OAuthConnection({
               </Btn>
             )}
           </div>
+          {connection && adminConsent && oauth.provider === 'microsoft' && (
+            <ReportNamesChoice integrationId={integrationId} choice={connection.reportNames ?? null} />
+          )}
           {setupGuide && setupGuide.length > 0 && (
             <SetupGuide
               steps={setupGuide}
               redirectUri={status.redirectUri}
-              scopeGroups={[{ scopes: oauth.scopes }]}
+              scopeGroups={oauth.scopeGroups ?? [{ scopes: oauth.scopes }]}
               check={check}
               onCheck={() => void runCheck()}
               checking={checking}

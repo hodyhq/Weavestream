@@ -2,15 +2,21 @@ import { Logger } from '@nestjs/common';
 import { Prisma, type MonitoredDomain } from '@prisma/client';
 import { DriverAuthError } from '../drivers/integration-driver.js';
 import type { WorkspaceDomain } from '../drivers/google-workspace/google-workspace.driver.js';
+import type { MicrosoftDomain } from '../drivers/microsoft-365/microsoft-365.driver.js';
 import {
-  GoogleWorkspaceDomainSyncService,
-  matchWorkspaceRow,
-  workspaceDomainSyncWarning,
-} from './google-workspace-domain-sync.service.js';
+  IntegrationDomainSyncService,
+  domainSyncWarning,
+  hasDomainFeed,
+  matchDomainRow,
+} from './integration-domain-sync.service.js';
 
 const mockListWorkspaceDomains = jest.fn<Promise<WorkspaceDomain[]>, unknown[]>();
 jest.mock('../drivers/google-workspace/google-workspace.driver.js', () => ({
   listWorkspaceDomains: (...args: unknown[]) => mockListWorkspaceDomains(...args),
+}));
+const mockListMicrosoftDomains = jest.fn<Promise<MicrosoftDomain[]>, unknown[]>();
+jest.mock('../drivers/microsoft-365/microsoft-365.driver.js', () => ({
+  listMicrosoftDomains: (...args: unknown[]) => mockListMicrosoftDomains(...args),
 }));
 
 const INT = 'int-google';
@@ -34,6 +40,12 @@ function row(p: Partial<MonitoredDomain>): MonitoredDomain {
     workspaceAliasOf: null,
     workspaceSyncedAt: null,
     workspaceMissingSince: null,
+    microsoftIntegrationId: null,
+    microsoftDefault: null,
+    microsoftAuthType: null,
+    microsoftServices: [],
+    microsoftSyncedAt: null,
+    microsoftMissingSince: null,
     ...p,
   } as MonitoredDomain;
 }
@@ -76,7 +88,7 @@ function matches(r: object, where: Record<string, unknown>): boolean {
   });
 }
 
-function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViolation?: boolean } = {}) {
+function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViolation?: boolean; driver?: string } = {}) {
   const locks = advisoryLocks();
   const tick = () => new Promise((r) => setImmediate(r));
   const monitoredDomain = {
@@ -107,7 +119,7 @@ function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViol
         companyId: opts.companyId ?? CO,
         externalOrgId: 'C0example1',
         integrationId: INT,
-        integration: { driver: 'google-workspace' },
+        integration: { driver: opts.driver ?? 'google-workspace' },
         company: { archivedAt: null },
       })),
     },
@@ -132,7 +144,7 @@ function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViol
   const audit = { log: jest.fn().mockResolvedValue(undefined) };
   const env = { values: { INTEGRATION_HTTP_TIMEOUT_MS: 1000, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 0 } };
   const enqueueDomainCheck = jest.fn().mockResolvedValue('job-1');
-  const svc = new GoogleWorkspaceDomainSyncService(
+  const svc = new IntegrationDomainSyncService(
     prisma as never,
     integrations as never,
     audit as never,
@@ -144,20 +156,21 @@ function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViol
 
 beforeEach(() => {
   mockListWorkspaceDomains.mockReset();
+  mockListMicrosoftDomains.mockReset();
   jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 });
 
-describe('matchWorkspaceRow', () => {
+describe('matchDomainRow', () => {
   it('matches the active row, skips when only archived rows exist, creates otherwise', () => {
     const active = row({ id: 'a' });
     const archived = row({ id: 'x', archivedAt: new Date() });
-    expect(matchWorkspaceRow([archived, active])).toEqual({ kind: 'match', row: active });
-    expect(matchWorkspaceRow([archived])).toEqual({ kind: 'skip', reason: 'archived' });
-    expect(matchWorkspaceRow([])).toEqual({ kind: 'create' });
+    expect(matchDomainRow([archived, active])).toEqual({ kind: 'match', row: active });
+    expect(matchDomainRow([archived])).toEqual({ kind: 'skip', reason: 'archived' });
+    expect(matchDomainRow([])).toEqual({ kind: 'create' });
   });
 });
 
-describe('GoogleWorkspaceDomainSyncService.syncMapping', () => {
+describe('IntegrationDomainSyncService.syncMapping (Google Workspace)', () => {
   it('matches existing rows case-insensitively and writes only the workspace columns', async () => {
     const cloudflare = row({
       id: 'cf',
@@ -184,6 +197,12 @@ describe('GoogleWorkspaceDomainSyncService.syncMapping', () => {
       workspaceRole: 'PRIMARY',
       workspaceAliasOf: null,
       workspaceMissingSince: null,
+      microsoftIntegrationId: null,
+      microsoftDefault: null,
+      microsoftAuthType: null,
+      microsoftServices: [],
+      microsoftSyncedAt: null,
+      microsoftMissingSince: null,
     });
     expect(cloudflare.workspaceSyncedAt).toBeInstanceOf(Date);
     expect(manual).toMatchObject({ source: 'MANUAL', integrationId: null, workspaceRole: 'ALIAS', workspaceAliasOf: 'example.com' });
@@ -289,11 +308,80 @@ describe('GoogleWorkspaceDomainSyncService.syncMapping', () => {
   });
 });
 
-describe('workspaceDomainSyncWarning', () => {
+describe('domainSyncWarning', () => {
   it('keeps driver messages and hides anything else', () => {
-    expect(workspaceDomainSyncWarning(new DriverAuthError('Wrong tenant.'))).toContain('Wrong tenant.');
-    const internal = workspaceDomainSyncWarning(new Error('relation "x" does not exist'));
+    expect(domainSyncWarning(new DriverAuthError('Wrong tenant.'), 'google-workspace')).toContain('Wrong tenant.');
+    const internal = domainSyncWarning(new Error('relation "x" does not exist'), 'google-workspace');
     expect(internal).not.toContain('relation');
     expect(internal).toContain('internal error');
+    expect(domainSyncWarning(new Error('x'), 'microsoft-365')).toMatch(/^Microsoft 365 domains were not synced/);
+  });
+});
+
+const ms = (hostname: string, isDefault = false, authType: MicrosoftDomain['authType'] = 'MANAGED', services = ['Email']): MicrosoftDomain => ({
+  hostname,
+  isDefault,
+  authType,
+  services,
+});
+
+describe('IntegrationDomainSyncService.syncMapping (Microsoft 365)', () => {
+  it('feeds only Google Workspace and Microsoft 365', () => {
+    expect(hasDomainFeed('google-workspace')).toBe(true);
+    expect(hasDomainFeed('microsoft-365')).toBe(true);
+    expect(hasDomainFeed('level')).toBe(false);
+    expect(hasDomainFeed('__proto__')).toBe(false);
+  });
+
+  it('matches Cloudflare and Google rows by hostname, writing only the microsoft columns', async () => {
+    const cloudflare = row({ id: 'cf', hostname: 'contoso.example', source: 'CLOUDFLARE', integrationId: 'int-cf', registrar: 'Cloudflare' });
+    const google = row({ id: 'g', hostname: 'Fabrikam.Example', source: 'GOOGLE_WORKSPACE', integrationId: 'int-google', workspaceIntegrationId: 'int-google', workspaceRole: 'PRIMARY' });
+    const { svc, rows, enqueueDomainCheck } = harness([cloudflare, google], { driver: 'microsoft-365' });
+    mockListMicrosoftDomains.mockResolvedValue([ms('contoso.example', true, 'FEDERATED', ['Email', 'OfficeCommunicationsOnline']), ms('fabrikam.example')]);
+
+    await expect(svc.syncMapping(MAPPING, 'u-1')).resolves.toEqual({ created: 0, matched: 2, missing: 0, skipped: 0 });
+    expect(rows).toHaveLength(2);
+    expect(cloudflare).toMatchObject({
+      source: 'CLOUDFLARE',
+      integrationId: 'int-cf',
+      registrar: 'Cloudflare',
+      workspaceRole: null,
+      microsoftIntegrationId: INT,
+      microsoftDefault: true,
+      microsoftAuthType: 'FEDERATED',
+      microsoftServices: ['Email', 'OfficeCommunicationsOnline'],
+      microsoftMissingSince: null,
+    });
+    expect(cloudflare.microsoftSyncedAt).toBeInstanceOf(Date);
+    // The Google feed's columns stay as they were.
+    expect(google).toMatchObject({ source: 'GOOGLE_WORKSPACE', integrationId: 'int-google', workspaceRole: 'PRIMARY', microsoftDefault: false });
+    expect(enqueueDomainCheck).not.toHaveBeenCalled();
+  });
+
+  it('creates a missing verified domain as MICROSOFT_365 and queues its first check, never twice', async () => {
+    const { svc, rows, enqueueDomainCheck } = harness([], { driver: 'microsoft-365' });
+    mockListMicrosoftDomains.mockResolvedValue([ms('contoso.example', true)]);
+    await Promise.all([svc.syncMapping(MAPPING, 'u-1'), svc.syncMapping(MAPPING, null)]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ source: 'MICROSOFT_365', integrationId: INT, microsoftIntegrationId: INT, microsoftDefault: true, companyId: CO });
+    expect(enqueueDomainCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps a domain that left the tenant once and clears only the microsoft facts', async () => {
+    const gone = row({ id: 'gone', hostname: 'old.example', microsoftIntegrationId: INT, microsoftDefault: false, microsoftAuthType: 'MANAGED', microsoftServices: ['Email'], workspaceIntegrationId: 'int-google', workspaceRole: 'SECONDARY' });
+    const { svc, audit } = harness([gone], { driver: 'microsoft-365' });
+    mockListMicrosoftDomains.mockResolvedValue([]);
+    await expect(svc.syncMapping(MAPPING, null)).resolves.toMatchObject({ missing: 1 });
+    expect(gone).toMatchObject({ microsoftDefault: null, microsoftAuthType: null, microsoftServices: [], workspaceRole: 'SECONDARY' });
+    expect(gone.microsoftMissingSince).toBeInstanceOf(Date);
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'integration.microsoft_365.domain_sync', after: expect.objectContaining({ missingHostnames: ['old.example'] }) }));
+  });
+
+  it('passes the mapped tenant to the driver (which enforces tenant isolation)', async () => {
+    const { svc } = harness([], { driver: 'microsoft-365' });
+    mockListMicrosoftDomains.mockResolvedValue([]);
+    await svc.syncMapping(MAPPING, null);
+    expect(mockListMicrosoftDomains).toHaveBeenCalledWith(expect.objectContaining({ integrationId: INT }), 'C0example1');
+    expect(mockListWorkspaceDomains).not.toHaveBeenCalled();
   });
 });

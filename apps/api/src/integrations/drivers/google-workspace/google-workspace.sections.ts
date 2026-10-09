@@ -1,9 +1,8 @@
 import { isIP } from 'node:net';
 import type { IntegrationSection, IntegrationSectionGroup } from '@weavestream/shared';
-import { PhoneStrategy } from '../../../field-types/strategies/contact.strategy.js';
-import { badge, bool, clean, date, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
+import { badge, bool, date, datetime, facts, group, list, normalizeMac, normalizePhone, num, str, text, toIso, type Lookup, type Row } from '../section-rows.js';
 
-export { badge, bool, clean, date, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
+export { badge, bool, clean, date, datetime, group, list, normalizeMac, normalizePhone, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
 
 /**
  * Pure builders for the Google Workspace records. Standard facts (job
@@ -50,29 +49,6 @@ export interface GoogleUser {
   phones?: Array<{ value?: string; type?: string; primary?: boolean }>;
 }
 
-const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
-
-/** Present values only, cleaned: a fact Google does not report is omitted, never cleared. */
-function facts(values: Record<string, string | undefined>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(values)) if (value) out[key] = clean(value, 1_000);
-  return out;
-}
-
-/** "aa:bb:cc:dd:ee:ff" from any 12-hex-digit spelling, else undefined. */
-export function normalizeMac(value: string | undefined): string | undefined {
-  const hex = value?.replace(/[^0-9a-f]/gi, '').toLowerCase();
-  return hex && hex.length === 12 && /^[0-9a-f]{12}$/.test(hex) ? hex.match(/../g)!.join(':') : undefined;
-}
-
-const PHONE = new PhoneStrategy();
-
-/** E.164 the PHONE field accepts; anything with letters (extensions) or too short is omitted. */
-export function normalizePhone(value: string | undefined): string | undefined {
-  if (!value || !/^[\d\s()+.-]+$/.test(value)) return undefined;
-  const e164 = PHONE.normalize(value);
-  return typeof e164 === 'string' && PHONE.valueSchema().safeParse(e164).success ? e164 : undefined;
-}
 
 export function userStandardFields(user: GoogleUser): Record<string, string> {
   const orgs = user.organizations ?? [];

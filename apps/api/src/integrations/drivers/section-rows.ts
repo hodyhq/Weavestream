@@ -1,4 +1,5 @@
 import type { IntegrationSectionGroup, IntegrationSectionRow } from '@weavestream/shared';
+import { PhoneStrategy } from '../../field-types/strategies/contact.strategy.js';
 
 /**
  * Row builders shared by the drivers that emit integration sections
@@ -66,3 +67,35 @@ export function group(
   return { key, title, ...(icon ? { icon } : {}), rows: rows.filter((row): row is IntegrationSectionRow => row !== null).slice(0, 40) };
 }
 
+
+/** A trimmed non-empty string, else undefined. */
+export const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+
+/** Present values only, cleaned: a fact the source does not report is omitted, never cleared. */
+export function facts(values: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) if (value) out[key] = clean(value, 1_000);
+  return out;
+}
+
+/** "aa:bb:cc:dd:ee:ff" from any 12-hex-digit spelling, else undefined. */
+export function normalizeMac(value: string | undefined): string | undefined {
+  const hex = value?.replace(/[^0-9a-f]/gi, '').toLowerCase();
+  return hex && hex.length === 12 && /^[0-9a-f]{12}$/.test(hex) ? hex.match(/../g)!.join(':') : undefined;
+}
+
+const PHONE = new PhoneStrategy();
+
+/** E.164 the PHONE field accepts; anything with letters (extensions) or too short is omitted. */
+export function normalizePhone(value: string | undefined): string | undefined {
+  if (!value || !/^[\d\s()+.-]+$/.test(value)) return undefined;
+  const e164 = PHONE.normalize(value);
+  return typeof e164 === 'string' && PHONE.valueSchema().safeParse(e164).success ? e164 : undefined;
+}
+
+/** An https link row, or a text row when the URL is not https. */
+export function link(label: string, url: string | null | undefined, linkText?: string): Row {
+  if (!url) return linkText ? text(label, linkText) : null;
+  if (!/^https:\/\/[^\s]+$/i.test(url) || url.length > 2048) return linkText ? text(label, linkText) : null;
+  return { kind: 'link', label: clean(label, 120), value: url, ...(linkText ? { text: clean(linkText, 120) } : {}) };
+}

@@ -9,13 +9,11 @@ import { EnvService } from '../../config/env.service.js';
 import { QueuesService } from '../../queues/queues.service.js';
 import { IntegrationsService } from '../integrations.service.js';
 import { lockDomainHostname } from '../cloudflare/cloudflare-registrar-sync.service.js';
-import {
-  listWorkspaceDomains,
-  type WorkspaceDomain,
-} from '../drivers/google-workspace/google-workspace.driver.js';
-import { DriverAuthError, DriverRateLimitError } from '../drivers/integration-driver.js';
+import { listWorkspaceDomains } from '../drivers/google-workspace/google-workspace.driver.js';
+import { listMicrosoftDomains } from '../drivers/microsoft-365/microsoft-365.driver.js';
+import { DriverAuthError, DriverRateLimitError, type IntegrationContext } from '../drivers/integration-driver.js';
 
-export interface WorkspaceDomainSyncResult {
+export interface DomainSyncResult {
   created: number;
   matched: number;
   missing: number;
@@ -25,22 +23,82 @@ export interface WorkspaceDomainSyncResult {
 const WORKER_META = { ip: '0.0.0.0', userAgent: 'weavestream-worker/integration-sync' };
 
 /**
- * Google Workspace domains → Domains monitoring (MonitoredDomain).
+ * One provider whose verified domains feed Domains monitoring. Each writes
+ * only its own columns (`link`, `missing` and what `present` returns), so
+ * feeds never overwrite each other or the Cloudflare registrar facts.
+ */
+interface DomainFeed {
+  label: string;
+  source: 'GOOGLE_WORKSPACE' | 'MICROSOFT_365';
+  auditAction: string;
+  link: 'workspaceIntegrationId' | 'microsoftIntegrationId';
+  missing: 'workspaceMissingSince' | 'microsoftMissingSince';
+  list(ctx: IntegrationContext, externalOrgId: string): Promise<Array<{ hostname: string } & Record<string, unknown>>>;
+  /** Columns written on a row the domain is (still) in the provider. */
+  present(integrationId: string, domain: never, now: Date): Prisma.MonitoredDomainUncheckedUpdateInput;
+  /** Columns cleared when the domain left the provider (the missing stamp is added). */
+  gone: Prisma.MonitoredDomainUncheckedUpdateInput;
+}
+
+const FEEDS: Readonly<Record<string, DomainFeed>> = {
+  'google-workspace': {
+    label: 'Google Workspace',
+    source: 'GOOGLE_WORKSPACE',
+    auditAction: AUDIT_ACTIONS.integration.googleWorkspaceDomainSync,
+    link: 'workspaceIntegrationId',
+    missing: 'workspaceMissingSince',
+    list: (ctx, org) => listWorkspaceDomains(ctx, org) as never,
+    present: (integrationId, d: { role: 'PRIMARY' | 'SECONDARY' | 'ALIAS'; aliasOf: string | null }, now) => ({
+      workspaceIntegrationId: integrationId,
+      workspaceRole: d.role,
+      workspaceAliasOf: d.aliasOf,
+      workspaceSyncedAt: now,
+      workspaceMissingSince: null,
+    }),
+    gone: { workspaceRole: null, workspaceAliasOf: null },
+  },
+  'microsoft-365': {
+    label: 'Microsoft 365',
+    source: 'MICROSOFT_365',
+    auditAction: AUDIT_ACTIONS.integration.microsoft365DomainSync,
+    link: 'microsoftIntegrationId',
+    missing: 'microsoftMissingSince',
+    list: (ctx, org) => listMicrosoftDomains(ctx, org) as never,
+    present: (integrationId, d: { isDefault: boolean; authType: 'MANAGED' | 'FEDERATED'; services: string[] }, now) => ({
+      microsoftIntegrationId: integrationId,
+      microsoftDefault: d.isDefault,
+      microsoftAuthType: d.authType,
+      microsoftServices: d.services,
+      microsoftSyncedAt: now,
+      microsoftMissingSince: null,
+    }),
+    gone: { microsoftDefault: null, microsoftAuthType: null, microsoftServices: [] },
+  },
+};
+
+/** Drivers whose domains feed Domains monitoring. */
+export function hasDomainFeed(driver: string): boolean {
+  return Object.prototype.hasOwnProperty.call(FEEDS, driver);
+}
+
+/**
+ * Provider domains (Google Workspace, Microsoft 365) → Domains monitoring
+ * (MonitoredDomain).
  *
- * Runs once per Google Workspace mapping sync, scoped to the mapping's
- * company only. A verified Workspace domain is matched to an existing row of
- * that company by hostname (manual, Cloudflare or Google-created); a match
- * gains only the `workspace*` columns, so registrar facts, check settings and
- * the row's source stay with whoever owns them (Cloudflare wins). With no
- * match a GOOGLE_WORKSPACE row is created and its first check queued.
- * Archived rows are left alone and block creation, as for Cloudflare.
+ * Runs once per mapping sync, scoped to the mapping's company only. A
+ * verified domain is matched to an existing row of that company by hostname
+ * (manual, Cloudflare or another feed's); a match gains only that feed's
+ * columns, so registrar facts, check settings and the row's source stay
+ * with whoever owns them (Cloudflare wins). With no match a row with the
+ * feed's source is created and its first check queued. Archived rows are
+ * left alone and block creation, as for Cloudflare.
  *
- * Never deletes: a domain that leaves Workspace has its role cleared and
- * `workspaceMissingSince` stamped.
+ * Never deletes: a domain that leaves the provider has the feed's facts
+ * cleared and its missing date stamped.
  */
 @Injectable()
-export class GoogleWorkspaceDomainSyncService {
-  private readonly logger = new Logger(GoogleWorkspaceDomainSyncService.name);
+export class IntegrationDomainSyncService {
+  private readonly logger = new Logger(IntegrationDomainSyncService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -50,7 +108,7 @@ export class GoogleWorkspaceDomainSyncService {
     private readonly queues: QueuesService,
   ) {}
 
-  async syncMapping(mappingId: string, actorId: string | null): Promise<WorkspaceDomainSyncResult> {
+  async syncMapping(mappingId: string, actorId: string | null): Promise<DomainSyncResult> {
     const mapping = await this.prisma.integrationCompanyMapping.findUnique({
       where: { id: mappingId },
       select: {
@@ -62,14 +120,15 @@ export class GoogleWorkspaceDomainSyncService {
         company: { select: { archivedAt: true } },
       },
     });
-    const result: WorkspaceDomainSyncResult = { created: 0, matched: 0, missing: 0, skipped: 0 };
-    if (!mapping || mapping.integration.driver !== 'google-workspace' || mapping.company.archivedAt) {
+    const result: DomainSyncResult = { created: 0, matched: 0, missing: 0, skipped: 0 };
+    const feed = mapping && hasDomainFeed(mapping.integration.driver) ? FEEDS[mapping.integration.driver] : undefined;
+    if (!mapping || !feed || mapping.company.archivedAt) {
       return result;
     }
     const { companyId, integrationId } = mapping;
 
     const loaded = await this.integrations.loadDriverContext(integrationId);
-    const domains = await listWorkspaceDomains(
+    const domains = await feed.list(
       {
         config: loaded.config,
         secret: loaded.secret,
@@ -95,12 +154,12 @@ export class GoogleWorkspaceDomainSyncService {
     for (const domain of domains) {
       const parsed = domainHostnameSchema.safeParse(domain.hostname);
       if (!parsed.success) {
-        this.logger.warn(`Skipping unparseable Google Workspace domain (integration=${integrationId})`);
+        this.logger.warn(`Skipping unparseable ${feed.label} domain (integration=${integrationId})`);
         continue;
       }
       const hostname = parsed.data;
       seen.add(hostname);
-      const outcome = await this.writeDomain(companyId, integrationId, hostname, domain, now, actorId);
+      const outcome = await this.writeDomain(feed, companyId, integrationId, hostname, feed.present(integrationId, domain as never, now), actorId);
       if (outcome.kind === 'match') result.matched += 1;
       else if (outcome.kind === 'skip') {
         result.skipped += 1;
@@ -112,17 +171,17 @@ export class GoogleWorkspaceDomainSyncService {
       }
     }
 
-    // Rows this integration linked in this company that Workspace no longer
-    // reports. Stamp once so the date records when it went missing.
+    // Rows this integration linked in this company that the provider no
+    // longer reports. Stamp once so the date records when it went missing.
     const linked = await this.prisma.monitoredDomain.findMany({
-      where: { companyId, workspaceIntegrationId: integrationId, archivedAt: null, workspaceMissingSince: null },
+      where: { companyId, [feed.link]: integrationId, archivedAt: null, [feed.missing]: null },
       select: { id: true, hostname: true },
     });
     const gone = linked.filter((r) => !seen.has(r.hostname.toLowerCase()));
     if (gone.length > 0) {
       await this.prisma.monitoredDomain.updateMany({
         where: { id: { in: gone.map((r) => r.id) }, companyId },
-        data: { workspaceRole: null, workspaceAliasOf: null, workspaceMissingSince: now },
+        data: { ...feed.gone, [feed.missing]: now },
       });
       result.missing = gone.length;
     }
@@ -133,14 +192,14 @@ export class GoogleWorkspaceDomainSyncService {
         .enqueueDomainCheck({ kind: 'single', domainId, actorId })
         .catch((err: unknown) =>
           this.logger.warn(
-            `First check for Google Workspace domain ${domainId} not queued: ${err instanceof Error ? err.message : String(err)}`,
+            `First check for ${feed.label} domain ${domainId} not queued: ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
     }
 
     await this.audit.log({
       actorId,
-      action: AUDIT_ACTIONS.integration.googleWorkspaceDomainSync,
+      action: feed.auditAction,
       entityType: 'IntegrationCompanyMapping',
       entityId: mapping.id,
       companyId,
@@ -159,20 +218,13 @@ export class GoogleWorkspaceDomainSyncService {
   }
 
   private async writeDomain(
+    feed: DomainFeed,
     companyId: string,
     integrationId: string,
     hostname: string,
-    domain: WorkspaceDomain,
-    now: Date,
+    columns: Prisma.MonitoredDomainUncheckedUpdateInput,
     actorId: string | null,
   ): Promise<WriteOutcome> {
-    const workspace = {
-      workspaceIntegrationId: integrationId,
-      workspaceRole: domain.role,
-      workspaceAliasOf: domain.aliasOf,
-      workspaceSyncedAt: now,
-      workspaceMissingSince: null,
-    } satisfies Prisma.MonitoredDomainUncheckedUpdateInput;
     try {
       return await this.prisma.$transaction(async (tx): Promise<WriteOutcome> => {
         // Same lock as the Cloudflare sync: neither can create beside the other.
@@ -180,18 +232,18 @@ export class GoogleWorkspaceDomainSyncService {
         const candidates = await tx.monitoredDomain.findMany({
           where: { companyId, hostname: { equals: hostname, mode: 'insensitive' } },
         });
-        const match = matchWorkspaceRow(candidates);
+        const match = matchDomainRow(candidates);
         if (match.kind === 'match') {
-          await tx.monitoredDomain.updateMany({ where: { id: match.row.id, companyId }, data: workspace });
+          await tx.monitoredDomain.updateMany({ where: { id: match.row.id, companyId }, data: columns });
           return { kind: 'match' };
         }
         if (match.kind === 'skip') return match;
         const row = await tx.monitoredDomain.create({
           data: {
-            ...workspace,
+            ...(columns as Prisma.MonitoredDomainUncheckedCreateInput),
             companyId,
             hostname,
-            source: 'GOOGLE_WORKSPACE',
+            source: feed.source,
             integrationId,
             createdBy: actorId,
           },
@@ -219,7 +271,7 @@ type WriteOutcome = { kind: 'match' } | { kind: 'skip'; reason: string } | { kin
  * operator's archive is neither undone nor shadowed by a new row; none →
  * create.
  */
-export function matchWorkspaceRow(
+export function matchDomainRow(
   rows: MonitoredDomain[],
 ): { kind: 'match'; row: MonitoredDomain } | { kind: 'skip'; reason: string } | { kind: 'create' } {
   const active = rows.find((r) => !r.archivedAt);
@@ -234,8 +286,8 @@ export function matchWorkspaceRow(
  * else may hold internal detail and gets a generic line (full error in the
  * worker log).
  */
-export function workspaceDomainSyncWarning(err: unknown): string {
+export function domainSyncWarning(err: unknown, driver: string): string {
   const known = err instanceof DriverAuthError || err instanceof DriverRateLimitError;
   const detail = known ? (err as Error).message : 'an internal error occurred (see the worker log)';
-  return `Google Workspace domains were not synced to Domains monitoring: ${detail}`;
+  return `${FEEDS[driver]?.label ?? 'Provider'} domains were not synced to Domains monitoring: ${detail}`;
 }

@@ -354,6 +354,7 @@ describe('IntegrationOAuthService.disconnect and status', () => {
       provider: 'google',
       appConfigured: true,
       redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
+      appSecretExpiryWarning: null,
       needsReconnect: false,
       connection: {
         connectedAs: 'admin@example.test',

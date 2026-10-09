@@ -69,6 +69,9 @@ describe('IntegrationOAuthAppService', () => {
         { label: 'Only if you use Driver B', scopes: ['scope.b'] },
       ],
       updatedAt: null,
+      secretExpiresAt: null,
+      secretExpiryWarning: null,
+      tenantId: null,
     });
   });
 
@@ -161,6 +164,55 @@ describe('IntegrationOAuthAppService', () => {
     });
   });
 
+  describe('Microsoft app fields', () => {
+    const microsoftDrivers = () => [
+      {
+        key: 'microsoft-365',
+        label: 'Microsoft 365',
+        oauth: {
+          provider: 'microsoft',
+          scopes: ['User.Read.All', 'ReportSettings.ReadWrite.All'],
+          scopeGroups: [
+            { label: 'Directory', scopes: ['User.Read.All'] },
+            { label: 'Report names setting', scopes: ['ReportSettings.ReadWrite.All'] },
+          ],
+        },
+      },
+    ];
+
+    it('lists the permissions in the groups the driver declares', async () => {
+      const ctx = setup();
+      (ctx.service as unknown as { drivers: { list: unknown } }).drivers.list = microsoftDrivers;
+      await expect(ctx.service.get('microsoft')).resolves.toMatchObject({
+        scopes: ['User.Read.All', 'ReportSettings.ReadWrite.All'],
+        scopeGroups: [
+          { label: 'Directory', scopes: ['User.Read.All'] },
+          { label: 'Report names setting', scopes: ['ReportSettings.ReadWrite.All'] },
+        ],
+      });
+    });
+
+    it('saves the secret expiry date and directory tenant id, audits them, and warns 30 days ahead', async () => {
+      const { service, prisma, audit } = setup();
+      const soon = new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10);
+      await service.update({ id: 'user-1' } as never, 'microsoft', {
+        clientId: 'client-1',
+        clientSecret: 'test-client-secret',
+        secretExpiresAt: soon,
+        tenantId: 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE',
+      }, { ip: '127.0.0.1', userAgent: 'jest' });
+      const create = (prisma.integrationOAuthApp.upsert.mock.calls[0] as unknown as [{ create: Record<string, unknown> }])[0].create;
+      expect(create.secretExpiresAt).toEqual(new Date(`${soon}T00:00:00.000Z`));
+      expect(create.tenantId).toBe('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+      expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+        after: expect.objectContaining({ secretExpiresAt: soon, tenantId: 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE' }),
+      }));
+      const app = await service.get('microsoft');
+      expect(app.secretExpiresAt).toBe(soon);
+      expect(app.secretExpiryWarning).toMatch(new RegExp(`expires on ${soon} \\(in 1?\\d days?\\)`));
+    });
+  });
+
   describe('check (Check setup)', () => {
     const guide = [{ id: 'credentials', title: 'Paste', body: 'Paste it.' }];
     function checkSetup(row: Parameters<typeof setup>[0], diagnose = jest.fn(async () => ({ ok: true, passedStepIds: ['client'], failures: [] }))) {
@@ -196,6 +248,15 @@ describe('IntegrationOAuthAppService', () => {
         after: { provider: 'google', ok: true, failedStepIds: [] },
       }));
       expect(JSON.stringify(audit.log.mock.calls)).not.toContain('shh-secret');
+    });
+
+    it('passes the saved directory (tenant) id to the client check', async () => {
+      const { service, diagnose } = checkSetup({
+        clientId: 'client-1', secretCiphertext: `enc[${integrationOAuthAppSecretAad('google')}]shh-secret`, updatedAt: new Date(),
+        tenantId: '11111111-2222-4333-8444-555555555555',
+      } as never);
+      await service.check(actor, 'google', meta);
+      expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ homeTenantId: '11111111-2222-4333-8444-555555555555' }));
     });
 
     it('fails the credentials step without calling Google when nothing is saved', async () => {
