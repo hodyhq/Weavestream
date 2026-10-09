@@ -19,6 +19,7 @@ import type {
   SyncRunConflict,
   SyncRunTotals,
 } from '@weavestream/shared';
+import type { MatchFirstIndexCache } from '../assets/assets.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService, type AuditEntry } from '../audit/audit.service.js';
 import { EnvService } from '../config/env.service.js';
@@ -280,6 +281,8 @@ export class IntegrationSyncRunnerService {
       (candidate) =>
         candidate.key === resource.resourceKey && candidate.matchSuggestions !== undefined,
     ) ?? false;
+    // One lowercased match-first index per run, shared by every record.
+    const matchFirstIndexes: MatchFirstIndexCache = new Map();
     const loaded = await this.integrations.loadDriverContext(mapping.integrationId);
     const traversalStartedAt = new Date().toISOString();
     const fetchCtx: FetchRecordsContext = {
@@ -547,6 +550,8 @@ export class IntegrationSyncRunnerService {
               previousFieldChecksums: (existing?.lastSyncedFieldChecksums ?? {}) as Record<string, string>,
               previousProvenance: parseProvenance(existing?.provenance),
               claimUnboundMatches: claimUnboundMatches,
+              previousAdopted: existing?.adopted === true,
+              matchFirstIndexes,
               resolveBinding: (ref) => this.resolveBinding(tx, mapping.id, mapping.companyId, mapping.integrationId, ref),
             };
             const writer = this.writers.get(reconstruction.targetKind) as ReconstructionWriter<ReconstructionInput>;
@@ -1183,6 +1188,8 @@ function bindingData(
     provenance: provenance as unknown as Prisma.InputJsonValue,
     checksum: outcome.checksum,
     lastSyncedFieldChecksums: (outcome.fieldChecksums ?? {}) as Prisma.InputJsonValue,
+    // Sticky: set once when the binding adopts an operator asset, never cleared.
+    ...(outcome.adopted ? { adopted: true } : {}),
   };
 }
 

@@ -1,3 +1,4 @@
+import type { MatchFirstIndexCache } from '../../assets/assets.service.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
@@ -204,6 +205,10 @@ export interface ReconstructionWriteContext {
    * record's instead of creating a duplicate.
    */
   claimUnboundMatches?: boolean;
+  /** The existing binding adopted an operator-created asset (keeps its name). */
+  previousAdopted?: boolean;
+  /** Per-run match-first index cache, created once by the runner per resource run. */
+  matchFirstIndexes?: MatchFirstIndexCache;
   resolveBinding(
     ref: ReconstructionDependencyRef,
   ): Promise<ResolvedReconstructionTarget | null>;
@@ -217,6 +222,8 @@ export interface ReconstructionWriteOutcome {
   provenance: SafeIntegrationProvenance;
   gaps: ReconstructionGapInput[];
   fieldChecksums?: Record<string, string>;
+  /** The write adopted an operator-created asset (match-first). */
+  adopted?: boolean;
 }
 
 export interface ReconstructionWriter<T extends ReconstructionInput> {
@@ -231,6 +238,7 @@ export interface NativeIntegrationWriteResult {
   change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
   gap?: ReconstructionGapInput;
   fieldChecksums?: Record<string, string>;
+  adopted?: boolean;
 }
 
 export function validated<T extends ReconstructionInput>(input: T): ValidatedReconstructionInput<T> {
@@ -492,6 +500,7 @@ export function completedOutcome(
     provenance: buildProvenance(ctx, input),
     gaps: [],
     ...(result.fieldChecksums ? { fieldChecksums: result.fieldChecksums } : {}),
+    ...(result.adopted ? { adopted: true } : {}),
   };
 }
 

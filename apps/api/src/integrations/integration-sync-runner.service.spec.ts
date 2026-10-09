@@ -647,6 +647,24 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       await run(without.service);
       expect(without.writer.write.mock.calls[0]![0].claimUnboundMatches).toBe(false);
     });
+
+    it('marks the binding adopted when the writer adopted an operator asset', async () => {
+      const { service, tx, writer } = arrange(validSection, true);
+      const base = writer.write.getMockImplementation()!;
+      writer.write.mockImplementation(async (c, r) => ({ ...(await base(c, r)), change: 'updated', adopted: true }));
+      await run(service);
+      expect(upsertData(tx).create.adopted).toBe(true);
+      expect(upsertData(tx).update.adopted).toBe(true);
+      expect(writer.write.mock.calls[0]![0].matchFirstIndexes).toBeInstanceOf(Map);
+    });
+
+    it('never clears adopted and passes it back to the writer on later syncs', async () => {
+      const { service, tx, writer } = arrange(validSection, true);
+      tx.integrationSyncRecord.findUnique.mockResolvedValue({ id: 'binding', adopted: true, state: 'active', assetId: 'asset-id', targetKind: 'asset', lastSyncedFieldChecksums: {} });
+      await run(service);
+      expect(writer.write.mock.calls[0]![0].previousAdopted).toBe(true);
+      expect(upsertData(tx).update).not.toHaveProperty('adopted');
+    });
   });
 
   it('dispatches typed input and commits its binding before the page checkpoint', async () => {

@@ -107,12 +107,38 @@ export interface IntegrationAssetWriteInput {
    * never takes over a manually created asset.
    */
   claimUnboundMatch?: boolean;
+  /**
+   * The binding adopted an operator-created asset (match-first), so the
+   * asset keeps the operator's name on every later sync. Assets the
+   * integration created itself keep following the source name.
+   */
+  keepTargetName?: boolean;
+  /**
+   * Per-run cache for the match-first case-insensitive fallback, owned by
+   * the sync runner so the lowercased index is built once per run instead
+   * of once per record. Absent: a throwaway index per call.
+   */
+  matchFirstIndexes?: MatchFirstIndexCache;
   fieldValues: Array<{
     targetFieldId: string;
     value: unknown;
     syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
   }>;
   previousFieldChecksums: Readonly<Record<string, string>>;
+}
+
+/**
+ * Lowercased match-key value -> ids of unbound, identity-free assets, keyed
+ * by company + layout + mapping + resource + match fields. `'overflow'`
+ * marks an index whose source exceeded MATCH_FIRST_INDEX_CAP.
+ */
+export type MatchFirstIndexCache = Map<string, Map<string, string[]> | 'overflow'>;
+
+/** Most unbound manual assets one match-first index may hold. */
+const MATCH_FIRST_INDEX_CAP = 5_000;
+
+function foldMatchValue(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function legacyIntegrationExternalSource(
@@ -174,6 +200,8 @@ export interface IntegrationAssetWriteResult {
   companyId: string;
   change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
   fieldChecksums?: Record<string, string>;
+  /** This write adopted an operator-created asset (match-first). */
+  adopted?: boolean;
   gap?: {
     kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
     message: string;
@@ -854,6 +882,14 @@ export class AssetsService {
       normalizedForMatch,
       readClient,
     );
+    if (resolution.overflow) {
+      return integrationAssetBlocked(
+        input.companyId,
+        'ambiguous',
+        'Too many unlinked assets in the layout to match safely; link this record manually.',
+        'match_first_index_overflow',
+      );
+    }
     if (resolution.ambiguous) {
       return integrationAssetBlocked(
         input.companyId,
@@ -932,9 +968,9 @@ export class AssetsService {
       (target.externalId === input.externalId &&
         (target.externalSource === (input.externalSource ?? null) ||
           target.externalSource === legacyExternalSource));
-    // Match-first resources only name the assets they create: an adopted
-    // (or later re-synced) asset keeps the operator's name.
-    const nameToWrite = target && input.claimUnboundMatch === true ? target.name : input.name;
+    // An asset adopted from the operator (now, or by an earlier sync) keeps
+    // the operator's name; assets the integration created follow the source.
+    const nameToWrite = target && (claimed || input.keepTargetName === true) ? target.name : input.name;
     const identityChanged =
       !!target &&
       sameIdentity &&
@@ -993,6 +1029,7 @@ export class AssetsService {
           fieldsChanged,
         }),
         fieldChecksums,
+        ...(claimed ? { adopted: true } : {}),
       };
     }
 
@@ -1186,7 +1223,13 @@ export class AssetsService {
       change = outcome.change;
     }
 
-    return { targetId, companyId: input.companyId, change, fieldChecksums };
+    return {
+      targetId,
+      companyId: input.companyId,
+      change,
+      fieldChecksums,
+      ...(claimed ? { adopted: true } : {}),
+    };
   }
 
   private async hasEligibleAssetBinding(
@@ -1863,6 +1906,8 @@ export class AssetsService {
     ambiguous: boolean;
     /** Match-first adoption of an unbound, identity-free asset. */
     claimed?: boolean;
+    /** The match-first index source exceeded its cap: nothing adopted. */
+    overflow?: boolean;
   }> {
     const byId = async (id: string) =>
       client.asset.findUnique({ where: { id }, include: { fieldValues: true } });
@@ -1960,28 +2005,50 @@ export class AssetsService {
    * operator typed `Alice@Example.COM` into a TEXT field). Prisma has no
    * case-insensitive filter on Json columns, and the variant OR above only
    * covers as-is / lower / upper, so the unbound, identity-free assets of
-   * the layout are compared in memory instead.
+   * the layout are indexed in memory by lowercased key, once per sync run
+   * (see `matchFirstIndexes`), and every record of the run looks up there.
    */
   private async findCaseInsensitiveUnboundMatch(
     input: IntegrationAssetWriteInput,
     layout: LayoutWithFields,
     values: Record<string, unknown>,
     client: Pick<Prisma.TransactionClient, 'asset'> | PrismaService,
-  ): Promise<{ target: (Asset & { fieldValues: AssetFieldValue[] }) | null; ambiguous: boolean; claimed?: boolean }> {
-    const fold = (value: unknown) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
-    const wanted = new Map<string, unknown>();
+  ): Promise<{ target: (Asset & { fieldValues: AssetFieldValue[] }) | null; ambiguous: boolean; claimed?: boolean; overflow?: boolean }> {
+    const wanted: string[] = [];
     for (const fieldId of input.matchKeyFieldIds) {
       const field = layout.fields.find((candidate) => candidate.id === fieldId);
-      if (!field || !['TEXT', 'EMAIL', 'URL'].includes(field.fieldType)) {
-        // Strict keys were already compared exactly by the query above.
-        return { target: null, ambiguous: false };
-      }
+      // Strict keys were already compared exactly by the query above.
+      if (!field || !['TEXT', 'EMAIL', 'URL'].includes(field.fieldType)) return { target: null, ambiguous: false };
       const value = values[field.slug];
       if (typeof value !== 'string') return { target: null, ambiguous: false };
-      wanted.set(fieldId, fold(value));
+      wanted.push(foldMatchValue(value));
     }
-    // shortcut: scans at most 5000 unbound manual assets of the layout per
-    // unmatched record; add a lower(value) expression index if it gets hot.
+    const cache = input.matchFirstIndexes ?? new Map();
+    const cacheKey = [input.companyId, input.assetLayoutId, input.integrationCompanyMappingId, input.resourceId, ...input.matchKeyFieldIds].join('|');
+    let index = cache.get(cacheKey);
+    if (index === undefined) {
+      index = await this.buildMatchFirstIndex(input, client);
+      cache.set(cacheKey, index);
+    }
+    // The index source exceeded its cap: it can prove neither uniqueness
+    // nor absence, so report instead of adopting the wrong asset or
+    // creating a duplicate.
+    if (index === 'overflow') return { target: null, ambiguous: false, overflow: true };
+    const ids = index.get(JSON.stringify(wanted)) ?? [];
+    if (ids.length > 1) return { target: null, ambiguous: true };
+    if (ids.length !== 1) return { target: null, ambiguous: false };
+    // Re-read with every field value, and re-check ownership: an earlier
+    // record of this run may already have adopted the asset.
+    const target = await client.asset.findUnique({ where: { id: ids[0]! }, include: { fieldValues: true } });
+    return target && target.archivedAt === null && target.externalSource === null && target.externalId === null
+      ? { target, ambiguous: false, claimed: true }
+      : { target: null, ambiguous: false };
+  }
+
+  private async buildMatchFirstIndex(
+    input: IntegrationAssetWriteInput,
+    client: Pick<Prisma.TransactionClient, 'asset'> | PrismaService,
+  ): Promise<Map<string, string[]> | 'overflow'> {
     const unbound = await client.asset.findMany({
       where: {
         companyId: input.companyId,
@@ -1996,22 +2063,26 @@ export class AssetsService {
           },
         },
       },
-      include: { fieldValues: { where: { assetFieldId: { in: [...wanted.keys()] } } } },
-      take: 5_001,
+      select: {
+        id: true,
+        fieldValues: { where: { assetFieldId: { in: input.matchKeyFieldIds } }, select: { assetFieldId: true, value: true } },
+      },
+      take: MATCH_FIRST_INDEX_CAP + 1,
     });
-    // A truncated scan can prove neither uniqueness nor absence: surface an
-    // ambiguous gap rather than adopt the wrong asset or create a duplicate.
-    if (unbound.length > 5_000) return { target: null, ambiguous: true };
-    const matches = unbound.filter((asset) =>
-      [...wanted].every(([fieldId, value]) =>
-        asset.fieldValues.some((row) => row.assetFieldId === fieldId && fold(row.value) === value),
-      ),
-    );
-    if (matches.length > 1) return { target: null, ambiguous: true };
-    if (matches.length !== 1) return { target: null, ambiguous: false };
-    // Re-read with every field value: the scan above loaded the keys only.
-    const target = await client.asset.findUnique({ where: { id: matches[0]!.id }, include: { fieldValues: true } });
-    return target ? { target, ambiguous: false, claimed: true } : { target: null, ambiguous: false };
+    if (unbound.length > MATCH_FIRST_INDEX_CAP) return 'overflow';
+    const index = new Map<string, string[]>();
+    for (const asset of unbound) {
+      const key: string[] = [];
+      for (const fieldId of input.matchKeyFieldIds) {
+        const stored = asset.fieldValues.find((row) => row.assetFieldId === fieldId)?.value;
+        if (typeof stored !== 'string') break;
+        key.push(foldMatchValue(stored));
+      }
+      if (key.length !== input.matchKeyFieldIds.length) continue;
+      const k = JSON.stringify(key);
+      index.set(k, [...(index.get(k) ?? []), asset.id]);
+    }
+    return index;
   }
 
   private async loadLayout(

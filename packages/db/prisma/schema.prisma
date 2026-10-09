@@ -1672,6 +1672,9 @@ model IntegrationSyncRecord {
   /// rendered on the asset page. Validated plain data, replaced on every
   /// sync; deleted with the binding.
   sectionData                 Json?                 @map("section_data")
+  /// The binding adopted an operator-created asset (match-first) instead of
+  /// creating one, so later syncs keep the operator's asset name. Sticky.
+  adopted                     Boolean               @default(false)
   createdAt                   DateTime              @default(now()) @map("created_at")
   updatedAt                   DateTime              @updatedAt @map("updated_at")
 

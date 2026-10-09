@@ -149,6 +149,8 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         assetLayoutId: input.assetLayoutId,
         matchKeyFieldIds: [...input.matchKeyFieldIds],
         ...(ctx.claimUnboundMatches === true ? { claimUnboundMatch: true } : {}),
+        ...(ctx.previousAdopted === true ? { keepTargetName: true } : {}),
+        ...(ctx.matchFirstIndexes ? { matchFirstIndexes: ctx.matchFirstIndexes } : {}),
         fieldValues: input.fieldValues.map((field) => ({
           targetFieldId: field.targetFieldId,
           value: field.value,
