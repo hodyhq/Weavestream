@@ -125,6 +125,7 @@ export async function diagnoseGoogleConnection(ctx: IntegrationContext): Promise
     { url: `${ALERT_CENTER}/alerts?pageSize=1` },
   ];
   let customerId: string | null = null;
+  let answered = 0;
   for (const probe of probes) {
     let url = probe.url;
     if (url.startsWith(LICENSING)) {
@@ -149,6 +150,7 @@ export async function diagnoseGoogleConnection(ctx: IntegrationContext): Promise
       if (!failures.some((f) => f.message === failure.message)) failures.push(failure);
       continue;
     }
+    answered += 1;
     if (probe.customer) {
       const body = (await res.json().catch(() => null)) as { id?: unknown } | null;
       customerId = typeof body?.id === 'string' ? body.id : null;
@@ -163,7 +165,8 @@ export async function diagnoseGoogleConnection(ctx: IntegrationContext): Promise
   // proves nothing about scopes or trust, so those wait for a clean answer.
   const unverified = failed.has(null);
   if (!unverified && !failed.has(S.connect) && !failed.has(S.apis)) passed.push(S.scopes);
-  if (!unverified && !failed.has(S.trust)) passed.push(S.trust);
+  // Trust needs at least one API that actually answered through the customer's policy.
+  if (!unverified && answered > 0 && !failed.has(S.trust)) passed.push(S.trust);
   return result(passed, failures);
 }
 

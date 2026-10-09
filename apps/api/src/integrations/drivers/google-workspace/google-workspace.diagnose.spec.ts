@@ -217,4 +217,17 @@ describe('diagnose: connection check', () => {
     await connectionCheck();
     expect(calls.some((c) => c.url.startsWith(LICENSING))).toBe(false);
   });
+
+  it('does not pass trust when no API answered', async () => {
+    const disabled = googleError(403, 'accessNotConfigured');
+    install({
+      [TOKEN_URL]: OK_TABLE[TOKEN_URL]!,
+      [`${DIR}/customers/my_customer`]: disabled,
+      [`${REPORTS}/usage/dates/`]: disabled,
+      [`${ALERTS}/alerts`]: disabled,
+    });
+    const result = await connectionCheck();
+    expect(result.passedStepIds).not.toContain('trust');
+    expect(result.passedStepIds).not.toContain('apis');
+  });
 });
