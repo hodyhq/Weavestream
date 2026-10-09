@@ -215,7 +215,10 @@ describe('AssetLayoutsService.addField', () => {
     };
     const prisma = { $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)) };
     const audit = { log: jest.fn() };
-    const registry = { get: () => ({ optionsSchema: { safeParse: (v: unknown) => ({ success: true, data: v }) } }) };
+    // Applies a default, like a strategy schema may: the parsed value is what gets stored.
+    const registry = {
+      get: () => ({ optionsSchema: { safeParse: (v: object) => ({ success: true, data: { maxLength: 255, ...v } }) } }),
+    };
     const service = new AssetLayoutsService(prisma as never, audit as never, registry as never, {} as never);
     return { service, state, tx, audit, created };
   }
@@ -231,7 +234,9 @@ describe('AssetLayoutsService.addField', () => {
     expect(result).toMatchObject({ created: true, field: { id: 'f-new', slug: 'serial_number', isPrimary: false } });
     expect(state.fields.map((f) => f.slug)).toEqual(['hostname', 'other', 'serial_number']);
     expect(tx.assetField.updateMany).not.toHaveBeenCalled();
-    expect(created).toEqual([expect.objectContaining({ slug: 'serial_number', position: 2, isPrimary: false })]);
+    expect(created).toEqual([
+      expect.objectContaining({ slug: 'serial_number', position: 2, isPrimary: false, options: { maxLength: 255 } }),
+    ]);
     expect(tx.assetLayout.findUnique).toHaveBeenCalledTimes(2);
     expect(audit.log).toHaveBeenCalledTimes(1);
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'layout.field.added', entityId: 'f-new' }));

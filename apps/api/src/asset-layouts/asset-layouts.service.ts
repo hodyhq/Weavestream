@@ -764,7 +764,7 @@ export class AssetLayoutsService {
 
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.addFieldOnce(actor, layoutId, f, meta);
+        return await this.addFieldOnce(actor, layoutId, { ...f, options: options.data as Record<string, unknown> }, meta);
       } catch (err) {
         const raced =
           err instanceof LayoutVersionConflict ||
