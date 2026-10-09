@@ -4,6 +4,8 @@ import type {
   AlertConfig,
   ArticleEditorMode,
   EmailSettings,
+  IntegrationOAuthApp,
+  IntegrationOAuthProvider,
   PasswordGeneratorDefaults,
 } from '@weavestream/shared';
 import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
@@ -103,6 +105,19 @@ export const getAiSettings = cache(async (): Promise<AiSettings> => {
   if (!res.ok || !res.data) return DEFAULT_AI_SETTINGS;
   return res.data;
 });
+
+/**
+ * `/settings/integration-oauth-apps/:provider`. Null on failure so the
+ * settings page still renders; the card shows a load error instead.
+ */
+export const getIntegrationOAuthApp = cache(
+  async (provider: IntegrationOAuthProvider): Promise<IntegrationOAuthApp | null> => {
+    const res = await serverApiFetch<IntegrationOAuthApp>(
+      `/settings/integration-oauth-apps/${provider}`,
+    );
+    return res.ok && res.data ? res.data : null;
+  },
+);
 
 /**
  * `/alerts` — list every active alert configuration. Returns `[]` on

@@ -12,6 +12,7 @@ import type {
 } from '../reconstruction/reconstruction-target.js';
 import type { ReconstructionGapKind } from '@weavestream/shared';
 import type { FieldType } from '@prisma/client';
+import type { OAuthClientCredentials } from '../oauth/oauth-token.js';
 
 /**
  * Phase 11 — universal integration driver port.
@@ -62,6 +63,12 @@ export interface IntegrationContext {
    * resolves that from `IntegrationCompanyMapping`.
    */
   readonly integrationId?: string;
+  /**
+   * Instance OAuth app credentials, set by the framework only for drivers
+   * whose descriptor declares `oauth`. Drivers never read it directly:
+   * `getOAuthAccessToken` / `oauthFetch` (oauth/oauth-token.ts) do.
+   */
+  readonly oauthClient?: OAuthClientCredentials;
 }
 
 export interface FetchRecordsContext extends IntegrationContext {

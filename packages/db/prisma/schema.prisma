@@ -1462,6 +1462,22 @@ model IntegrationSecret {
   @@map("integration_secrets")
 }
 
+/// Instance-wide OAuth client for one provider (e.g. Google), shared by
+/// every integration whose driver connects through that provider. The
+/// client secret is an AES-256-GCM blob (embedded `kid`) under
+/// `INTEGRATION_SECRET_KEY`, AAD bound to the provider. GLOBAL: no tenant.
+model IntegrationOAuthApp {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider         String   @unique
+  clientId         String   @map("client_id")
+  secretCiphertext String   @map("secret_ciphertext")
+  updatedBy        String?  @map("updated_by") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("integration_oauth_apps")
+}
+
 // Phase 11 — tenant-scoped row that ties a single external organisation
 // (Action1 `org_id`) to a Weavestream company. Layout + match-key
 // fields + field mappings are all GLOBAL on the parent `Integration`

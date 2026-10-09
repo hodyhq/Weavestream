@@ -279,6 +279,7 @@ export class IntegrationSyncRunnerService {
     const fetchCtx: FetchRecordsContext = {
       config: loaded.config,
       secret: loaded.secret,
+      oauthClient: loaded.oauthClient,
       http: {
         timeoutMs: this.env.values.INTEGRATION_HTTP_TIMEOUT_MS,
         maxRetries: this.env.values.INTEGRATION_HTTP_MAX_RETRIES,

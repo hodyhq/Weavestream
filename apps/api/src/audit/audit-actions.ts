@@ -50,6 +50,9 @@ export const AUDIT_ACTIONS = {
     // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
     // `after` carry `{ apiKeysEnabled }`.
     apiKeysToggle: 'settings.api_keys.toggle',
+    // Instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`).
+    // `after` carries the provider, client id and secret fingerprint only.
+    integrationOAuthAppUpdate: 'settings.integration_oauth_app.update',
   },
   domain: {
     create: 'domain.create',
@@ -157,6 +160,11 @@ export const AUDIT_ACTIONS = {
     syncMappingStarted: 'integration.sync.mapping.started',
     syncMappingFinished: 'integration.sync.mapping.finished',
     syncMappingFailed: 'integration.sync.mapping.failed',
+    // OAuth connect / disconnect. Rows carry the provider, scope list and a
+    // reason category on failure; never tokens or provider error text.
+    oauthConnect: 'integration.oauth.connect',
+    oauthConnectFailed: 'integration.oauth.connect.failed',
+    oauthDisconnect: 'integration.oauth.disconnect',
     assetCreated: 'integration.asset.created',
     assetUpdated: 'integration.asset.updated',
     assetClaimed: 'integration.asset.claimed',

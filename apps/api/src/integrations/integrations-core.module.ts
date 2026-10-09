@@ -9,6 +9,7 @@ import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.se
 import { CloudflareListsService } from './cloudflare/cloudflare-lists.service.js';
 import { CloudflareRegistrarSyncService } from './cloudflare/cloudflare-registrar-sync.service.js';
 import { TicketsService } from './tickets.service.js';
+import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
 import { FieldTypesModule } from '../field-types/field-types.module.js';
 import { SearchModule } from '../search/search.module.js';
 import { QueuesProducerModule } from '../queues/queues-producer.module.js';
@@ -118,6 +119,7 @@ import { RelationsService } from '../relations/relations.service.js';
     CloudflareListsService,
     CloudflareRegistrarSyncService,
     TicketsService,
+    IntegrationOAuthAppService,
   ],
   exports: [
     IntegrationDriverRegistry,
@@ -134,6 +136,7 @@ import { RelationsService } from '../relations/relations.service.js';
     CloudflareListsService,
     CloudflareRegistrarSyncService,
     TicketsService,
+    IntegrationOAuthAppService,
   ],
 })
 export class IntegrationsCoreModule {}

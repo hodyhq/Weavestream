@@ -29,6 +29,14 @@ export function integrationSecretAad(integrationId: string): string {
 }
 
 /**
+ * AAD for an instance OAuth app's client secret, bound to its provider so
+ * the blob cannot be swapped onto another provider's row.
+ */
+export function integrationOAuthAppSecretAad(provider: string): string {
+  return `integration-oauth-app:${provider}:client-secret`;
+}
+
+/**
  * AAD for the AI-settings API key. `AiSetting` is a singleton row
  * encrypted under the integrations key; the distinct context keeps its
  * blob and integration-secret blobs mutually non-interchangeable.

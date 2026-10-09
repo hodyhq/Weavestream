@@ -244,6 +244,8 @@ export class IntegrationsController {
           : await this.drivers.get(ctx.driver).testConnection({
               config: ctx.config,
               secret: ctx.secret,
+              integrationId: ctx.integrationId,
+              oauthClient: ctx.oauthClient,
               http,
               correlationId,
             } satisfies IntegrationContext);
@@ -292,6 +294,8 @@ export class IntegrationsController {
     const integrationCtx: IntegrationContext = {
       config: ctx.config,
       secret: ctx.secret,
+      integrationId: ctx.integrationId,
+      oauthClient: ctx.oauthClient,
       http: this.httpDefaults(),
       correlationId: randomUUID(),
     };
@@ -427,6 +431,8 @@ export class IntegrationsController {
     } = {
       config: ctx.config,
       secret: ctx.secret,
+      integrationId: ctx.integrationId,
+      oauthClient: ctx.oauthClient,
       http: this.httpDefaults(),
       correlationId: randomUUID(),
       externalOrgId: resolvedOrgId,

@@ -1054,3 +1054,59 @@ describe('reconstruction administration reads', () => {
     expect(new Set(seen).size).toBe(3);
   });
 });
+
+describe('IntegrationsService OAuth drivers', () => {
+  const id = '00000000-0000-4000-8000-0000000000aa';
+  const crypto = {
+    decrypt: () => JSON.stringify({ refreshToken: 'test-refresh-tail', grantedScopes: [], connectedAt: 'x' }),
+  };
+  const oauthDescriptor = {
+    key: 'fake-oauth',
+    resources: [],
+    oauth: { provider: 'google', scopes: ['s'] },
+  } as unknown as DriverDescriptor;
+
+  function setup(client: { clientId: string; clientSecret: string } | null) {
+    const prisma = {
+      integration: {
+        findUnique: jest.fn(async () => ({
+          id,
+          driver: 'fake-oauth',
+          config: {},
+          secret: { ciphertext: 'blob' },
+          resources: [],
+          _count: { companyMappings: 0 },
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        })),
+      },
+    };
+    const drivers = { has: () => true, describe: () => oauthDescriptor };
+    const oauthApps = { getClient: jest.fn(async () => client) };
+    const service = new IntegrationsService(
+      prisma as never, crypto as never, {} as never, drivers as never,
+      { values: { INTEGRATION_SYNC_DEFAULT_CRON: 'off' } } as never, {} as never, {} as never,
+      oauthApps as never,
+    );
+    return { service, oauthApps };
+  }
+
+  it('injects the instance OAuth app into the driver context', async () => {
+    const client = { clientId: 'client-1', clientSecret: 'test-client-secret' };
+    const { service, oauthApps } = setup(client);
+    const ctx = await service.loadDriverContext(id);
+    expect(oauthApps.getClient).toHaveBeenCalledWith('google');
+    expect(ctx.oauthClient).toEqual(client);
+  });
+
+  it('omits the OAuth app when none is configured', async () => {
+    const ctx = await setup(null).service.loadDriverContext(id);
+    expect(ctx).not.toHaveProperty('oauthClient');
+  });
+
+  it('never exposes token tails through secretMask', async () => {
+    const dto = await setup(null).service.get(id);
+    expect(dto.hasSecret).toBe(true);
+    expect(dto.secretMask).toBeNull();
+  });
+});

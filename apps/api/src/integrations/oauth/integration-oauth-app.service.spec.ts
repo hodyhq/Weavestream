@@ -1,0 +1,116 @@
+import { ConflictException, Logger } from '@nestjs/common';
+import { integrationOAuthAppSecretAad } from '../../crypto/integration-secret-encryption.service.js';
+import { IntegrationOAuthAppService } from './integration-oauth-app.service.js';
+
+const crypto = {
+  encrypt: (plaintext: string, aad: string) => `enc[${aad}]${plaintext}`,
+  decrypt: (blob: string, aad: string) => {
+    const prefix = `enc[${aad}]`;
+    if (!blob.startsWith(prefix)) throw new Error('aad mismatch');
+    return blob.slice(prefix.length);
+  },
+};
+
+function setup(row: { clientId: string; secretCiphertext: string; updatedAt: Date } | null = null) {
+  let stored = row;
+  const prisma = {
+    integrationOAuthApp: {
+      findUnique: jest.fn(async () => stored),
+      upsert: jest.fn(async ({ create }: { create: { clientId: string; secretCiphertext: string } }) => {
+        stored = { ...create, updatedAt: new Date('2026-01-02T00:00:00Z') };
+        return stored;
+      }),
+    },
+  };
+  const audit = { log: jest.fn(async () => undefined) };
+  const drivers = {
+    list: () => [
+      { key: 'a', oauth: { provider: 'google', scopes: ['openid', 'scope.a'] } },
+      { key: 'b', oauth: { provider: 'google', scopes: ['openid', 'scope.b'] } },
+      { key: 'c' },
+    ],
+  };
+  const env = { values: { API_URL: 'https://ws.example.test/api/' } };
+  const service = new IntegrationOAuthAppService(
+    prisma as never,
+    crypto as never,
+    audit as never,
+    env as never,
+    drivers as never,
+  );
+  return { service, prisma, audit };
+}
+
+beforeAll(() => {
+  jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+});
+
+describe('IntegrationOAuthAppService', () => {
+  it('reports an unconfigured app with the computed redirect URI and scope union', async () => {
+    await expect(setup().service.get('google')).resolves.toEqual({
+      provider: 'google',
+      configured: false,
+      clientId: null,
+      secretFingerprint: null,
+      redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
+      scopes: ['openid', 'scope.a', 'scope.b'],
+      updatedAt: null,
+    });
+  });
+
+  it('saves the secret encrypted with a provider-bound AAD and never returns it', async () => {
+    const { service, prisma, audit } = setup();
+    const dto = await service.update(
+      { id: 'user-1' } as never,
+      'google',
+      { clientId: 'client-1', clientSecret: 'test-client-secret' },
+      { ip: '127.0.0.1', userAgent: 'jest' },
+    );
+    const call = prisma.integrationOAuthApp.upsert.mock.calls[0] as unknown as [
+      { create: { secretCiphertext: string; updatedBy: string } },
+    ];
+    expect(call[0].create.secretCiphertext).toBe(
+      `enc[${integrationOAuthAppSecretAad('google')}]test-client-secret`,
+    );
+    expect(call[0].create.updatedBy).toBe('user-1');
+    expect(dto.configured).toBe(true);
+    expect(dto.secretFingerprint).toMatch(/^[0-9a-f]{12}$/);
+    expect(JSON.stringify(dto)).not.toContain('test-client-secret');
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'settings.integration_oauth_app.update',
+        entityId: 'google',
+      }),
+    );
+    expect(JSON.stringify(audit.log.mock.calls)).not.toContain('test-client-secret');
+  });
+
+  it('decrypts client credentials for runtime use', async () => {
+    const { service } = setup({
+      clientId: 'client-1',
+      secretCiphertext: crypto.encrypt('test-client-secret', integrationOAuthAppSecretAad('google')),
+      updatedAt: new Date(),
+    });
+    await expect(service.getClient('google')).resolves.toEqual({
+      clientId: 'client-1',
+      clientSecret: 'test-client-secret',
+    });
+  });
+
+  it('returns null when no app is configured', async () => {
+    await expect(setup().service.getClient('google')).resolves.toBeNull();
+  });
+
+  it('refuses a blob bound to another provider', async () => {
+    const { service } = setup({
+      clientId: 'client-1',
+      secretCiphertext: crypto.encrypt('test-client-secret', integrationOAuthAppSecretAad('other')),
+      updatedAt: new Date(),
+    });
+    await expect(service.getClient('google')).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.get('google')).resolves.toMatchObject({
+      configured: true,
+      secretFingerprint: null,
+    });
+  });
+});

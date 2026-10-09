@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import type {
   CreateIntegrationInput,
@@ -46,6 +47,8 @@ import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { scanSensitiveMaterial } from './sensitive-material.js';
+import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
+import type { OAuthClientCredentials } from './oauth/oauth-token.js';
 import {
   getTenantContext,
   runWithTenantContext,
@@ -205,6 +208,8 @@ export class IntegrationsService {
     private readonly env: EnvService,
     private readonly scheduler: IntegrationSyncSchedulerService,
     private readonly writers: ReconstructionWriterRegistry,
+    // Optional so specs that never touch an OAuth driver need not supply it.
+    @Optional() private readonly oauthApps?: IntegrationOAuthAppService,
   ) {}
 
   // -------------------------------------------------------------------
@@ -548,6 +553,8 @@ export class IntegrationsService {
     driver: string;
     config: Record<string, unknown>;
     secret: Record<string, unknown>;
+    /** Instance OAuth app credentials; set only for OAuth drivers with an app configured. */
+    oauthClient?: OAuthClientCredentials;
   }> {
     const row = await this.prisma.integration.findUnique({
       where: { id },
@@ -575,11 +582,15 @@ export class IntegrationsService {
       );
     }
 
+    const oauth = this.drivers.has(row.driver) ? this.drivers.describe(row.driver).oauth : undefined;
+    const oauthClient = oauth ? await this.oauthApps?.getClient(oauth.provider) : null;
+
     return {
       integrationId: row.id,
       driver: row.driver,
       config: (row.config ?? {}) as Record<string, unknown>,
       secret,
+      ...(oauthClient ? { oauthClient } : {}),
     };
   }
 
@@ -1334,7 +1345,9 @@ export class IntegrationsService {
     };
 
     let secretMask: Record<string, string> | null = null;
-    if (row.secret) {
+    // OAuth bundles hold tokens and the connected account, not operator
+    // fields: never expose their tails.
+    if (row.secret && !descriptor?.oauth) {
       try {
         const json = this.crypto.decrypt(row.secret.ciphertext, integrationSecretAad(row.id));
         const parsed = JSON.parse(json) as Record<string, unknown>;
