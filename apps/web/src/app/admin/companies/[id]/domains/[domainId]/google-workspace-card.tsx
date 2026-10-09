@@ -1,7 +1,7 @@
 import type { MonitoredDomainDto } from '@weavestream/shared';
 import { Panel } from '../../../../../../components/ui';
 import { spacedRelativePast as fmtRelativePast } from '../../../../../../lib/relative-time';
-import { workspaceRoleLabel } from '../domains-browser';
+import { workspaceRoleLabel } from '../workspace-role';
 import { Stat } from './stat';
 
 /**

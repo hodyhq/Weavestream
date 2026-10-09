@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
+import { workspaceRoleLabel } from './workspace-role';
 import type { MonitoredDomainDto } from '@weavestream/shared';
 import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
@@ -782,21 +783,6 @@ const secondaryBtn: React.CSSProperties = {
   cursor: 'pointer',
 };
 
-/** "Primary domain" / "Secondary domain" / "Domain alias of x" for a Workspace role. */
-export function workspaceRoleLabel(
-  row: Pick<MonitoredDomainDto, 'workspaceRole' | 'workspaceAliasOf'>,
-): string | null {
-  switch (row.workspaceRole) {
-    case 'PRIMARY':
-      return 'Primary domain';
-    case 'SECONDARY':
-      return 'Secondary domain';
-    case 'ALIAS':
-      return row.workspaceAliasOf ? `Domain alias of ${row.workspaceAliasOf}` : 'Domain alias';
-    default:
-      return null;
-  }
-}
 
 /**
  * Orange "Cloudflare" tag on registrar-synced rows, so a synced domain is
