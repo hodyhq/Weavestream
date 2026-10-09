@@ -54,7 +54,7 @@ function setup(choice?: 'shown' | 'hidden', grantedRoles: string[] = ['ReportSet
   };
   const prisma = {
     integrationSecret: {
-      findUnique: jest.fn(async () => ({ ciphertext: crypto.encrypt(JSON.stringify(secret), integrationSecretAad(ID)) })),
+      findUnique: jest.fn(async (): Promise<{ ciphertext: string } | null> => ({ ciphertext: crypto.encrypt(JSON.stringify(secret), integrationSecretAad(ID)) })),
       updateMany: jest.fn(async ({ where, data }: { where: { ciphertext: string }; data: { ciphertext: string } }) => {
         if (where.ciphertext !== crypto.encrypt(JSON.stringify(secret), integrationSecretAad(ID))) return { count: 0 };
         secret = JSON.parse(crypto.decrypt(data.ciphertext, integrationSecretAad(ID)));
