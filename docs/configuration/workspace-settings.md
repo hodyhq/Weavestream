@@ -79,7 +79,7 @@ These defaults are used when the generator is opened without user-specific prefe
 
 ## Integration OAuth Apps
 
-**Admin > Settings > Integrations** holds the OAuth app (client) that OAuth-based integrations connect through. You create the client once per Weavestream install in the provider's console (for example the Google Cloud console), then every integration of that provider uses it. Each customer connection is then one click: **Connect with Google** on the integration's Credentials tab.
+**Admin > Settings > Integrations** holds the OAuth app (client) that OAuth-based integrations connect through. You create the client once per Weavestream install in the provider's console (for example the Google Cloud console), then every integration of that provider uses it. Each customer connection is then one click: **Connect with Google** on the integration's **Credentials & schedule** tab.
 
 The card shows:
 
@@ -90,6 +90,8 @@ The card shows:
 | Client ID / Client secret | Paste them from the provider and save. |
 
 The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again. The card shows a short SHA-256 fingerprint so you can tell which secret is saved. To change only the client ID, leave the secret blank and the saved secret is kept (enter the new client's secret too if it differs). Saving needs the **Settings** permission and a fresh step-up confirmation, and is recorded in the audit log as `settings.integration_oauth_app.update`.
+
+Below the form, the card shows the provider's step-by-step **setup guide** (for Google, see [Google Workspace](/integrations/google-workspace/)) with copy buttons and links. **Check setup** verifies the saved client against the provider without any customer data and turns passed steps green; a failed step shows a fixed message saying what to fix. It is recorded as `settings.integration_oauth_app.check` (outcome and step ids only). The same guide, with a check that probes each provider API, is on every connected integration (recorded as `integration.setup_check`).
 
 Connecting, reconnecting and disconnecting an integration are recorded as `integration.oauth.connect`, `integration.oauth.connect.failed` (with a reason category, never the provider's error text) and `integration.oauth.disconnect`.
 

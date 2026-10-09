@@ -4,7 +4,7 @@
 <!-- aliases: integration overview | rmm sync | import devices | external inventory | connectors -->
 <!-- requires: integration.manage -->
 
-Action1, NinjaOne, UniFi, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
+Action1, NinjaOne, UniFi, Google Workspace, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
 
 Match keys claim existing unclaimed assets instead of duplicating them. Once linked, integration sync records preserve identity across runs.
 
@@ -60,6 +60,18 @@ Override default US API URL for EU, CA, or OC tenants if needed. Test connection
 Create a **UniFi Site Manager** integration with a Site Manager **API Key**. Test connection, then map UniFi hosts/consoles to Weavestream companies.
 
 Configure **Devices fields** for switches, access points, and gateways (recommended match: `mac`). Configure **Clients fields** separately for connected clients (recommended match: `name`).
+
+## Configure Google Workspace
+<!-- aliases: connect google workspace | google oauth app | connect with google | g suite | gsuite | google admin | check setup | google client id | google redirect uri | unverified app -->
+<!-- requires: settings.manage | integration.manage -->
+
+Google Workspace is read-only and connects with OAuth. One integration is one customer tenant.
+
+Once per Weavestream install, an administrator creates a Google Cloud project, enables the Admin SDK API, Enterprise License Manager API and Alert Center API, sets up the consent screen (Branding, then Audience **External** and **Publish app** so it is **In production**), adds the scopes under **Data Access**, and creates a **Web application** OAuth client with the redirect URI shown in Weavestream. Paste the Client ID and Client secret into **Admin → Settings → Integrations**, Google OAuth app card, select **Save OAuth app**, then **Check setup**. The card shows a numbered setup guide with copy buttons; passed steps turn green and a failed step shows what to fix.
+
+Per customer: **New integration → Google Workspace**, then on **Credentials & schedule** select **Connect with Google** and sign in with the customer's super admin (or a delegated admin with read access). On "Google hasn't verified this app", select **Advanced**, then **Go to Weavestream (unsafe)**: expected for a self-hosted app. If the customer blocks third-party apps, they mark the Client ID **Trusted** under **Security → Access and data control → API controls**. Then map the tenant under **Organizations**, choose layouts and match fields under **Map layouts**, and run a dry run.
+
+Do not leave the app in **Testing**: connections expire after 7 days. **Reconnect** appears when access was revoked or unused for 6 months. Google gives no invoices, purchased seats or renewal dates for direct customers, and usage figures lag 1 to 3 days.
 
 ## Configure Breeze reconstruction sync
 <!-- aliases: configure Breeze reconstruction | Breeze RMM setup | Breeze Partner API | Breeze disaster recovery sync | Breeze documentation sync -->

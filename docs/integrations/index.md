@@ -41,6 +41,8 @@ Select an integration below for provider-specific setup guides, resource capabil
 
 [!card title="Cloudflare" text="Manage Zero Trust Gateway IP lists with drift repair, and sync every domain on the account into Domains." icon="plug" layout="compact"](/integrations/cloudflare/)
 
+[!card title="Google Workspace" text="One-click connect per customer to sync users, licences, storage, groups, domains, devices and security alerts (read-only)." icon="plug" layout="compact"](/integrations/google-workspace/)
+
 [!card title="NinjaOne" text="Sync agent-managed workstations, servers, SNMP network gear, and guest VMs with dual-resource mapping." icon="plug" layout="compact"](/integrations/ninjaone/)
 
 [!card title="UniFi" text="Import Ubiquiti UniFi network gateways, switches, access points, and connected client devices into asset records." icon="plug" layout="compact"](/integrations/unifi/)

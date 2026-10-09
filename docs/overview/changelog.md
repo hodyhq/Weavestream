@@ -13,6 +13,13 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Added
+
+- **OAuth connect for integrations.** Integrations can now connect with a provider sign-in instead of pasted API keys. An administrator saves one OAuth app per provider under **Admin → Settings → Integrations** (the client secret is encrypted and write-only, saving needs MFA step-up and is audited); each integration then shows **Connect with Google**, **Reconnect** and **Disconnect**. The flow uses a single-use state bound to the signed-in user and PKCE.
+- **Integration sections on assets.** A driver can attach a read-only detail card to a synced asset, with grouped values, icons and usage bars that turn amber at 80% and red at 95%. Sections are replaced on every sync and never shown to client users.
+- **Map layouts and match-first.** Drivers that suggest layouts add a **Map layouts** tab to pick a layout and match field per resource. On sync, a record whose match value equals exactly one unlinked asset you created adopts it (ignoring upper and lower case) instead of creating a duplicate; several candidates are reported and nothing is linked. Adopted assets keep your name; assets the integration created follow the source name.
+- **Google Workspace integration.** Read-only sync of a customer tenant with a one-click connect: tenant, users with licences and mailbox, Drive and total storage, groups, domains, Chrome and mobile devices, and Alert Center alerts. A step-by-step setup guide with copy buttons is shown in the app, and **Check setup** points to the step that needs fixing. See [Google Workspace](/integrations/google-workspace/).
+
 ## [1.9.11] - 2026-10-05
 
 ### Added
