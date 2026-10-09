@@ -5,6 +5,7 @@ import { REQUIRE_PERMISSION_KEY } from '../rbac/require-permission.decorator.js'
 import { REQUIRE_STEP_UP_KEY } from '../auth/step-up/require-step-up.decorator.js';
 import { integrationSecretAad } from '../crypto/integration-secret-encryption.service.js';
 import { Logger } from '@nestjs/common';
+import { DriverAuthError, DriverRateLimitError } from './drivers/integration-driver.js';
 
 describe('IntegrationsController security contract', () => {
   const metadata = (key: string, handler: keyof IntegrationsController) =>
@@ -98,6 +99,26 @@ describe('IntegrationsController security contract', () => {
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
       after: { ok: false, failedStepIds: ['apis', null] },
     }));
+  });
+
+  it.each([
+    ['auth', new DriverAuthError('refused'), 'The provider refused the connection. Reconnect the integration and try again.'],
+    ['rate limit', new DriverRateLimitError('slow down'), 'The provider is rate limiting requests. Try again in a minute.'],
+  ])('turns a driver %s error from diagnose into an audited failed check', async (_kind, error, message) => {
+    const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    diagnose.mockRejectedValueOnce(error);
+    const result = await run();
+    expect(result).toEqual({ ok: false, passedStepIds: [], failures: [{ stepId: null, message }] });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.setup_check', after: { ok: false, failedStepIds: [null] },
+    }));
+  });
+
+  it('lets an unexpected diagnose error surface as a server error', async () => {
+    const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    diagnose.mockRejectedValueOnce(new Error('boom'));
+    await expect(run()).rejects.toThrow('boom');
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it.each([true, false])('propagates dryRun=%s through the existing sync route', async (dryRun) => {

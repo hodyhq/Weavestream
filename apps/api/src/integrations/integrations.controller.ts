@@ -309,18 +309,38 @@ export class IntegrationsController {
     const ctx = await this.integrations.loadDriverContext(id);
     const driver = this.drivers.get(ctx.driver);
     if (!driver.diagnose) throw new BadRequestException('This integration has no setup check.');
-    const diagnosed = await driver.diagnose({
-      mode: 'connection',
-      ctx: {
-        config: ctx.config,
-        secret: ctx.secret,
-        integrationId: ctx.integrationId,
-        oauthClient: ctx.oauthClient,
-        credentialVersion: ctx.credentialVersion,
-        http: this.httpDefaults(),
-        correlationId: randomUUID(),
-      },
-    });
+    let diagnosed: IntegrationSetupCheck;
+    try {
+      diagnosed = await driver.diagnose({
+        mode: 'connection',
+        ctx: {
+          config: ctx.config,
+          secret: ctx.secret,
+          integrationId: ctx.integrationId,
+          oauthClient: ctx.oauthClient,
+          credentialVersion: ctx.credentialVersion,
+          http: this.httpDefaults(),
+          correlationId: randomUUID(),
+        },
+      });
+    } catch (e) {
+      // Same split as testConnection: known driver failures become a failed
+      // check (and are audited below); anything else stays a server error.
+      if (!(e instanceof DriverAuthError || e instanceof DriverRateLimitError)) throw e;
+      diagnosed = {
+        ok: false,
+        passedStepIds: [],
+        failures: [
+          {
+            stepId: null,
+            message:
+              e instanceof DriverRateLimitError
+                ? 'The provider is rate limiting requests. Try again in a minute.'
+                : 'The provider refused the connection. Reconnect the integration and try again.',
+          },
+        ],
+      };
+    }
     // OAuth drivers connect through the callback, which needs the session cookie.
     const result = this.drivers.describe(ctx.driver).oauth
       ? withCallbackHostWarning(this.env.values, diagnosed)
