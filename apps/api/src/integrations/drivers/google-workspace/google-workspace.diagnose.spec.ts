@@ -208,6 +208,8 @@ describe('diagnose: connection check', () => {
     install({ ...OK_TABLE, [`${ALERTS}/alerts`]: googleError(429, 'rateLimitExceeded') });
     const result = await connectionCheck();
     expect(result.failures).toEqual([expect.objectContaining({ stepId: null })]);
+    expect(result.passedStepIds).not.toContain('scopes');
+    expect(result.passedStepIds).not.toContain('trust');
   });
 
   it('skips the licensing probe when the tenant id is unknown', async () => {
