@@ -156,14 +156,17 @@ function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrati
 
 function SectionRow({ row, last }: { row: IntegrationSectionRow; last: boolean }) {
   const meter = row.kind === 'meter';
+  // Meters and lists take the full card width under their label: list items
+  // are free text (update names, alerts) that must wrap inside the card.
+  const stacked = meter || row.kind === 'list';
   return (
     <div
       style={{
         display: 'flex',
-        flexDirection: meter ? 'column' : 'row',
+        flexDirection: stacked ? 'column' : 'row',
         flexWrap: 'wrap',
-        alignItems: meter ? 'stretch' : 'baseline',
-        gap: meter ? 4 : 8,
+        alignItems: stacked ? 'stretch' : 'baseline',
+        gap: stacked ? 4 : 8,
         padding: '6px 0',
         borderBottom: last ? 'none' : '1px solid var(--line)',
         fontSize: 12,
@@ -171,7 +174,7 @@ function SectionRow({ row, last }: { row: IntegrationSectionRow; last: boolean }
     >
       <span
         style={{
-          flex: meter ? undefined : '1 1 100px',
+          flex: stacked ? undefined : '1 1 100px',
           minWidth: 0,
           color: 'var(--muted)',
           fontFamily: 'var(--font-mono)',
@@ -182,7 +185,7 @@ function SectionRow({ row, last }: { row: IntegrationSectionRow; last: boolean }
       >
         {row.label}
       </span>
-      <span style={{ color: 'var(--text-2)', minWidth: 0, overflowWrap: 'anywhere', textAlign: meter ? 'left' : 'right' }}>
+      <span style={{ color: 'var(--text-2)', minWidth: 0, overflowWrap: 'anywhere', textAlign: stacked ? 'left' : 'right' }}>
         {renderValue(row)}
       </span>
     </div>
@@ -220,16 +223,21 @@ function renderValue(row: IntegrationSectionRow): ReactNode {
       if (row.value.length === 0) return <span style={{ color: 'var(--dim)' }}>none</span>;
       const hidden = row.value.length - LIST_VISIBLE;
       return (
-        <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end' }}>
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {row.value.slice(0, LIST_VISIBLE).map((item, index) => (
-            <Tag key={index} mono={false}>{item}</Tag>
+            <li
+              key={index}
+              style={{ padding: '3px 8px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line)', overflowWrap: 'anywhere' }}
+            >
+              {item}
+            </li>
           ))}
           {hidden > 0 && (
-            <span title={row.value.slice(LIST_VISIBLE).join(', ')}>
-              <Tag tone="outline">+{hidden} more</Tag>
-            </span>
+            <li title={row.value.slice(LIST_VISIBLE).join(', ')} style={{ color: 'var(--muted)' }}>
+              +{hidden} more
+            </li>
           )}
-        </span>
+        </ul>
       );
     }
     case 'meter':

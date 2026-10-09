@@ -49,6 +49,10 @@ describe('IntegrationSections', () => {
     expect(screen.getByText('Jul 1, 2026')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open/ })).toHaveAttribute('href', 'https://admin.example.com/u/1');
     expect(screen.getByText('+2 more')).toBeInTheDocument();
+    // List items are wrapping lines in a list (not nowrap tags), so long text stays inside the card.
+    const item = screen.getByText('a');
+    expect(item.tagName).toBe('LI');
+    expect(item.style.overflowWrap).toBe('anywhere');
     // Text stays text: no element is created from the value.
     expect(screen.getByText('<b>not html</b>')).toBeInTheDocument();
     expect(container.querySelector('b')).toBeNull();
