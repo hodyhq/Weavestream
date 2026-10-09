@@ -1101,6 +1101,23 @@ describe('AssetsService integration system writes', () => {
       expect(scan).toMatchObject({ externalSource: null, externalId: null, assetLayoutId: ids.layout });
     });
 
+    it('reports a truncated fallback scan as ambiguous instead of adopting or creating', async () => {
+      const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
+      const many = Array.from({ length: 5_001 }, (_, i) => asset({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, externalSource: null, externalId: null }));
+      const { service, prisma, tx } = setup({ layout: { ...layout, fields: [textField] } });
+      for (const client of [prisma, tx]) {
+        client.asset.findMany.mockReset();
+        client.asset.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce(many).mockResolvedValue([]);
+      }
+      await expect(service.writeFromIntegration({
+        ...input,
+        matchKeyFieldIds: [ids.field],
+        claimUnboundMatch: true,
+        fieldValues: [{ targetFieldId: ids.field, value: 'alice@example.com', syncDirection: 'source_wins' }],
+      })).resolves.toMatchObject({ change: 'blocked', gap: { kind: 'ambiguous' } });
+      expect(tx.asset.create).not.toHaveBeenCalled();
+    });
+
     it('does not fall back to the scan without claimUnboundMatch', async () => {
       const { service, prisma } = setup({ match: [] });
       await service.writeFromIntegration({ ...input, matchKeyFieldIds: [ids.field] });

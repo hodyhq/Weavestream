@@ -428,7 +428,8 @@ async function latestReport(
         nextPageToken?: string;
         warnings?: Array<{ code?: string; message?: string }>;
       }>(ctx, url(date, pageToken));
-      if ((body.warnings ?? []).some((w) => w.code === 'DATA_NOT_AVAILABLE' || /not available/i.test(w.message ?? ''))) {
+      // PARTIAL_DATA_AVAILABLE is accepted; only a missing day steps back.
+      if ((body.warnings ?? []).some((w) => w.code === 'DATA_NOT_AVAILABLE')) {
         unavailable = true;
         break;
       }

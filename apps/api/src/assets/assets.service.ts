@@ -1997,8 +1997,11 @@ export class AssetsService {
         },
       },
       include: { fieldValues: { where: { assetFieldId: { in: [...wanted.keys()] } } } },
-      take: 5_000,
+      take: 5_001,
     });
+    // A truncated scan can prove neither uniqueness nor absence: surface an
+    // ambiguous gap rather than adopt the wrong asset or create a duplicate.
+    if (unbound.length > 5_000) return { target: null, ambiguous: true };
     const matches = unbound.filter((asset) =>
       [...wanted].every(([fieldId, value]) =>
         asset.fieldValues.some((row) => row.assetFieldId === fieldId && fold(row.value) === value),
