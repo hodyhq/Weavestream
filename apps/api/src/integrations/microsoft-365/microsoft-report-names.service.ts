@@ -86,16 +86,18 @@ export class MicrosoftReportNamesService {
     // Read before any change, so the audit row and the answer state the real "before".
     const before = await this.read(ctx, integrationId);
     if (input.action === 'keep') {
-      await this.storeChoice(integrationId, consent, 'hidden');
+      // Nothing changes, so the stored choice records what the tenant shows.
+      const kept = before === false ? 'shown' : 'hidden';
+      await this.storeChoice(integrationId, consent, kept);
       await this.audit.log({
         ...auditBase,
         action: AUDIT_ACTIONS.integration.microsoftReportNames,
         before: { choice: consent.reportNames ?? null, displayConcealedNames: before },
-        after: { ...detail, choice: 'hidden', displayConcealedNames: before, changed: false },
+        after: { ...detail, choice: kept, displayConcealedNames: before, changed: false },
       });
       return {
         concealed: before,
-        choice: 'hidden',
+        choice: kept,
         readError: before === null ? REPORT_NAMES_READ_ERROR : null,
         message: `Nothing was changed in the tenant. "${MICROSOFT_REPORT_SETTING.label}" stays ${before === null ? 'as it is' : settingState(before)}.`,
       };

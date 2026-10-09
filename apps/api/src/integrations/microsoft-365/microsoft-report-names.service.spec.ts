@@ -133,6 +133,15 @@ describe('MicrosoftReportNamesService', () => {
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ after: expect.objectContaining({ action: 'keep', changed: false }) }));
   });
 
+  it('keep records that names are shown when the tenant already shows them, still changing nothing', async () => {
+    const { calls } = graph(false);
+    const { service, secret } = setup();
+    const result = await service.apply(ACTOR, ID, { action: 'keep' }, META);
+    expect(calls.map((c) => c.method)).toEqual(['GET']);
+    expect(secret().reportNames).toBe('shown');
+    expect(result).toMatchObject({ choice: 'shown', concealed: false });
+  });
+
   it('conceal: turns concealment back on with one audited PATCH', async () => {
     const { calls, state } = graph(false);
     const { service, audit, secret } = setup('shown');

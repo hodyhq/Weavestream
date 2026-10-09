@@ -382,7 +382,7 @@ export interface TenantInput {
   mfa: Lookup<{ registered: number; members: number }>;
   admins: Lookup<{ any: number; global: number }>;
   storage: Lookup<{ oneDriveBytes: number | null; sharePointBytes: number | null; date: string | null }>;
-  alerts: Lookup<SecurityAlert[]>;
+  alerts: Lookup<{ items: SecurityAlert[]; more: boolean }>;
 }
 
 /** Shown alerts; the count row says how many there were. */
@@ -450,12 +450,14 @@ export function buildTenantSection(input: TenantInput): IntegrationSection {
   const alerts: Row[] = [];
   if (!input.alerts.ok) alerts.push(unavailable('Alerts', input.alerts.reason));
   else {
-    const sorted = [...input.alerts.value].sort(
+    const { items, more } = input.alerts.value;
+    const sorted = [...items].sort(
       (a, b) =>
         SEVERITY_ORDER.indexOf(a.severity ?? 'unknownFutureValue') - SEVERITY_ORDER.indexOf(b.severity ?? 'unknownFutureValue') ||
         (b.createdDateTime ?? '').localeCompare(a.createdDateTime ?? ''),
     );
-    alerts.push(num('Alerts (last 30 days)', input.alerts.value.length));
+    // A capped page is never presented as the full total.
+    alerts.push(more ? text('Alerts (last 30 days)', `More than ${items.length}`) : num('Alerts (last 30 days)', items.length));
     for (const a of sorted.slice(0, ALERTS_SHOWN)) {
       const label = `${a.severity ?? 'unknown'}: ${a.title ?? 'Untitled alert'}`;
       const status = [a.status, a.createdDateTime?.slice(0, 10)].filter(Boolean).join(', ') || 'Open';

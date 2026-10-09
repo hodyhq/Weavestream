@@ -111,7 +111,7 @@ export function ReportNamesChoice({ integrationId, choice: initialChoice }: { in
                 Yes, show real names (turn the setting off)
               </Btn>
             )}
-            {choice === null && (
+            {choice === null && concealed !== false && (
               <Btn kind="outline" size="sm" onClick={() => void act('keep')} loading={busy === 'keep'} disabled={busy !== null}>
                 No, keep names hidden (change nothing)
               </Btn>

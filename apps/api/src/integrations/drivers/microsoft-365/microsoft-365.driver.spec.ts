@@ -434,6 +434,14 @@ describe('Microsoft365Driver tenant', () => {
     expect(alerts[2]).toEqual({ kind: 'link', label: 'medium: Suspicious sign-in', value: 'https://security.microsoft.com/alerts/1', text: 'new, 2026-10-07' });
   });
 
+  it('does not present a capped alert page as the full count', async () => {
+    installFetchTable(baseTable({
+      [`${G}/security/alerts_v2`]: { body: { value: [{ title: 'A', severity: 'low' }], '@odata.nextLink': `${G}/security/alerts_v2?$skiptoken=x` } },
+    }));
+    const rec = (await driver.fetchRecords(fetchCtx(makeCtx(), 'tenant'), null)).records[0] as LegacyDriverRecord;
+    expect(rows(rec, 'alerts')[0]).toEqual({ kind: 'text', label: 'Alerts (last 30 days)', value: 'More than 1' });
+  });
+
   it('degrades Defender and Secure Score to Not available rows', async () => {
     installFetchTable(baseTable({
       [`${G}/security/alerts_v2`]: { status: 403, body: { error: { code: 'Forbidden' } } },

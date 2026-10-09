@@ -595,7 +595,7 @@ export class Microsoft365Driver implements IntegrationDriver {
                 ctx,
                 `${GRAPH}/security/alerts_v2?$filter=${encodeURIComponent(`createdDateTime ge ${since}`)}&$top=50`,
                 'security alerts',
-              ).then((b) => b.value ?? []),
+              ).then((b) => ({ items: b.value ?? [], more: Boolean(b['@odata.nextLink']) })),
             NEEDS_DEFENDER,
           ),
         });
