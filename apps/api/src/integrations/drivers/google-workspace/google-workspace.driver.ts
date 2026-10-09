@@ -25,7 +25,6 @@ import { diagnoseGoogleClient, diagnoseGoogleConnection } from './google-workspa
 import { GOOGLE_WORKSPACE_SETUP_GUIDE } from './google-workspace.setup-guide.js';
 import {
   buildChromeSection,
-  buildDomainSection,
   buildGroupSection,
   buildMobileSection,
   buildTenantSection,
@@ -125,7 +124,7 @@ export const LICENCE_PRODUCT_IDS = ['Google-Apps', '101031', '101037'] as const;
 /** Max items held per lookup map (licences, usage) in one run. */
 export const LOOKUP_ITEM_CAP = 50_000;
 
-type ResourceKey = 'tenant' | 'users' | 'groups' | 'domains' | 'chrome_devices' | 'mobile_devices';
+type ResourceKey = 'tenant' | 'users' | 'groups' | 'chrome_devices' | 'mobile_devices';
 
 interface ResourceSpec {
   label: string;
@@ -179,14 +178,6 @@ const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
     standardFields: [
       { sourceField: 'description', label: 'Description', fieldType: 'TEXTAREA', fieldHints: ['description'] },
     ],
-  },
-  domains: {
-    label: 'Domains',
-    description: 'Domains and domain aliases of the tenant.',
-    matchField: 'name', matchLabel: 'Domain', matchType: 'TEXT',
-    layoutHints: ['domains', 'domain'],
-    fieldHints: ['domain', 'domain_name', 'name', 'fqdn'],
-    layout: { name: 'Domains', slug: 'domains', icon: 'globe', color: 'green' },
   },
   chrome_devices: {
     label: 'Chrome devices',
@@ -590,6 +581,70 @@ function record(key: ResourceKey, externalId: string, name: string, matchValue: 
   };
 }
 
+/** One verified Workspace domain as Domains monitoring stores it. */
+export interface WorkspaceDomain {
+  /** Lowercased, trimmed, no trailing dot. */
+  hostname: string;
+  role: 'PRIMARY' | 'SECONDARY' | 'ALIAS';
+  /** Parent domain of an alias; null otherwise. */
+  aliasOf: string | null;
+}
+
+/**
+ * Domains Google creates for every tenant (the `.test-google-a.com` test
+ * alias; `.googleapps.com` is excluded too as Google-owned). They are not the
+ * customer's domains and are never monitored.
+ */
+const GOOGLE_DEFAULT_DOMAIN_SUFFIXES = ['.test-google-a.com', '.googleapps.com'];
+
+export function normalizeDomainName(name: string): string {
+  return name.trim().toLowerCase().replace(/\.+$/, '');
+}
+
+export function isGoogleDefaultDomain(hostname: string): boolean {
+  return GOOGLE_DEFAULT_DOMAIN_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+}
+
+interface GoogleDomainsBody {
+  domains?: Array<{
+    domainName?: string;
+    isPrimary?: boolean;
+    verified?: boolean;
+    domainAliases?: Array<{ domainAliasName?: string; parentDomainName?: string; verified?: boolean }>;
+  }>;
+}
+
+/**
+ * Verified domains and domain aliases of the tenant `externalOrgId` (the
+ * mapping's Google customer id). Throws when the connection belongs to a
+ * different tenant, so one mapping can never feed another tenant's domains.
+ * Google default domains and unverified domains are left out.
+ */
+export async function listWorkspaceDomains(ctx: IntegrationContext, externalOrgId: string): Promise<WorkspaceDomain[]> {
+  const customer = await getCustomer(ctx);
+  if (customer.id !== externalOrgId) {
+    throw new DriverAuthError(
+      'This Google connection belongs to a different Workspace tenant than the mapped one. Reconnect with an admin of the mapped tenant.',
+    );
+  }
+  const body = await googleGet<GoogleDomainsBody>(ctx, `${DIRECTORY}/customer/my_customer/domains`);
+  const out = new Map<string, WorkspaceDomain>();
+  const add = (name: string | undefined, verified: boolean | undefined, role: WorkspaceDomain['role'], aliasOf: string | null) => {
+    if (!name || verified !== true) return;
+    const hostname = normalizeDomainName(name);
+    if (!hostname || isGoogleDefaultDomain(hostname) || out.has(hostname)) return;
+    out.set(hostname, { hostname, role, aliasOf });
+  };
+  for (const d of body.domains ?? []) {
+    add(d.domainName, d.verified, d.isPrimary === true ? 'PRIMARY' : 'SECONDARY', null);
+    for (const alias of d.domainAliases ?? []) {
+      const parent = alias.parentDomainName ?? d.domainName;
+      add(alias.domainAliasName, alias.verified, 'ALIAS', parent ? normalizeDomainName(parent) : null);
+    }
+  }
+  return [...out.values()];
+}
+
 export class GoogleWorkspaceDriver implements IntegrationDriver {
   readonly key = 'google-workspace';
 
@@ -742,32 +797,6 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
           records.push(record(key, g.id, g.name || g.email, g.email, buildGroupSection(g, members.members ?? []), groupStandardFields(g)));
         }
         return { records, nextPageToken: body.nextPageToken };
-      }
-      case 'domains': {
-        const body = await googleGet<{
-          domains?: Array<{
-            domainName?: string;
-            isPrimary?: boolean;
-            verified?: boolean;
-            creationTime?: string;
-            domainAliases?: Array<{ domainAliasName?: string; parentDomainName?: string; verified?: boolean; creationTime?: string }>;
-          }>;
-        }>(ctx, `${DIRECTORY}/customer/my_customer/domains`);
-        const records: LegacyDriverRecord[] = [];
-        for (const d of body.domains ?? []) {
-          if (!d.domainName) continue;
-          // Domain names are Google's own identifiers for domains (no separate id).
-          records.push(record(key, d.domainName.toLowerCase(), d.domainName, undefined, buildDomainSection({
-            primary: d.isPrimary === true, verified: d.verified, creationTime: d.creationTime,
-          })));
-          for (const alias of d.domainAliases ?? []) {
-            if (!alias.domainAliasName) continue;
-            records.push(record(key, alias.domainAliasName.toLowerCase(), alias.domainAliasName, undefined, buildDomainSection({
-              primary: false, verified: alias.verified, aliasOf: alias.parentDomainName ?? d.domainName, creationTime: alias.creationTime,
-            })));
-          }
-        }
-        return { records };
       }
       case 'chrome_devices': {
         const body = await googleGet<{ chromeosdevices?: ChromeDevice[]; nextPageToken?: string }>(

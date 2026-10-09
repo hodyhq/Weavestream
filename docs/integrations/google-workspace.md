@@ -1,7 +1,7 @@
 ---
 label: Google Workspace
 icon: plug
-description: Connect Google Workspace tenants with one click to sync people, devices, groups and domains into your layouts, with licences and storage on the asset page.
+description: Connect Google Workspace tenants with one click to sync people, devices and groups into your layouts, with licences and storage on the asset page, and the tenant's domains into Domains monitoring.
 ---
 
 # Google Workspace Integration
@@ -13,7 +13,7 @@ The Weavestream Google Workspace driver is **read-only**. One integration is one
 ## Overview & Features
 
 - **One-click connect per customer**: no per-customer Google Cloud project, no service account keys.
-- **Match first**: on the first sync, Google records link to the assets you already have (users by email, devices by serial number, domains by name). An asset is only created when nothing matches.
+- **Match first**: on the first sync, Google records link to the assets you already have (users by email, devices by serial number). An asset is only created when nothing matches.
 - **Standard facts fill your layout fields**: job title, department and phone for people; model, operating system, MAC and IP address for devices; and a few more per resource (see below). You pick or create the fields in **Map layouts**. Everything else (licences, storage, 2-step verification, org unit, device status) shows in a **Google Workspace** section on the asset page.
 - **Your edits win**: a field someone changed in Weavestream is never overwritten. It is listed as a **difference** instead, and you choose which value to keep.
 - **Usage bars**: mailbox, Drive and total storage per user, and pooled storage for the tenant, shown as bars that turn amber at 80% and red at 95%.
@@ -26,9 +26,20 @@ The Weavestream Google Workspace driver is **read-only**. One integration is one
 | **Tenant** | Google Workspace Tenants (created) | Customer ID | Name, Customer ID, Primary domain | Overview (active, suspended and archived users, created), Licences assigned per edition, Storage (used vs pooled, with Gmail, Drive and shared drives, data as of), Security (2-step verification coverage, super admins, unused licences) |
 | **Users** | People | Email | Name, Email, Job title, Department, Phone | Account (status, **org unit**, created, last login), Licences, Mailbox, Drive, Total storage, Security (admin role, 2-step verification, unused licence) |
 | **Groups** | Distribution Lists | Email | Name, Email, Description | Group (member count, members) |
-| **Domains** | Domains | Domain name | Domain | Domain (primary, verified, alias of, created) |
 | **Chrome devices** | Laptops, Chromebooks or Workstations | Serial number | Name, Serial number, Model, Operating system, MAC address, IP address (and optionally Auto-update expiration) | Chrome OS (status, last sync, last user, org unit, auto-update expiration) |
 | **Mobile devices** | Phones | Serial number | Name, Serial number, Model, Manufacturer, Operating system, IMEI, MAC address | Device (type, owner, status, last sync, compromised) |
+
+### Domains feed Domains monitoring
+
+The tenant's domains are not assets. On every sync of a mapped tenant, its **verified** domains and domain aliases go to the company's built-in **Domains** monitoring (WHOIS, DNS and TLS checks), and each domain shows a **Google Workspace** tag in the Domains list and a **Google Workspace** card on its page with the role (**Primary domain**, **Secondary domain**, or **Domain alias of** its parent domain), verification, last sync and the integration.
+
+- **Matched, never duplicated.** A Google domain is matched to a domain the company already monitors by name (ignoring upper and lower case and a trailing dot), whether it was added by hand or synced from Cloudflare. A match only gains the Google Workspace details: its checks, client visibility and, for a Cloudflare domain, the registrar details are left as they are. Cloudflare wins on anything both provide.
+- **New domains** are added to the mapped company with the default checks, like **New domain**, and get their first check right away.
+- **Archived domains are left alone.** An archived domain is not restored, and no second copy is added beside it.
+- **Google's default domains are skipped**: the `*.test-google-a.com` test alias (and any `*.googleapps.com` domain) that Google creates for a tenant. Unverified domains are skipped too.
+- **A domain removed from Workspace** (or no longer verified) is never deleted: its role is cleared and the card and tag show **not in Google Workspace since** the date it disappeared.
+- **Only the mapped company.** A tenant's domains only ever touch the company the tenant is mapped to.
+- Domains are synced after the mapping's resources, on real runs only (not on a dry run). A failure is shown as a warning on the run and never fails it.
 
 How each layout field is filled:
 

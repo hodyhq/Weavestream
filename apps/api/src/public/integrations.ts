@@ -11,3 +11,7 @@ export {
 export { IntegrationProvenanceService } from '../integrations/reconstruction/integration-provenance.service.js';
 export { CloudflareListsService } from '../integrations/cloudflare/cloudflare-lists.service.js';
 export { CloudflareRegistrarSyncService } from '../integrations/cloudflare/cloudflare-registrar-sync.service.js';
+export {
+  GoogleWorkspaceDomainSyncService,
+  workspaceDomainSyncWarning,
+} from '../integrations/google-workspace/google-workspace-domain-sync.service.js';

@@ -550,6 +550,21 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     }));
   });
 
+  it('skips a resource the driver no longer declares with a run warning, without fetching', async () => {
+    const { service, driver } = setup();
+    // The setup resource is `subnets`; the driver now declares only `devices`.
+    (driver.descriptor as Record<string, unknown>).resources = [{ key: 'devices' }];
+    const outcome = await service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    });
+    expect(outcome).toMatchObject({ status: 'succeeded', error: null, resourceKey: 'subnets' });
+    expect(outcome.conflicts).toEqual([
+      expect.objectContaining({ kind: 'validation_error', message: expect.stringContaining('no longer provides it') }),
+    ]);
+    expect(driver.fetchRecords).not.toHaveBeenCalled();
+  });
+
   describe('integration sections on legacy records', () => {
     const fieldId = '00000000-0000-4000-8000-000000000601';
     const validSection = {

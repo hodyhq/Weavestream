@@ -235,6 +235,21 @@ export class IntegrationSyncRunnerService {
     if (!resource.enabled) {
       return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
     }
+    // A resource row the driver no longer declares (a removed resource, still
+    // enabled in the database) is skipped with a run warning: the driver
+    // cannot fetch it, and failing would fail every run of the mapping.
+    const declared = this.drivers.get(mapping.integration.driver).descriptor?.resources;
+    if (declared && !declared.some((candidate) => candidate.key === resource.resourceKey)) {
+      this.logger.warn(
+        `Skipping resource ${resource.resourceKey}: driver ${mapping.integration.driver} no longer declares it (integration=${mapping.integrationId})`,
+      );
+      conflicts.push({
+        kind: 'validation_error',
+        externalId: '',
+        message: `Skipped resource "${resource.resourceKey}": the ${mapping.integration.driver} driver no longer provides it. Disable or remove it in the integration settings.`,
+      });
+      return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
+    }
     if (
       resource.targetKind === 'asset' &&
       (!resource.assetLayoutId || !resource.assetLayout || resource.fieldMappings.length === 0)

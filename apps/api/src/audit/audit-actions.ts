@@ -206,6 +206,8 @@ export const AUDIT_ACTIONS = {
     // `.failed` row instead, carrying `{ runId, error }`.
     cloudflareRegistrarSync: 'integration.cloudflare.registrar_sync',
     cloudflareRegistrarSyncFailed: 'integration.cloudflare.registrar_sync.failed',
+    // Google Workspace domains → Domains monitoring, once per mapping sync.
+    googleWorkspaceDomainSync: 'integration.google_workspace.domain_sync',
   },
   subnet: {
     create: 'subnet.create',
