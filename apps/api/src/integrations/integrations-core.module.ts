@@ -8,6 +8,7 @@ import { IntegrationDriverRegistry } from './drivers/integration-driver.registry
 import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.service.js';
 import { CloudflareListsService } from './cloudflare/cloudflare-lists.service.js';
 import { CloudflareRegistrarSyncService } from './cloudflare/cloudflare-registrar-sync.service.js';
+import { GoogleWorkspaceDomainSyncService } from './google-workspace/google-workspace-domain-sync.service.js';
 import { TicketsService } from './tickets.service.js';
 import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
 import { FieldTypesModule } from '../field-types/field-types.module.js';
@@ -118,6 +119,7 @@ import { RelationsService } from '../relations/relations.service.js';
     MatchResolverService,
     CloudflareListsService,
     CloudflareRegistrarSyncService,
+    GoogleWorkspaceDomainSyncService,
     TicketsService,
     IntegrationOAuthAppService,
   ],
@@ -135,6 +137,7 @@ import { RelationsService } from '../relations/relations.service.js';
     MatchResolverService,
     CloudflareListsService,
     CloudflareRegistrarSyncService,
+    GoogleWorkspaceDomainSyncService,
     TicketsService,
     IntegrationOAuthAppService,
   ],

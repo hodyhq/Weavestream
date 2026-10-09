@@ -265,22 +265,6 @@ export function buildGroupSection(g: GoogleGroup, members: Array<{ email?: strin
   ]);
 }
 
-export function buildDomainSection(d: {
-  primary: boolean;
-  verified?: boolean;
-  aliasOf?: string;
-  creationTime?: string | number;
-}): IntegrationSection {
-  return section([
-    group('domain', 'Domain', 'google', [
-      bool('Primary', d.primary),
-      bool('Verified', d.verified),
-      text('Alias of', d.aliasOf),
-      date('Created', d.creationTime),
-    ]),
-  ]);
-}
-
 export interface ChromeDevice {
   deviceId?: string;
   serialNumber?: string;

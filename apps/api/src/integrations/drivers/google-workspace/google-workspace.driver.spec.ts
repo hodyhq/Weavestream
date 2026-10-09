@@ -10,6 +10,7 @@ import {
   GoogleWorkspaceDriver,
   GOOGLE_WORKSPACE_RECOMMENDED_DESTINATIONS,
   LOOKUP_ITEM_CAP,
+  listWorkspaceDomains,
   __googleWorkspaceRunCacheSizeForTests,
   __resetGoogleWorkspaceRunCacheForTests,
 } from './google-workspace.driver.js';
@@ -163,7 +164,7 @@ describe('GoogleWorkspaceDriver descriptor', () => {
     expect(parsed.oauth?.provider).toBe('google');
     expect(parsed.oauth?.extraAuthorizeParams).toEqual({ access_type: 'offline', prompt: 'consent' });
     expect(parsed.resources.map((r) => r.key)).toEqual([
-      'tenant', 'users', 'groups', 'domains', 'chrome_devices', 'mobile_devices',
+      'tenant', 'users', 'groups', 'chrome_devices', 'mobile_devices',
     ]);
     for (const resource of parsed.resources) {
       expect(resource.matchSuggestions).toBeDefined();
@@ -197,7 +198,6 @@ describe('GoogleWorkspaceDriver descriptor', () => {
       tenant: ['primary_domain'],
       users: ['job_title', 'department', 'phone'],
       groups: ['description'],
-      domains: [],
       chrome_devices: ['model', 'operating_system', 'mac_address', 'ip_address'],
       mobile_devices: ['model', 'manufacturer', 'operating_system', 'imei', 'mac_address'],
     });
@@ -489,7 +489,7 @@ describe('GoogleWorkspaceDriver tenant', () => {
   });
 });
 
-describe('GoogleWorkspaceDriver groups, domains and devices', () => {
+describe('GoogleWorkspaceDriver groups and devices', () => {
   const table: Record<string, Reply> = {
     ...BASE_TABLE,
     [`${DIR}/groups?`]: {
@@ -549,15 +549,9 @@ describe('GoogleWorkspaceDriver groups, domains and devices', () => {
     expect(row(s, 'group', 'Email')).toBeUndefined();
   });
 
-  it('domains: primary and alias records', async () => {
+  it('domains: no longer an asset resource (they feed Domains monitoring)', async () => {
     installFetchTable(table);
-    const records = await only('domains');
-    expect(records.map((r) => [r.externalId, r.fields])).toEqual([
-      ['example.com', { name: 'example.com' }],
-      ['example.org', { name: 'example.org' }],
-    ]);
-    expect(row(sectionOf(records[0]!), 'domain', 'Created')).toMatchObject({ value: '2020-01-02' });
-    expect(row(sectionOf(records[1]!), 'domain', 'Alias of')).toMatchObject({ value: 'example.com' });
+    await expect(only('domains')).rejects.toThrow('Unknown Google Workspace resource: domains');
   });
 
   it('chrome devices: serial match key, standard facts, and the expiry as an optional date field', async () => {
@@ -613,5 +607,41 @@ describe('GoogleWorkspaceDriver is read-only', () => {
     const apiCalls = calls.filter((c) => !c.url.startsWith(TOKEN_URL));
     expect(apiCalls.length).toBeGreaterThan(8);
     expect(apiCalls.filter((c) => c.method !== 'GET')).toEqual([]);
+  });
+});
+
+describe('listWorkspaceDomains', () => {
+  const domainsTable = (body: unknown): Record<string, Reply> => ({
+    ...BASE_TABLE,
+    [`${DIR}/customer/my_customer/domains`]: { body },
+  });
+
+  it('returns verified domains and aliases with their role, normalized, without Google defaults', async () => {
+    installFetchTable(domainsTable({
+      domains: [
+        {
+          domainName: ' Example.COM. ', isPrimary: true, verified: true,
+          domainAliases: [
+            { domainAliasName: 'example.org', parentDomainName: 'Example.com', verified: true },
+            { domainAliasName: 'example.com.test-google-a.com', parentDomainName: 'example.com', verified: true },
+            { domainAliasName: 'pending.example', parentDomainName: 'example.com', verified: false },
+          ],
+        },
+        { domainName: 'example.net', isPrimary: false, verified: true },
+        { domainName: 'unverified.example', isPrimary: false, verified: false },
+        { domainName: 'example.googleapps.com', isPrimary: false, verified: true },
+      ],
+    }));
+    await expect(listWorkspaceDomains(makeCtx(), CUSTOMER_ID)).resolves.toEqual([
+      { hostname: 'example.com', role: 'PRIMARY', aliasOf: null },
+      { hostname: 'example.org', role: 'ALIAS', aliasOf: 'example.com' },
+      { hostname: 'example.net', role: 'SECONDARY', aliasOf: null },
+    ]);
+  });
+
+  it('refuses a connection that belongs to a different tenant than the mapped one', async () => {
+    const calls = installFetchTable(domainsTable({ domains: [{ domainName: 'example.com', isPrimary: true, verified: true }] }));
+    await expect(listWorkspaceDomains(makeCtx(), 'C0other')).rejects.toBeInstanceOf(DriverAuthError);
+    expect(calls.some((c) => c.url.includes('/domains'))).toBe(false);
   });
 });

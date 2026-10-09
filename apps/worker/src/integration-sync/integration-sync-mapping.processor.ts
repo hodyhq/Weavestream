@@ -18,6 +18,8 @@ import {
   IntegrationSyncRunnerService,
   type MappingRunOutcome,
   IntegrationProvenanceService,
+  GoogleWorkspaceDomainSyncService,
+  workspaceDomainSyncWarning,
 } from '@weavestream/api/integrations';
 import {
   createManagedWorker,
@@ -53,6 +55,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     private readonly runner: IntegrationSyncRunnerService,
     private readonly provenance: IntegrationProvenanceService,
     private readonly audit: AuditLogService,
+    private readonly workspaceDomains: GoogleWorkspaceDomainSyncService,
   ) {}
 
   async start(): Promise<void> {
@@ -167,7 +170,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
         id: true,
         triggeredBy: true,
         integrationId: true,
-        integration: { select: { createdBy: true } },
+        integration: { select: { createdBy: true, driver: true } },
       },
     });
     if (!run) return null;
@@ -267,6 +270,21 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     );
     if (retryable && !isFinalAttempt(job)) {
       throw new Error(retryable.error ?? `Resource ${retryable.resourceKey} failed.`);
+    }
+    // Google Workspace domains feed Domains monitoring (not an asset
+    // resource): once per mapping run, after the resources. A failure is a
+    // run warning on the last resource, never a failed mapping. Legacy
+    // per-resource jobs would run it once per resource, so they skip it.
+    if (run.integration.driver === 'google-workspace' && !legacy && !payload.dryRun) {
+      try {
+        await this.workspaceDomains.syncMapping(mapping.id, auditActorId);
+      } catch (err) {
+        const message = workspaceDomainSyncWarning(err);
+        this.logger.warn(
+          `${message} (mapping=${mapping.id}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        outcomes.at(-1)?.conflicts.push({ kind: 'validation_error', externalId: '', message });
+      }
     }
     // Legacy siblings each merge one resource into the shared mapping row;
     // the row may only reach a terminal state once every sibling reports.

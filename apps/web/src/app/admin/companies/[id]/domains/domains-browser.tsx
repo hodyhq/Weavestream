@@ -364,9 +364,15 @@ function DomainDialog({
             required
             value={form.hostname}
             autoFocus
-            // The registrar sync matches on hostname; the API rejects renames.
-            disabled={initial?.source === 'CLOUDFLARE'}
-            title={initial?.source === 'CLOUDFLARE' ? 'Synced from Cloudflare' : undefined}
+            // The syncs match on hostname; the API rejects renames.
+            disabled={!!initial && initial.source !== 'MANUAL'}
+            title={
+              initial?.source === 'CLOUDFLARE'
+                ? 'Synced from Cloudflare'
+                : initial?.source === 'GOOGLE_WORKSPACE'
+                  ? 'Synced from Google Workspace'
+                  : undefined
+            }
             onChange={(e) => setForm({ ...form, hostname: e.target.value })}
             style={inputStyle}
           />
@@ -776,18 +782,42 @@ const secondaryBtn: React.CSSProperties = {
   cursor: 'pointer',
 };
 
+/** "Primary domain" / "Secondary domain" / "Domain alias of x" for a Workspace role. */
+export function workspaceRoleLabel(
+  row: Pick<MonitoredDomainDto, 'workspaceRole' | 'workspaceAliasOf'>,
+): string | null {
+  switch (row.workspaceRole) {
+    case 'PRIMARY':
+      return 'Primary domain';
+    case 'SECONDARY':
+      return 'Secondary domain';
+    case 'ALIAS':
+      return row.workspaceAliasOf ? `Domain alias of ${row.workspaceAliasOf}` : 'Domain alias';
+    default:
+      return null;
+  }
+}
+
 /**
  * Orange "Cloudflare" tag on registrar-synced rows, so a synced domain is
  * never mistaken for a hand-entered one, plus a warning once the sync stops
- * seeing it on the account.
+ * seeing it on the account. A "Google Workspace" tag carries the domain's
+ * Workspace role, or a warning once it left the tenant.
  */
-function SourceTags({ row }: { row: MonitoredDomainDto }) {
-  if (row.source !== 'CLOUDFLARE') return null;
+export function SourceTags({ row }: { row: MonitoredDomainDto }) {
+  const cloudflare = row.source === 'CLOUDFLARE';
+  const role = workspaceRoleLabel(row);
+  const workspaceGone = !role && row.workspaceMissingSince !== null;
+  if (!cloudflare && !role && !workspaceGone) return null;
   return (
     <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
-      <Tag tone="cloudflare">Cloudflare</Tag>
-      {row.registrarMissingSince && (
+      {cloudflare && <Tag tone="cloudflare">Cloudflare</Tag>}
+      {cloudflare && row.registrarMissingSince && (
         <Tag tone="warn">not on account since {fmtDate(row.registrarMissingSince)}</Tag>
+      )}
+      {role && <Tag tone="info">Google Workspace · {role}</Tag>}
+      {workspaceGone && (
+        <Tag tone="warn">not in Google Workspace since {fmtDate(row.workspaceMissingSince)}</Tag>
       )}
     </span>
   );
