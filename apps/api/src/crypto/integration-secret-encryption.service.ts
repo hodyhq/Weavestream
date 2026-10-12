@@ -29,11 +29,27 @@ export function integrationSecretAad(integrationId: string): string {
 }
 
 /**
- * AAD for an instance OAuth app's client secret, bound to its provider so
- * the blob cannot be swapped onto another provider's row.
+ * AAD for the client secret of an OAuth integration's app, bound to the
+ * owning integration so the blob cannot be moved onto another integration.
  */
-export function integrationOAuthAppSecretAad(provider: string): string {
+export function integrationOAuthAppSecretAad(integrationId: string): string {
+  return `integration:${integrationId}:oauth-app:client-secret`;
+}
+
+/**
+ * AAD of a pre-connections instance-wide OAuth app secret (bound to the
+ * provider). Read only by the boot migration that re-binds it.
+ */
+export function legacyIntegrationOAuthAppSecretAad(provider: string): string {
   return `integration-oauth-app:${provider}:client-secret`;
+}
+
+/**
+ * AAD for one client-tenant connection's grant, bound to the connection and
+ * its integration: a blob can never be replayed onto another tenant's row.
+ */
+export function integrationConnectionSecretAad(integrationId: string, connectionId: string): string {
+  return `integration:${integrationId}:connection:${connectionId}:secret`;
 }
 
 /**

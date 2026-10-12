@@ -15,22 +15,27 @@ import { MicrosoftReportNamesService } from './microsoft-report-names.service.js
  * change needs a fresh step-up. The POST is the only route that can write
  * to a customer tenant, and only the one report setting.
  *
- *   - GET  /admin/integrations/:id/microsoft/report-names   current value + choice
- *   - POST /admin/integrations/:id/microsoft/report-names   { action: show | conceal | keep }
+ * The choice is per connection (client tenant).
+ *
+ *   - GET  /admin/integrations/:id/connections/:connectionId/microsoft/report-names   current value + choice
+ *   - POST /admin/integrations/:id/connections/:connectionId/microsoft/report-names   { action: show | conceal | keep }
  */
 @Controller({ path: 'admin/integrations', version: '1' })
 @InteractiveOnly()
 export class MicrosoftReportNamesController {
   constructor(private readonly reportNames: MicrosoftReportNamesService) {}
 
-  @Get(':id/microsoft/report-names')
+  @Get(':id/connections/:connectionId/microsoft/report-names')
   @RequirePermission('integration.manage')
   @Throttle({ global: { limit: 20, ttl: 60_000 } })
-  status(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.reportNames.status(id);
+  status(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
+  ) {
+    return this.reportNames.status(id, connectionId);
   }
 
-  @Post(':id/microsoft/report-names')
+  @Post(':id/connections/:connectionId/microsoft/report-names')
   @RequirePermission('integration.manage')
   @RequireStepUp()
   @Throttle({ global: { limit: 10, ttl: 60_000 } })
@@ -38,9 +43,10 @@ export class MicrosoftReportNamesController {
   apply(
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
     @Body(new ZodBody(microsoftReportNamesActionSchema)) dto: MicrosoftReportNamesAction,
     @Req() req: Request,
   ) {
-    return this.reportNames.apply(user, id, dto, meta(req));
+    return this.reportNames.apply(user, id, connectionId, dto, meta(req));
   }
 }

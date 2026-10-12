@@ -111,10 +111,10 @@ export function missingPermissionsMessage(missing: string[]): string {
 export async function diagnoseMicrosoftConnection(ctx: IntegrationContext): Promise<IntegrationSetupCheck> {
   const stored = parseStoredAdminConsent(ctx.secret);
   if (!stored) {
-    return result([], [{ stepId: S.connect, message: 'This integration is not connected. Press Connect with Microsoft (step 5).' }]);
+    return result([], [{ stepId: S.connect, message: 'This tenant is not connected. Press Reconnect on its row of the Connections tab (step 5).' }]);
   }
   if (!ctx.oauthClient) {
-    return result([], [{ stepId: S.credentials, message: 'The Microsoft app is not configured. Save it under Settings > Integrations (step 4).' }]);
+    return result([], [{ stepId: S.credentials, message: 'The Microsoft app is not configured. Save it on the App tab (step 4).' }]);
   }
   let roles: string[] | null;
   try {
@@ -187,7 +187,7 @@ export async function diagnoseMicrosoftConnection(ctx: IntegrationContext): Prom
   } else if (concealed.value) {
     notes.push({
       stepId: S.names,
-      message: `"${MICROSOFT_REPORT_SETTING.label}" is on in this tenant, so mailbox and OneDrive storage cannot be matched to people.${stored.reportNames ? '' : ' Choose on the Credentials tab whether to show real names.'}`,
+      message: `"${MICROSOFT_REPORT_SETTING.label}" is on in this tenant, so mailbox and OneDrive storage cannot be matched to people.${stored.reportNames ? '' : ' Choose on the Connections tab whether to show real names.'}`,
     });
   }
   if (stored.reportNames) passed.push(S.names);

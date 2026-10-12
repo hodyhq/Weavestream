@@ -1087,75 +1087,134 @@ describe('reconstruction administration reads', () => {
 
 describe('IntegrationsService OAuth drivers', () => {
   const id = '00000000-0000-4000-8000-0000000000aa';
+  const CONN_A = '00000000-0000-4000-8000-0000000000a1';
+  const CONN_B = '00000000-0000-4000-8000-0000000000b1';
+  // Plaintext tagged with the AAD it was encrypted under: a wrong binding fails to decrypt.
   const crypto = {
-    decrypt: () => JSON.stringify({ refreshToken: 'test-refresh-tail', grantedScopes: [], connectedAt: 'x' }),
+    encrypt: (plaintext: string, aad: string) => `enc[${aad}]${plaintext}`,
+    decrypt: (blob: string, aad: string) => {
+      const prefix = `enc[${aad}]`;
+      if (!blob.startsWith(prefix)) throw new Error('aad mismatch');
+      return blob.slice(prefix.length);
+    },
   };
+  const grant = (tenant: string) => JSON.stringify({ refreshToken: `test-refresh-${tenant}`, grantedScopes: [], connectedAt: 'x' });
   const USER_ACTOR = { id: '00000000-0000-4000-8000-0000000000ab' } as never;
   const oauthDescriptor = {
     key: 'fake-oauth',
+    label: 'Fake OAuth',
     resources: [],
+    configFields: [],
+    secretFields: [],
     oauth: { provider: 'google', scopes: ['s'] },
   } as unknown as DriverDescriptor;
 
   function setup(
     client: { clientId: string; clientSecret: string; version?: string } | null,
-    secretRow = { id: 'secret-1', ciphertext: 'blob', updatedAt: new Date('2026-01-01T00:00:00Z') },
+    opts: { connections?: Array<{ id: string; externalOrgId: string; secretCiphertext: string; updatedAt: Date }>; existingOfProvider?: boolean } = {},
   ) {
+    const connections = opts.connections ?? [
+      { id: CONN_A, externalOrgId: 'C-a', secretCiphertext: crypto.encrypt(grant('a'), `integration:${id}:connection:${CONN_A}:secret`), updatedAt: new Date('2026-01-01T00:00:00Z') },
+      { id: CONN_B, externalOrgId: 'C-b', secretCiphertext: crypto.encrypt(grant('b'), `integration:${id}:connection:${CONN_B}:secret`), updatedAt: new Date('2026-01-01T00:00:00Z') },
+    ];
     const prisma = {
       integration: {
         findUnique: jest.fn(async () => ({
           id,
           driver: 'fake-oauth',
           config: {},
-          secret: secretRow,
+          secret: null,
           resources: [],
-          _count: { companyMappings: 0 },
+          _count: { companyMappings: 0, connections: connections.length },
           createdAt: new Date(0),
           updatedAt: new Date(0),
         })),
+        findFirst: jest.fn(async () => (opts.existingOfProvider ? { name: 'Existing' } : null)),
+      },
+      integrationConnection: {
+        findFirst: jest.fn(async ({ where }: { where: Record<string, unknown> }) =>
+          connections.find((c) => Object.entries(where).every(([k, v]) => k === 'integrationId' ? v === id : (c as Record<string, unknown>)[k] === v)) ?? null),
+        findMany: jest.fn(async () => connections.map((c) => ({ externalOrgId: c.externalOrgId, displayName: `${c.externalOrgId}.example` }))),
       },
     };
-    const drivers = { has: () => true, describe: () => oauthDescriptor };
+    const drivers = { has: () => true, describe: () => oauthDescriptor, list: () => [oauthDescriptor], kindOf: () => 'security' };
     const oauthApps = { getClient: jest.fn(async () => client) };
     const service = new IntegrationsService(
       prisma as never, crypto as never, {} as never, drivers as never,
       { values: { INTEGRATION_SYNC_DEFAULT_CRON: 'off' } } as never, {} as never, {} as never,
       oauthApps as never,
     );
-    return { service, oauthApps };
+    return { service, oauthApps, prisma };
   }
 
-  it('injects the instance OAuth app into the driver context', async () => {
+  it('injects the integration app and only the mapped tenant connection into the driver context', async () => {
     const client = { clientId: 'client-1', clientSecret: 'test-client-secret' };
     const { service, oauthApps } = setup(client);
-    const ctx = await service.loadDriverContext(id);
-    expect(oauthApps.getClient).toHaveBeenCalledWith('google');
+    const ctx = await service.loadDriverContext(id, { externalOrgId: 'C-a' });
+    expect(oauthApps.getClient).toHaveBeenCalledWith(id);
     expect(ctx.oauthClient).toEqual(client);
+    expect(ctx.connectionId).toBe(CONN_A);
+    expect(ctx.secret).toMatchObject({ refreshToken: 'test-refresh-a' });
+  });
+
+  it('isolates tenants: a mapping for tenant A never receives tenant B secret', async () => {
+    const { service } = setup(null);
+    const a = await service.loadDriverContext(id, { externalOrgId: 'C-a' });
+    const b = await service.loadDriverContext(id, { externalOrgId: 'C-b' });
+    expect(JSON.stringify(a.secret)).not.toContain('test-refresh-b');
+    expect(JSON.stringify(b.secret)).not.toContain('test-refresh-a');
+    await expect(service.loadDriverContext(id, { externalOrgId: 'C-unconnected' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses a blob relocated onto another connection (AAD binds connection + integration)', async () => {
+    const { service } = setup(null, {
+      connections: [{ id: CONN_A, externalOrgId: 'C-a', secretCiphertext: crypto.encrypt(grant('b'), `integration:${id}:connection:${CONN_B}:secret`), updatedAt: new Date(0) }],
+    });
+    await expect(service.loadDriverContext(id, { externalOrgId: 'C-a' })).rejects.toThrow(/could not be decrypted/);
+  });
+
+  it('requires a connection scope for OAuth drivers', async () => {
+    await expect(setup(null).service.loadDriverContext(id)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('loads by connection id within the integration only', async () => {
+    const { service, prisma } = setup(null);
+    await expect(service.loadDriverContext(id, { connectionId: CONN_B })).resolves.toMatchObject({ externalOrgId: 'C-b' });
+    expect(prisma.integrationConnection.findFirst).toHaveBeenCalledWith({ where: { integrationId: id, id: CONN_B } });
   });
 
   it('stamps a non-secret credential version that changes on reconnect or app save', async () => {
     const client = { clientId: 'client-1', clientSecret: 'test-client-secret', version: 'app-1@2026-01-01T00:00:00.000Z' };
-    const base = await setup(client).service.loadDriverContext(id);
-    expect(base.credentialVersion).toBe('secret-1@2026-01-01T00:00:00.000Z|app-1@2026-01-01T00:00:00.000Z');
+    const base = await setup(client).service.loadDriverContext(id, { externalOrgId: 'C-a' });
+    expect(base.credentialVersion).toBe(`${CONN_A}@2026-01-01T00:00:00.000Z|app-1@2026-01-01T00:00:00.000Z`);
     expect(base.credentialVersion).not.toContain('test-client-secret');
-    expect(base.credentialVersion).not.toContain('test-refresh-tail');
+    expect(base.credentialVersion).not.toContain('test-refresh');
     const reconnected = await setup(client, {
-      id: 'secret-1', ciphertext: 'blob', updatedAt: new Date('2026-01-02T00:00:00Z'),
-    }).service.loadDriverContext(id);
+      connections: [{ id: CONN_A, externalOrgId: 'C-a', secretCiphertext: crypto.encrypt(grant('a'), `integration:${id}:connection:${CONN_A}:secret`), updatedAt: new Date('2026-01-02T00:00:00Z') }],
+    }).service.loadDriverContext(id, { externalOrgId: 'C-a' });
     expect(reconnected.credentialVersion).not.toBe(base.credentialVersion);
-    const appSaved = await setup({ ...client, version: 'app-1@2026-01-03T00:00:00.000Z' }).service.loadDriverContext(id);
+    const appSaved = await setup({ ...client, version: 'app-1@2026-01-03T00:00:00.000Z' }).service.loadDriverContext(id, { externalOrgId: 'C-a' });
     expect(appSaved.credentialVersion).not.toBe(base.credentialVersion);
   });
 
   it('omits the OAuth app when none is configured', async () => {
-    const ctx = await setup(null).service.loadDriverContext(id);
+    const ctx = await setup(null).service.loadDriverContext(id, { externalOrgId: 'C-a' });
     expect(ctx).not.toHaveProperty('oauthClient');
   });
 
-  it('never exposes token tails through secretMask', async () => {
+  it('reports credentials by connections and never exposes token tails', async () => {
     const dto = await setup(null).service.get(id);
     expect(dto.hasSecret).toBe(true);
     expect(dto.secretMask).toBeNull();
+    const none = await setup(null, { connections: [] }).service.get(id);
+    expect(none.hasSecret).toBe(false);
+  });
+
+  it('lists the connected tenants as source organizations', async () => {
+    await expect(setup(null).service.listConnectedOrgs(id)).resolves.toEqual([
+      { externalId: 'C-a', name: 'C-a.example', hint: null },
+      { externalId: 'C-b', name: 'C-b.example', hint: null },
+    ]);
   });
 
   it.each([
@@ -1171,6 +1230,13 @@ describe('IntegrationsService OAuth drivers', () => {
     const { service } = setup(null);
     await expect(service.create(USER_ACTOR, { driver: 'fake-oauth', name: 'x', config: {}, secret: { refreshToken: 'test-forged' } } as never, { ip: null, userAgent: null } as never))
       .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses a second integration of the same OAuth provider', async () => {
+    const { service, prisma } = setup(null, { existingOfProvider: true });
+    await expect(service.create(USER_ACTOR, { driver: 'fake-oauth', name: 'Second', config: {} } as never, { ip: null, userAgent: null } as never))
+      .rejects.toThrow(/already exists \("Existing"\).*Connections tab/);
+    expect(prisma.integration.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { driver: { in: ['fake-oauth'] } } }));
   });
 });
 

@@ -11,7 +11,7 @@ import { AUDIT_ACTIONS } from '../../audit/audit-actions.js';
 import { EnvService } from '../../config/env.service.js';
 import {
   IntegrationSecretEncryptionService,
-  integrationSecretAad,
+  integrationConnectionSecretAad,
 } from '../../crypto/integration-secret-encryption.service.js';
 import { IntegrationsService } from '../integrations.service.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
@@ -60,7 +60,7 @@ export function settingState(concealed: boolean): string {
  * changes it on an explicit `show` (turn it off) or `conceal` (turn it back
  * on). `keep` records the choice and changes nothing. Every action is
  * audited with the value before and after; the stored choice lives in the
- * encrypted integration secret.
+ * encrypted connection secret of that tenant.
  */
 @Injectable()
 export class MicrosoftReportNamesService {
@@ -75,8 +75,8 @@ export class MicrosoftReportNamesService {
   ) {}
 
   /** Current tenant value (read live) and the stored choice. */
-  async status(integrationId: string): Promise<MicrosoftReportNames> {
-    const { ctx, consent } = await this.load(integrationId);
+  async status(integrationId: string, connectionId: string): Promise<MicrosoftReportNames> {
+    const { ctx, consent } = await this.load(integrationId, connectionId);
     const concealed = await this.read(ctx, integrationId, consent);
     return {
       concealed,
@@ -89,10 +89,11 @@ export class MicrosoftReportNamesService {
   async apply(
     actor: AuthedUser,
     integrationId: string,
+    connectionId: string,
     input: MicrosoftReportNamesAction,
     meta: RequestMeta,
   ): Promise<MicrosoftReportNames> {
-    const { ctx, consent } = await this.load(integrationId);
+    const { ctx, consent } = await this.load(integrationId, connectionId);
     const auditBase = {
       actorId: actor.id,
       entityType: 'Integration',
@@ -101,6 +102,7 @@ export class MicrosoftReportNamesService {
       userAgent: meta.userAgent,
     };
     const detail = {
+      connectionId,
       tenantId: consent.tenantId,
       setting: MICROSOFT_REPORT_SETTING.label,
       path: MICROSOFT_REPORT_SETTING.path,
@@ -113,7 +115,7 @@ export class MicrosoftReportNamesService {
     if (input.action === 'keep') {
       // Nothing changes, so the stored choice records what the tenant shows.
       const kept = before === false ? 'shown' : 'hidden';
-      await this.storeChoice(integrationId, consent, kept);
+      await this.storeChoice(integrationId, connectionId, consent, kept);
       await this.audit.log({
         ...auditBase,
         action: AUDIT_ACTIONS.integration.microsoftReportNames,
@@ -179,7 +181,7 @@ export class MicrosoftReportNamesService {
         after: { ...detail, choice, displayConcealedNames: conceal, changed, ...(choiceStored ? {} : { choiceStored: false }) },
       });
     try {
-      await this.storeChoice(integrationId, consent, choice);
+      await this.storeChoice(integrationId, connectionId, consent, choice);
     } catch (e) {
       // The tenant may already have changed: that change is audited even when the choice is not stored.
       await changeAudit(false);
@@ -198,8 +200,8 @@ export class MicrosoftReportNamesService {
     };
   }
 
-  private async load(integrationId: string): Promise<{ ctx: IntegrationContext; consent: StoredAdminConsent }> {
-    const loaded = await this.integrations.loadDriverContext(integrationId);
+  private async load(integrationId: string, connectionId: string): Promise<{ ctx: IntegrationContext; consent: StoredAdminConsent }> {
+    const loaded = await this.integrations.loadDriverContext(integrationId, { connectionId });
     if (loaded.driver !== DRIVER) throw new BadRequestException('This integration is not Microsoft 365.');
     const consent = parseStoredAdminConsent(loaded.secret);
     if (!consent) throw new BadRequestException('Connect with Microsoft first.');
@@ -209,6 +211,7 @@ export class MicrosoftReportNamesService {
         config: loaded.config,
         secret: loaded.secret,
         oauthClient: loaded.oauthClient,
+        connectionId: loaded.connectionId,
         credentialVersion: loaded.credentialVersion,
         integrationId,
         http: {
@@ -232,25 +235,34 @@ export class MicrosoftReportNamesService {
     }
   }
 
-  private async storeChoice(integrationId: string, consent: StoredAdminConsent, reportNames: 'shown' | 'hidden'): Promise<void> {
+  private async storeChoice(
+    integrationId: string,
+    connectionId: string,
+    consent: StoredAdminConsent,
+    reportNames: 'shown' | 'hidden',
+  ): Promise<void> {
     // Merge into the full stored object: the parsed consent drops fields this schema does not know.
     // A reconnect while the Graph calls ran must not be overwritten with the old consent.
-    const row = await this.prisma.integrationSecret.findUnique({ where: { integrationId }, select: { ciphertext: true } });
+    const aad = integrationConnectionSecretAad(integrationId, connectionId);
+    const row = await this.prisma.integrationConnection.findFirst({
+      where: { id: connectionId, integrationId },
+      select: { secretCiphertext: true },
+    });
     let raw: unknown = null;
     try {
-      raw = row ? JSON.parse(this.crypto.decrypt(row.ciphertext, integrationSecretAad(integrationId))) : null;
+      raw = row ? JSON.parse(this.crypto.decrypt(row.secretCiphertext, aad)) : null;
     } catch (e) {
-      this.logger.error({ err: (e as Error).message, integrationId }, 'failed to decrypt integration secret');
+      this.logger.error({ err: (e as Error).message, integrationId, connectionId }, 'failed to decrypt connection secret');
     }
     const current = parseStoredAdminConsent(raw);
-    if (!current || current.tenantId !== consent.tenantId || current.consentedAt !== consent.consentedAt) {
+    if (!row || !current || current.tenantId !== consent.tenantId || current.consentedAt !== consent.consentedAt) {
       throw new ConflictException(CONNECTION_CHANGED);
     }
-    const ciphertext = this.crypto.encrypt(JSON.stringify({ ...(raw as Record<string, unknown>), reportNames }), integrationSecretAad(integrationId));
+    const ciphertext = this.crypto.encrypt(JSON.stringify({ ...(raw as Record<string, unknown>), reportNames }), aad);
     // Compare-and-set on the ciphertext just read: a reconnect landing in between updates no row.
-    const { count } = await this.prisma.integrationSecret.updateMany({
-      where: { integrationId, ciphertext: row!.ciphertext },
-      data: { ciphertext },
+    const { count } = await this.prisma.integrationConnection.updateMany({
+      where: { id: connectionId, integrationId, secretCiphertext: row.secretCiphertext },
+      data: { secretCiphertext: ciphertext },
     });
     if (count !== 1) throw new ConflictException(CONNECTION_CHANGED);
   }

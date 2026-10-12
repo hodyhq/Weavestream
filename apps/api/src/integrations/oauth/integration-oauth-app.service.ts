@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import {
   oauthSecretExpiryWarning,
@@ -12,6 +12,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   IntegrationSecretEncryptionService,
   integrationOAuthAppSecretAad,
+  legacyIntegrationOAuthAppSecretAad,
 } from '../../crypto/integration-secret-encryption.service.js';
 import { AuditLogService } from '../../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../audit/audit-actions.js';
@@ -20,6 +21,7 @@ import { IntegrationDriverRegistry } from '../drivers/integration-driver.registr
 import type { AuthedUser } from '../../common/current-user.decorator.js';
 import type { RequestMeta } from '../../common/request-meta.js';
 import { maskSecretTail } from '../../common/redact-secrets.js';
+import { isUniqueConstraintError } from '../../prisma/prisma-errors.js';
 import type { OAuthClientCredentials } from './oauth-token.js';
 
 /** Path (under `API_URL`) the provider redirects back to after consent. */
@@ -53,11 +55,13 @@ export function withCallbackHostWarning(
 }
 
 /**
- * Instance-wide OAuth apps (one client per provider, e.g. Google), shared
- * by every integration whose driver connects through that provider.
+ * The OAuth app (client) of one OAuth-connected integration, edited on its
+ * App tab. At most one integration exists per provider, so the app is still
+ * "the" Google or Microsoft app of the install, but it is owned by the
+ * integration row (cascade on delete).
  *
  * The client secret is write-only: encrypted under the integrations key
- * with AAD bound to the provider, never returned, never logged. Admins
+ * with AAD bound to the integration, never returned, never logged. Admins
  * see its last four characters (`maskSecretTail`, the same mask as
  * integration credentials) to confirm which secret is saved.
  */
@@ -118,20 +122,30 @@ export class IntegrationOAuthAppService {
     return this.drivers.list().find((d) => d.oauth?.provider === provider && d.setupGuide)?.setupGuide;
   }
 
-  async get(provider: IntegrationOAuthProvider): Promise<IntegrationOAuthApp> {
-    const row = await this.prisma.integrationOAuthApp.findUnique({ where: { provider } });
+  /** The OAuth provider of an integration; 404 / 400 when missing or not OAuth. */
+  async providerOf(integrationId: string): Promise<IntegrationOAuthProvider> {
+    const row = await this.prisma.integration.findUnique({ where: { id: integrationId }, select: { driver: true } });
+    if (!row) throw new NotFoundException(`Integration ${integrationId} not found`);
+    const oauth = this.drivers.has(row.driver) ? this.drivers.describe(row.driver).oauth : undefined;
+    if (!oauth) throw new BadRequestException('This integration does not connect with OAuth.');
+    return oauth.provider;
+  }
+
+  async get(integrationId: string): Promise<IntegrationOAuthApp> {
+    const provider = await this.providerOf(integrationId);
+    const row = await this.prisma.integrationOAuthApp.findUnique({ where: { integrationId } });
     const setupGuide = this.setupGuideFor(provider);
     let secretMask: string | null = null;
     if (row) {
       try {
         secretMask = maskSecretTail(
-          this.crypto.decrypt(row.secretCiphertext, integrationOAuthAppSecretAad(provider)),
+          this.crypto.decrypt(row.secretCiphertext, integrationOAuthAppSecretAad(integrationId)),
         );
       } catch (e) {
         // The row stays "configured"; the missing mask tells the
         // admin to save the secret again.
         this.logger.error(
-          { err: (e as Error).message, provider },
+          { err: (e as Error).message, integrationId },
           'failed to decrypt integration OAuth app secret',
         );
       }
@@ -156,12 +170,13 @@ export class IntegrationOAuthAppService {
 
   async update(
     actor: AuthedUser,
-    provider: IntegrationOAuthProvider,
+    integrationId: string,
     input: UpdateIntegrationOAuthAppInput,
     meta: RequestMeta,
   ): Promise<IntegrationOAuthApp> {
+    const provider = await this.providerOf(integrationId);
     const before = await this.prisma.integrationOAuthApp.findUnique({
-      where: { provider },
+      where: { integrationId },
       select: { clientId: true, secretExpiresAt: true, tenantId: true },
     });
     // Omitted = keep, null = clear. Stored as a DATE (UTC midnight). A new
@@ -179,26 +194,42 @@ export class IntegrationOAuthAppService {
       }
       // Keep the stored secret; only the client ID (and the plain fields) change.
       await this.prisma.integrationOAuthApp.update({
-        where: { provider },
+        where: { integrationId },
         data: { clientId: input.clientId, ...extra, updatedBy: actor.id },
       });
     } else {
       const secretCiphertext = this.crypto.encrypt(
         input.clientSecret,
-        integrationOAuthAppSecretAad(provider),
+        integrationOAuthAppSecretAad(integrationId),
       );
-      await this.prisma.integrationOAuthApp.upsert({
-        where: { provider },
-        create: { provider, clientId: input.clientId, secretCiphertext, ...extra, updatedBy: actor.id },
-        update: { clientId: input.clientId, secretCiphertext, ...extra, updatedBy: actor.id },
-      });
+      if (before) {
+        await this.prisma.integrationOAuthApp.update({
+          where: { integrationId },
+          data: { clientId: input.clientId, secretCiphertext, ...extra, updatedBy: actor.id },
+        });
+      } else {
+        try {
+          await this.prisma.integrationOAuthApp.create({
+            data: { provider, integrationId, clientId: input.clientId, secretCiphertext, ...extra, updatedBy: actor.id },
+          });
+        } catch (e) {
+          // `provider` is unique: a pre-connections app row of this provider
+          // that the boot migration could not attach still holds the slot.
+          if (isUniqueConstraintError(e)) {
+            throw new ConflictException(
+              'An older OAuth app of this provider is still stored for another integration. Delete the other integration of this provider first.',
+            );
+          }
+          throw e;
+        }
+      }
     }
     const day = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
     await this.audit.log({
       actorId: actor.id,
-      action: AUDIT_ACTIONS.settings.integrationOAuthAppUpdate,
-      entityType: 'IntegrationOAuthApp',
-      entityId: provider,
+      action: AUDIT_ACTIONS.integration.oauthAppUpdate,
+      entityType: 'Integration',
+      entityId: integrationId,
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: before
@@ -214,24 +245,25 @@ export class IntegrationOAuthAppService {
           : { secretMask: maskSecretTail(input.clientSecret) }),
       },
     });
-    return this.get(provider);
+    return this.get(integrationId);
   }
 
   /**
-   * Check setup for the instance OAuth app (no customer token): the first
-   * driver of `provider` with a `diagnose()` verifies the client against
+   * Check setup for the integration's app (no customer token): the first
+   * driver of the provider with a `diagnose()` verifies the client against
    * the provider. Audited by outcome and failed step ids only.
    */
-  async check(actor: AuthedUser, provider: IntegrationOAuthProvider, meta: RequestMeta): Promise<IntegrationSetupCheck> {
+  async check(actor: AuthedUser, integrationId: string, meta: RequestMeta): Promise<IntegrationSetupCheck> {
+    const provider = await this.providerOf(integrationId);
     const driver = this.drivers
       .list()
       .filter((d) => d.oauth?.provider === provider && this.drivers.kindOf(d.key) === 'pull')
       .map((d) => this.drivers.get(d.key))
       .find((d) => d.diagnose);
     if (!driver?.diagnose) throw new BadRequestException('This provider has no setup check.');
-    const client = await this.getClient(provider);
+    const client = await this.getClient(integrationId);
     const home = client
-      ? await this.prisma.integrationOAuthApp.findUnique({ where: { provider }, select: { tenantId: true } })
+      ? await this.prisma.integrationOAuthApp.findUnique({ where: { integrationId }, select: { tenantId: true } })
       : null;
     const result: IntegrationSetupCheck = withCallbackHostWarning(this.env.values, client
       ? await driver.diagnose({
@@ -253,9 +285,9 @@ export class IntegrationOAuthAppService {
         });
     await this.audit.log({
       actorId: actor.id,
-      action: AUDIT_ACTIONS.settings.integrationOAuthAppCheck,
-      entityType: 'IntegrationOAuthApp',
-      entityId: provider,
+      action: AUDIT_ACTIONS.integration.oauthAppCheck,
+      entityType: 'Integration',
+      entityId: integrationId,
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
@@ -266,28 +298,53 @@ export class IntegrationOAuthAppService {
 
   /**
    * Decrypted client credentials for runtime use (authorize, token
-   * exchange, refresh). Null when the provider has no app configured.
+   * exchange, refresh). Null when the integration has no app saved.
    */
-  async getClient(provider: IntegrationOAuthProvider): Promise<OAuthClientCredentials | null> {
-    const row = await this.prisma.integrationOAuthApp.findUnique({ where: { provider } });
+  async getClient(integrationId: string): Promise<OAuthClientCredentials | null> {
+    const row = await this.prisma.integrationOAuthApp.findUnique({ where: { integrationId } });
     if (!row) return null;
     try {
       return {
         clientId: row.clientId,
         clientSecret: this.crypto.decrypt(
           row.secretCiphertext,
-          integrationOAuthAppSecretAad(provider),
+          integrationOAuthAppSecretAad(integrationId),
         ),
         version: `${row.id}@${row.updatedAt.toISOString()}`,
+        secretExpiresAt: row.secretExpiresAt ? row.secretExpiresAt.toISOString().slice(0, 10) : null,
       };
     } catch (e) {
       this.logger.error(
-        { err: (e as Error).message, provider },
+        { err: (e as Error).message, integrationId },
         'failed to decrypt integration OAuth app secret',
       );
       throw new ConflictException(
-        'The stored OAuth app secret could not be decrypted. Save it again under Settings.',
+        'The stored OAuth app secret could not be decrypted. Save it again on the App tab.',
       );
     }
+  }
+
+  /**
+   * Attach a pre-connections instance-wide app of `provider` to the given
+   * integration, re-encrypting its secret under the integration-bound AAD.
+   * Idempotent: does nothing when no unowned row exists. Returns whether a
+   * row was adopted. Throws when the stored secret cannot be decrypted.
+   */
+  async adoptLegacyApp(
+    db: Pick<PrismaService, 'integrationOAuthApp'>,
+    provider: string,
+    integrationId: string,
+  ): Promise<boolean> {
+    const legacy = await db.integrationOAuthApp.findFirst({ where: { provider, integrationId: null } });
+    if (!legacy) return false;
+    const plaintext = this.crypto.decrypt(legacy.secretCiphertext, legacyIntegrationOAuthAppSecretAad(provider));
+    const { count } = await db.integrationOAuthApp.updateMany({
+      where: { id: legacy.id, integrationId: null },
+      data: {
+        integrationId,
+        secretCiphertext: this.crypto.encrypt(plaintext, integrationOAuthAppSecretAad(integrationId)),
+      },
+    });
+    return count === 1;
   }
 }

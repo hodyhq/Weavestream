@@ -50,10 +50,11 @@ export const AUDIT_ACTIONS = {
     // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
     // `after` carry `{ apiKeysEnabled }`.
     apiKeysToggle: 'settings.api_keys.toggle',
-    // Instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`).
-    // `after` carries the provider, client id and the secret's last-four mask only.
+    // Pre-connections instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`,
+    // removed). Kept so older audit rows still resolve; new rows use
+    // `integration.oauthAppUpdate`.
     integrationOAuthAppUpdate: 'settings.integration_oauth_app.update',
-    // Check setup on the OAuth app: outcome and failed step ids only.
+    // Pre-connections Check setup on the instance OAuth app (removed route).
     integrationOAuthAppCheck: 'settings.integration_oauth_app.check',
     // Integration priority order (`PUT /settings/integration-priority`).
     // `before` and `after` carry `{ order }` (driver keys only).
@@ -176,6 +177,14 @@ export const AUDIT_ACTIONS = {
     oauthConnect: 'integration.oauth.connect',
     oauthConnectFailed: 'integration.oauth.connect.failed',
     oauthDisconnect: 'integration.oauth.disconnect',
+    // The integration's OAuth app (App tab, `PUT /admin/integrations/:id/oauth-app`).
+    // `after` carries the provider, client id and the secret's last-four mask only.
+    oauthAppUpdate: 'integration.oauth_app.update',
+    // Check setup on the integration's OAuth app: outcome and failed step ids only.
+    oauthAppCheck: 'integration.oauth_app.check',
+    // Boot migration of a pre-connections grant into a connection (system
+    // actor). Carries the connection id, tenant id and provider only.
+    connectionMigrated: 'integration.connection.migrated',
     // Microsoft 365: the admin's explicit choice about the tenant's report
     // concealment setting ("Conceal user, group, and site names in all
     // reports", Graph adminReportSettings.displayConcealedNames). Rows carry

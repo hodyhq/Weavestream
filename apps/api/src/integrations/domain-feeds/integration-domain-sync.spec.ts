@@ -151,7 +151,7 @@ function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViol
     env as never,
     { enqueueDomainCheck } as never,
   );
-  return { svc, rows, audit, enqueueDomainCheck, monitoredDomain };
+  return { svc, rows, audit, enqueueDomainCheck, monitoredDomain, integrations };
 }
 
 beforeEach(() => {
@@ -181,10 +181,12 @@ describe('IntegrationDomainSyncService.syncMapping (Google Workspace)', () => {
       checkWhois: false,
     });
     const manual = row({ id: 'manual', hostname: 'Example.ORG' });
-    const { svc, rows, enqueueDomainCheck } = harness([cloudflare, manual]);
+    const { svc, rows, enqueueDomainCheck, integrations } = harness([cloudflare, manual]);
     mockListWorkspaceDomains.mockResolvedValue([ws('example.com', 'PRIMARY'), ws('example.org', 'ALIAS', 'example.com')]);
 
     await expect(svc.syncMapping(MAPPING, 'u-1')).resolves.toEqual({ created: 0, matched: 2, missing: 0, skipped: 0 });
+    // Only the connection of the mapping's own tenant is loaded.
+    expect(integrations.loadDriverContext).toHaveBeenCalledWith(INT, { externalOrgId: 'C0example1' });
 
     expect(rows).toHaveLength(2);
     // Cloudflare keeps everything it owns; only the workspace columns change.

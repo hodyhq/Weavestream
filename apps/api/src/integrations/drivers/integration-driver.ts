@@ -70,6 +70,11 @@ export interface IntegrationContext {
    */
   readonly oauthClient?: OAuthClientCredentials;
   /**
+   * OAuth drivers: the connection (client tenant) whose grant is in
+   * `secret`. Keys the access-token cache; never a tenant scope.
+   */
+  readonly connectionId?: string;
+  /**
    * Non-secret marker of the stored credential row and instance OAuth app
    * (row ids + updatedAt). Changes on every reconnect or app save, so the
    * OAuth access-token cache keys on it instead of hashing a secret. When

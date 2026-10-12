@@ -1,43 +1,12 @@
-import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { EXCEPTION_FILTERS_METADATA } from '@nestjs/common/constants.js';
 import { OAuthCallbackRedirectFilter } from './oauth-callback-redirect.filter.js';
 import { REQUIRE_PERMISSION_KEY } from '../../rbac/require-permission.decorator.js';
 import { REQUIRE_STEP_UP_KEY } from '../../auth/step-up/require-step-up.decorator.js';
 import { INTERACTIVE_ONLY_KEY } from '../../auth/interactive-only.decorator.js';
-import {
-  IntegrationOAuthAppsController,
-  IntegrationOAuthController,
-} from './integration-oauth.controller.js';
+import { IntegrationOAuthController } from './integration-oauth.controller.js';
 
 const meta = (key: string, target: object) => Reflect.getMetadata(key, target);
-
-describe('IntegrationOAuthAppsController security contract', () => {
-  const proto = IntegrationOAuthAppsController.prototype;
-
-  it('reads with settings.manage', () => {
-    expect(meta(REQUIRE_PERMISSION_KEY, proto.get)).toEqual({
-      action: 'settings.manage',
-      companyIdFrom: undefined,
-    });
-    expect(meta(REQUIRE_STEP_UP_KEY, proto.get)).toBeUndefined();
-  });
-
-  it('writes with settings.manage, step-up, and an interactive session', () => {
-    expect(meta(REQUIRE_PERMISSION_KEY, proto.update)).toEqual({
-      action: 'settings.manage',
-      companyIdFrom: undefined,
-    });
-    expect(meta(REQUIRE_STEP_UP_KEY, proto.update)).toEqual({});
-    expect(meta(INTERACTIVE_ONLY_KEY, proto.update)).toBe(true);
-  });
-
-  it('404s an unknown provider before touching the service', () => {
-    const apps = { get: jest.fn() };
-    const controller = new IntegrationOAuthAppsController(apps as never);
-    expect(() => controller.get('github')).toThrow(NotFoundException);
-    expect(apps.get).not.toHaveBeenCalled();
-  });
-});
 
 describe('IntegrationOAuthController security contract', () => {
   const proto = IntegrationOAuthController.prototype;
@@ -46,7 +15,7 @@ describe('IntegrationOAuthController security contract', () => {
     expect(meta(INTERACTIVE_ONLY_KEY, IntegrationOAuthController)).toBe(true);
   });
 
-  it.each(['callback', 'status', 'start', 'disconnect'] as const)(
+  it.each(['callback', 'getApp', 'updateApp', 'checkApp', 'listConnections', 'start', 'disconnect'] as const)(
     '%s requires integration.manage',
     (handler) => {
       expect(meta(REQUIRE_PERMISSION_KEY, proto[handler])).toEqual({
@@ -56,13 +25,27 @@ describe('IntegrationOAuthController security contract', () => {
     },
   );
 
-  it.each(['start', 'disconnect'] as const)('%s requires step-up', (handler) => {
+  it.each(['updateApp', 'start', 'disconnect'] as const)('%s requires step-up', (handler) => {
     expect(meta(REQUIRE_STEP_UP_KEY, proto[handler])).toEqual({});
+  });
+
+  it.each(['getApp', 'checkApp', 'listConnections'] as const)('%s needs no step-up (read-only)', (handler) => {
+    expect(meta(REQUIRE_STEP_UP_KEY, proto[handler])).toBeUndefined();
+  });
+
+  it('passes the reconnect intent and connection ids through unchanged', async () => {
+    const oauth = { start: jest.fn().mockResolvedValue({ authorizeUrl: 'x' }), disconnect: jest.fn() };
+    const controller = new IntegrationOAuthController(oauth as never, {} as never);
+    const user = { id: 'user-1' } as never;
+    await controller.start(user, 'i-1', { connectionId: 'c-1' });
+    expect(oauth.start).toHaveBeenCalledWith(user, 'i-1', { connectionId: 'c-1' });
+    await controller.disconnect(user, 'i-1', 'c-1', { ip: '127.0.0.1', headers: {} } as never);
+    expect(oauth.disconnect).toHaveBeenCalledWith(user, 'i-1', 'c-1', expect.any(Object));
   });
 
   it('redirects the browser to the landing URL from the service', async () => {
     const callback = jest.fn().mockResolvedValue('https://ws.example.test/admin/integrations/x?oauth=failed');
-    const controller = new IntegrationOAuthController({ callback } as never);
+    const controller = new IntegrationOAuthController({ callback } as never, {} as never);
     const res = { redirect: jest.fn() };
     const user = { id: 'user-1' } as never;
     await controller.callback(

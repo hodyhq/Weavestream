@@ -190,7 +190,7 @@ export function tokenFailure(e: unknown): Failure {
   if (e instanceof DriverAuthError) {
     // invalid_grant / invalid_client, already mapped to fixed text by getOAuthAccessToken.
     return /OAuth app credentials|not configured/.test(e.message)
-      ? { stepId: S.credentials, message: 'Google rejected the OAuth app credentials. Check the client ID and secret under Settings (step 6).' }
+      ? { stepId: S.credentials, message: 'Google rejected the OAuth app credentials. Check the client ID and secret on the App tab (step 6).' }
       : { stepId: S.connect, message: 'The Google connection was revoked or has expired (for example after 6 months unused). Press Reconnect (step 7).' };
   }
   return UNREACHABLE;

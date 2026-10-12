@@ -127,12 +127,14 @@ export class IntegrationDomainSyncService {
     }
     const { companyId, integrationId } = mapping;
 
-    const loaded = await this.integrations.loadDriverContext(integrationId);
+    // Only the connection of this mapping's own tenant.
+    const loaded = await this.integrations.loadDriverContext(integrationId, { externalOrgId: mapping.externalOrgId });
     const domains = await feed.list(
       {
         config: loaded.config,
         secret: loaded.secret,
         oauthClient: loaded.oauthClient,
+        connectionId: loaded.connectionId,
         credentialVersion: loaded.credentialVersion,
         integrationId,
         http: {

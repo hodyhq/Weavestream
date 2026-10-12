@@ -22,9 +22,11 @@ export interface OAuthClientCredentials {
   readonly clientSecret: string;
   /** Non-secret marker of the stored app row (id + updatedAt); changes on every save. */
   readonly version?: string;
+  /** Client secret expiry (YYYY-MM-DD) as entered by the operator, when known. */
+  readonly secretExpiresAt?: string | null;
 }
 
-/** Decrypted shape of an OAuth integration's `IntegrationSecret`. */
+/** Decrypted shape of an authorization-code connection's secret (Google). */
 export interface StoredOAuthSecret {
   refreshToken: string;
   grantedScopes: string[];
@@ -48,8 +50,7 @@ export function parseStoredOAuthSecret(secret: unknown): StoredOAuthSecret | nul
 export const TENANT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Decrypted shape of an admin-consent integration's `IntegrationSecret`
- * (Microsoft). No user or refresh token: only the verified tenant, what was
+ * Decrypted shape of an admin-consent connection's secret (Microsoft). No user or refresh token: only the verified tenant, what was
  * granted, and the admin's report-names choice.
  */
 export interface StoredAdminConsent {
@@ -247,9 +248,9 @@ export function appTokenClaims(accessToken: string): { tid: string | null; appId
 export function adminConsentTokenMessage(e: OAuthTokenError): { reconnect: boolean; message: string } {
   switch (e.aadsts) {
     case 7000215:
-      return { reconnect: false, message: 'Microsoft rejected the client secret of the Microsoft app (AADSTS7000215). Save the current secret under Settings > Integrations.' };
+      return { reconnect: false, message: 'Microsoft rejected the client secret of the Microsoft app (AADSTS7000215). Save the current secret on the integration\'s App tab.' };
     case 7000222:
-      return { reconnect: false, message: 'The client secret of the Microsoft app has expired (AADSTS7000222). Create a new secret in Entra and save it under Settings > Integrations.' };
+      return { reconnect: false, message: 'The client secret of the Microsoft app has expired (AADSTS7000222). Create a new secret in Entra and save it on the integration\'s App tab.' };
     case 700016:
     case 65001:
     case 500011:
@@ -260,7 +261,7 @@ export function adminConsentTokenMessage(e: OAuthTokenError): { reconnect: boole
       return { reconnect: true, message: 'Microsoft cannot find the connected tenant (AADSTS90002). It may have been deleted. Press Reconnect.' };
     default:
       if (e.code === 'invalid_client' || e.code === 'unauthorized_client') {
-        return { reconnect: false, message: 'Microsoft rejected the app credentials. Check the Microsoft app under Settings > Integrations.' };
+        return { reconnect: false, message: 'Microsoft rejected the app credentials. Check the Microsoft app on the integration\'s App tab.' };
       }
       return { reconnect: false, message: `Microsoft refused the token request (HTTP ${e.status}). Try again later.` };
   }
@@ -333,21 +334,18 @@ function requireOAuthMaterial(ctx: IntegrationContext): {
 } {
   if (!ctx.oauthClient) {
     throw new DriverAuthError(
-      'The OAuth app for this provider is not configured. An administrator can set it up under Settings.',
+      'The OAuth app for this integration is not configured. An administrator can set it up on its App tab.',
     );
   }
   const stored = parseStoredOAuthSecret(ctx.secret);
   if (!stored) {
-    throw new DriverAuthError('This integration is not connected. Connect it from its Credentials tab.');
+    throw new DriverAuthError('This client tenant is not connected. Reconnect it on the Connections tab.');
   }
   // Keyed by non-secret row markers, never by a hash of the token or client secret.
   return {
     client: ctx.oauthClient,
     stored,
-    cache:
-      ctx.integrationId && ctx.credentialVersion
-        ? { key: `id:${ctx.integrationId}`, version: ctx.credentialVersion }
-        : null,
+    cache: cacheOf(ctx),
   };
 }
 
@@ -400,7 +398,7 @@ export async function getOAuthAccessToken(
     }
     if (e instanceof OAuthTokenError && (e.code === 'invalid_client' || e.code === 'unauthorized_client')) {
       throw new DriverAuthError(
-        'The provider rejected the OAuth app credentials. Check the OAuth app under Settings.',
+        'The provider rejected the OAuth app credentials. Check the OAuth app on the App tab.',
       );
     }
     throw e;
@@ -417,22 +415,29 @@ export async function getOAuthAccessToken(
   return tokens.access_token;
 }
 
+/**
+ * One cache slot per connection (client tenant), so two tenants of one
+ * integration never share or evict each other's token. Without a connection
+ * id (non-connection drivers) the slot is the integration.
+ */
 function cacheOf(ctx: IntegrationContext): { key: string; version: string } | null {
-  return ctx.integrationId && ctx.credentialVersion ? { key: `id:${ctx.integrationId}`, version: ctx.credentialVersion } : null;
+  if (!ctx.integrationId || !ctx.credentialVersion) return null;
+  const key = ctx.connectionId ? `conn:${ctx.integrationId}:${ctx.connectionId}` : `id:${ctx.integrationId}`;
+  return { key, version: ctx.credentialVersion };
 }
 
 /** The verified tenant of an admin-consent integration (DriverAuthError when not connected). */
 export function requireAdminConsent(ctx: IntegrationContext): StoredAdminConsent {
   const stored = parseStoredAdminConsent(ctx.secret);
   if (!stored) {
-    throw new DriverAuthError('This integration is not connected. Connect it from its Credentials tab.');
+    throw new DriverAuthError('This client tenant is not connected. Reconnect it on the Connections tab.');
   }
   return stored;
 }
 
 /**
  * Admin consent: an app-only token for the stored tenant, minted with
- * client credentials (no refresh token exists). Cached per integration and
+ * client credentials (no refresh token exists). Cached per connection and
  * credential version, so a reconnect or a new app secret misses the cache.
  */
 async function getAdminConsentAccessToken(
@@ -442,7 +447,7 @@ async function getAdminConsentAccessToken(
 ): Promise<string> {
   if (!ctx.oauthClient) {
     throw new DriverAuthError(
-      'The OAuth app for this provider is not configured. An administrator can set it up under Settings.',
+      'The OAuth app for this integration is not configured. An administrator can set it up on its App tab.',
     );
   }
   const stored = requireAdminConsent(ctx);

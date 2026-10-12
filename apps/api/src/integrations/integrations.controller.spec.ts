@@ -50,7 +50,7 @@ describe('IntegrationsController security contract', () => {
       { externalId: 'org-unmapped', name: 'Unmapped' },
     ];
     const controller = new IntegrationsController(
-      { loadDriverContext: jest.fn().mockResolvedValue({ driver: 'breeze', config: {}, secret: {} }) } as never,
+      { listConnectedOrgs: jest.fn().mockResolvedValue(null), loadDriverContext: jest.fn().mockResolvedValue({ driver: 'breeze', config: {}, secret: {} }) } as never,
       {} as never,
       {} as never,
       { get: jest.fn().mockReturnValue({ listSourceOrgs: jest.fn().mockResolvedValue(orgs) }) } as never,
@@ -61,6 +61,17 @@ describe('IntegrationsController security contract', () => {
     );
 
     await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs });
+  });
+
+  it('lists OAuth organizations from connections without calling the provider', async () => {
+    const connected = [{ externalId: 'C-a', name: 'tenant-a.example', hint: null }];
+    const loadDriverContext = jest.fn();
+    const controller = new IntegrationsController(
+      { listConnectedOrgs: jest.fn().mockResolvedValue(connected), loadDriverContext } as never,
+      {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+    );
+    await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs: connected });
+    expect(loadDriverContext).not.toHaveBeenCalled();
   });
 
   function checkSetupController(env: { API_URL: string; APP_URL: string }) {

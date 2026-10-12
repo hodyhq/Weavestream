@@ -141,9 +141,9 @@ describe('getOAuthAccessToken', () => {
     expect((err as Error).message).not.toMatch(/revoked\./);
   });
 
-  it('maps invalid_client to DriverAuthError pointing at Settings', async () => {
+  it('maps invalid_client to DriverAuthError pointing at the App tab', async () => {
     script([{ status: 401, body: { error: 'invalid_client' } }]);
-    await expect(getOAuthAccessToken(ctx(), OAUTH)).rejects.toThrow(/Settings/);
+    await expect(getOAuthAccessToken(ctx(), OAUTH)).rejects.toThrow(/App tab/);
   });
 
   it('surfaces other token failures as OAuthTokenError without provider text', async () => {
