@@ -79,24 +79,13 @@ These defaults are used when the generator is opened without user-specific prefe
 
 ## Integration OAuth Apps
 
-**Admin > Settings > Integrations** holds the OAuth app (client) that OAuth-based integrations connect through. You create the client once per Weavestream install in the provider's console (for example the Google Cloud console), then every integration of that provider uses it. Each customer connection is then one click: **Connect with Google** (or **Connect with Microsoft**, approved by a customer Global Administrator) on the integration's **Credentials & schedule** tab.
+The Google and Microsoft OAuth apps are no longer under **Admin > Settings > Integrations**. Each lives on the **App** tab of its integration (one Google Workspace and one Microsoft 365 integration per install), and each customer tenant is a row on that integration's **Connections** tab. See [Google Workspace](/integrations/google-workspace/) and [Microsoft 365](/integrations/microsoft-365/). An app saved here before this change moves to its integration automatically when the API starts, and existing connections keep working without a reconnect.
 
-The card shows:
+**Admin > Settings > Integrations** keeps the integration priority order.
 
-| Item | What to do with it |
-|---|---|
-| Authorized redirect URI | Register it on the OAuth client exactly as shown. It is built from `API_URL` (`<API_URL>/v1/admin/integrations/oauth/callback`), so `API_URL` must be the public URL browsers use. |
-| Scopes | Add them to the consent screen. The list is the union of what the available integrations of that provider request. |
-| Client ID / Client secret | Paste them from the provider and save. |
-| Secret expires, Directory (tenant) ID (Microsoft app only) | The client secret's expiry date (Weavestream warns from 30 days before, on the card and on every Microsoft 365 integration) and, optionally, your own tenant ID so **Check setup** can verify the secret. |
+`API_URL` and `APP_URL` must share a host (for example `APP_URL=https://ws.example.com` and `API_URL=https://ws.example.com/api`). Session cookies are host-only, so on a different API host the browser arrives at the callback signed out and the connect fails. When the hosts differ, the App tab and **Check setup** show "API_URL and APP_URL must share a host for Connect with Google or Microsoft to keep you signed in."
 
-`API_URL` and `APP_URL` must share a host (for example `APP_URL=https://ws.example.com` and `API_URL=https://ws.example.com/api`). Session cookies are host-only, so on a different API host the browser arrives at the callback signed out and the connect fails. When the hosts differ, the card and **Check setup** show "API_URL and APP_URL must share a host for Connect with Google or Microsoft to keep you signed in."
-
-The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again. The card shows its last four characters so you can tell which secret is saved. To change only the client ID, leave the secret blank and the saved secret is kept (enter the new client's secret too if it differs). Saving needs the **Settings** permission and a fresh step-up confirmation, and is recorded in the audit log as `settings.integration_oauth_app.update`.
-
-Below the form, the card shows the provider's step-by-step **setup guide** (for Google, see [Google Workspace](/integrations/google-workspace/); for Microsoft, see [Microsoft 365](/integrations/microsoft-365/)) with copy buttons and links. **Check setup** verifies the saved client against the provider without any customer data and turns passed steps green; a failed step shows a fixed message saying what to fix. It is recorded as `settings.integration_oauth_app.check` (outcome and step ids only). The same guide, with a check that probes each provider API, is on every connected integration (recorded as `integration.setup_check`).
-
-Connecting, reconnecting and disconnecting an integration are recorded as `integration.oauth.connect`, `integration.oauth.connect.failed` (with a reason category, never the provider's error text) and `integration.oauth.disconnect`.
+The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again; only its last four characters are shown. Saving the app needs the integration management permission and a fresh step-up confirmation, and is recorded as `integration.oauth_app.update`; its Check setup as `integration.oauth_app.check` (outcome and step ids only). Connecting, reconnecting and disconnecting a client tenant are recorded as `integration.oauth.connect`, `integration.oauth.connect.failed` (with a reason category, never the provider's error text) and `integration.oauth.disconnect`, each with the connection id. A grant moved into a connection on upgrade is recorded as `integration.connection.migrated`.
 
 ## What Settings Don't Change
 

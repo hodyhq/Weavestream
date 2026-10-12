@@ -4,8 +4,6 @@ import type {
   AlertConfig,
   ArticleEditorMode,
   EmailSettings,
-  IntegrationOAuthApp,
-  IntegrationOAuthProvider,
   IntegrationPriorityDto,
   PasswordGeneratorDefaults,
 } from '@weavestream/shared';
@@ -106,19 +104,6 @@ export const getAiSettings = cache(async (): Promise<AiSettings> => {
   if (!res.ok || !res.data) return DEFAULT_AI_SETTINGS;
   return res.data;
 });
-
-/**
- * `/settings/integration-oauth-apps/:provider`. Null on failure so the
- * settings page still renders; the card shows a load error instead.
- */
-export const getIntegrationOAuthApp = cache(
-  async (provider: IntegrationOAuthProvider): Promise<IntegrationOAuthApp | null> => {
-    const res = await serverApiFetch<IntegrationOAuthApp>(
-      `/settings/integration-oauth-apps/${provider}`,
-    );
-    return res.ok && res.data ? res.data : null;
-  },
-);
 
 /** Integration priority order; null when the API refused (the card then hides). */
 export const getIntegrationPriority = cache(async (): Promise<IntegrationPriorityDto | null> => {

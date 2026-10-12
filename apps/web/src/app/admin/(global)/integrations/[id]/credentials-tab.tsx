@@ -25,7 +25,6 @@ import {
 } from '../../../../../components/integrations/sync-schedule';
 import { DriverFieldsEditor } from '../driver-fields-editor';
 import { safeIntegrationProblemMessage } from '../integration-feedback';
-import { OAuthConnection } from './oauth-connection';
 import { ApiKeySetupGuide } from './api-key-setup-guide';
 
 const STATUSES: Array<{ value: IntegrationStatusValue; label: string }> = [
@@ -95,7 +94,7 @@ export function CredentialsTab({
     enabledMappingCount === 0;
   const syncBlockedReason: string | null = !integration.hasSecret
     ? driver?.oauth
-      ? 'Connect the integration below before running a sync.'
+      ? 'Connect a client tenant on the Connections tab before running a sync.'
       : 'Add credentials below before running a sync.'
     : !hasSyncableResource
       ? 'No resource is fully configured — open a resource tab to pick a layout and field mappings.'
@@ -271,8 +270,6 @@ export function CredentialsTab({
           onChange={setConfig}
         />
       )}
-
-      {driver?.oauth && <OAuthConnection integrationId={integration.id} oauth={driver.oauth} setupGuide={driver.setupGuide} />}
 
       {driver && !driver.oauth && driver.setupGuide && driver.setupGuide.length > 0 && (
         <ApiKeySetupGuide integrationId={integration.id} steps={driver.setupGuide} hasSecret={integration.hasSecret} />

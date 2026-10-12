@@ -2,17 +2,18 @@
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { IntegrationOAuthApp } from '@weavestream/shared';
-import { ToastProvider } from '../../../../components/ui';
-import { IntegrationOAuthAppCard } from './integration-oauth-app-card';
+import { ToastProvider } from '../../../../../components/ui';
+import { IntegrationOAuthAppCard, OAuthAppTab } from './oauth-app-tab';
 
 const apiFetch = jest.fn();
 const copyToClipboard = jest.fn();
 
-jest.mock('../../../../lib/api', () => ({ apiFetch: (...a: unknown[]) => apiFetch(...a) }));
+jest.mock('../../../../../lib/api', () => ({ apiFetch: (...a: unknown[]) => apiFetch(...a) }));
 jest.mock('@weavestream/shared/browser', () => ({
   copyToClipboard: (...a: unknown[]) => copyToClipboard(...a),
 }));
 
+const ID = '00000000-0000-4000-8000-0000000000a1';
 const REDIRECT = 'https://ws.example.test/api/v1/admin/integrations/oauth/callback';
 
 function app(over: Partial<IntegrationOAuthApp> = {}): IntegrationOAuthApp {
@@ -39,7 +40,7 @@ function app(over: Partial<IntegrationOAuthApp> = {}): IntegrationOAuthApp {
 function renderCard(initial: IntegrationOAuthApp | null, provider: IntegrationOAuthApp['provider'] = 'google') {
   render(
     <ToastProvider>
-      <IntegrationOAuthAppCard initial={initial} provider={provider} />
+      <IntegrationOAuthAppCard integrationId={ID} initial={initial} provider={provider} />
     </ToastProvider>,
   );
 }
@@ -82,7 +83,7 @@ describe('IntegrationOAuthAppCard (Microsoft app)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save Microsoft app' }));
     });
-    expect(apiFetch).toHaveBeenCalledWith('/settings/integration-oauth-apps/microsoft', {
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/${ID}/oauth-app`, {
       method: 'PUT',
       body: JSON.stringify({
         clientId: 'client-1',
@@ -149,7 +150,7 @@ describe('IntegrationOAuthAppCard', () => {
     await act(async () => {
       fireEvent.click(save);
     });
-    expect(apiFetch).toHaveBeenCalledWith('/settings/integration-oauth-apps/google', {
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/${ID}/oauth-app`, {
       method: 'PUT',
       body: JSON.stringify({ clientId: 'client-1', clientSecret: 'typed-secret' }),
     });
@@ -171,7 +172,7 @@ describe('IntegrationOAuthAppCard', () => {
     await act(async () => {
       fireEvent.click(save);
     });
-    expect(apiFetch).toHaveBeenCalledWith('/settings/integration-oauth-apps/google', {
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/${ID}/oauth-app`, {
       method: 'PUT',
       body: JSON.stringify({ clientId: 'client-2' }),
     });
@@ -191,7 +192,7 @@ describe('IntegrationOAuthAppCard', () => {
 
   it('explains when scopes are not known yet, and when loading failed', () => {
     renderCard(app({ scopes: [], scopeGroups: [] }));
-    expect(screen.getByText(/Scopes appear here/)).toBeInTheDocument();
+    expect(screen.getByText(/requests no scopes/)).toBeInTheDocument();
   });
 
   it('shows a load error without the form', () => {
@@ -215,7 +216,7 @@ describe('IntegrationOAuthAppCard', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Check setup/ }));
     });
-    expect(apiFetch).toHaveBeenCalledWith('/settings/integration-oauth-apps/google/check', { method: 'POST', body: '{}' });
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/${ID}/oauth-app/check`, { method: 'POST', body: '{}' });
     expect(screen.getByText('Copy both again.')).toBeInTheDocument();
     const states = screen.getAllByRole('listitem').filter((li) => li.hasAttribute('data-state')).map((li) => li.getAttribute('data-state'));
     expect(states).toEqual(['passed', 'failed']);
@@ -236,5 +237,28 @@ describe('IntegrationOAuthAppCard', () => {
   it('shows no host warning on a same-host install', () => {
     renderCard(app());
     expect(screen.queryByText(/must share a host/)).not.toBeInTheDocument();
+  });
+});
+
+describe('OAuthAppTab', () => {
+  it('loads the app of this integration, then shows it', async () => {
+    apiFetch.mockResolvedValueOnce({ ok: true, status: 200, data: app({ configured: true, clientId: 'client-1', secretMask: '••••1234' }) });
+    render(
+      <ToastProvider>
+        <OAuthAppTab integrationId={ID} provider="google" />
+      </ToastProvider>,
+    );
+    expect(await screen.findByDisplayValue('client-1')).toBeInTheDocument();
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/${ID}/oauth-app`);
+  });
+
+  it('shows the load failure instead of loading forever when the request throws', async () => {
+    apiFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(
+      <ToastProvider>
+        <OAuthAppTab integrationId={ID} provider="google" />
+      </ToastProvider>,
+    );
+    expect(await screen.findByText(/Could not load the .* settings/)).toBeInTheDocument();
   });
 });

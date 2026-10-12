@@ -3,7 +3,6 @@ import { requireMe } from '../../../../lib/server-api/auth';
 import {
   getAiSettings,
   getEmailSettings,
-  getIntegrationOAuthApp,
   getIntegrationPriority,
   getSettings,
 } from '../../../../lib/server-api/settings';
@@ -27,12 +26,10 @@ export default async function SettingsPage({
   const me = await requireMe();
   if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
-  const [settings, emailSettings, aiSettings, googleOAuthApp, microsoftOAuthApp, integrationPriority] = await Promise.all([
+  const [settings, emailSettings, aiSettings, integrationPriority] = await Promise.all([
     getSettings(),
     getEmailSettings(),
     getAiSettings(),
-    getIntegrationOAuthApp('google'),
-    getIntegrationOAuthApp('microsoft'),
     getIntegrationPriority(),
   ]);
 
@@ -44,7 +41,7 @@ export default async function SettingsPage({
           { label: 'Settings' },
         ]}
         title="Workspace settings"
-        description="Manage workspace defaults, security options, SMTP email delivery, and integration OAuth apps."
+        description="Manage workspace defaults, security options, SMTP email delivery, and integration priority."
       />
       <PageBody>
         <Panel noPad>
@@ -53,8 +50,6 @@ export default async function SettingsPage({
             settings={settings}
             emailSettings={emailSettings}
             aiSettings={aiSettings}
-            googleOAuthApp={googleOAuthApp}
-            microsoftOAuthApp={microsoftOAuthApp}
             integrationPriority={integrationPriority}
             currentUserEmail={me.email}
           />

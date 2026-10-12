@@ -8,13 +8,13 @@ import { MANUAL_INTRO, REPORT_NAMES_QUESTION, ReportNamesChoice, SHOW_EXPLANATIO
 const apiFetch = jest.fn();
 jest.mock('../../../../../lib/api', () => ({ apiFetch: (...a: unknown[]) => apiFetch(...a) }));
 
-const URL_ = '/admin/integrations/int-1/microsoft/report-names';
+const URL_ = '/admin/integrations/int-1/connections/conn-1/microsoft/report-names';
 
 async function renderIt(choice: 'shown' | 'hidden' | null = null) {
   await act(async () => {
     render(
       <ToastProvider>
-        <ReportNamesChoice integrationId="int-1" choice={choice} />
+        <ReportNamesChoice integrationId="int-1" connectionId="conn-1" choice={choice} />
       </ToastProvider>,
     );
   });

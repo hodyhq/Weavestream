@@ -20,6 +20,12 @@ import { INTUNE_UNREADABLE_NOTE, OPTIONAL_WRITE_NOTE, diagnoseMicrosoftClient, d
 /** Graph's answer for a tenant without an Intune licence (learn.microsoft.com/en-us/answers/questions/1063413). */
 const NOT_LICENSED = { status: 400, body: { error: { code: 'BadRequest', message: 'Request not applicable to target tenant.' } } };
 
+/** Graph's answer on managedDevices for an unlicensed tenant that granted the Intune permission (seen live). */
+const UNLICENSED_401 = { status: 401, body: { error: { code: 'UnknownError', message: '' } } };
+/** A genuine token problem: must never be read as "unlicensed". */
+const TOKEN_401 = { status: 401, body: { error: { code: 'InvalidAuthenticationToken', message: 'Access token has expired.' } } };
+const WITHOUT_INTUNE = (roles: readonly string[]) => roles.filter((p) => p !== 'DeviceManagementManagedDevices.Read.All');
+
 const G = 'https://graph.microsoft.com/v1.0';
 const TENANT = '11111111-2222-4333-8444-555555555555';
 const OTHER_TENANT = '99999999-2222-4333-8444-555555555555';
@@ -420,6 +426,29 @@ describe('Microsoft365Driver devices', () => {
     await expect(driver.fetchRecords(fetchCtx(makeCtx(), 'computers'), null)).rejects.not.toBeInstanceOf(DriverResourceUnavailableError);
   });
 
+  it('skips the resource as unlicensed on a 401 UnknownError while the Intune permission is granted', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: UNLICENSED_401 }));
+    const fetched = driver.fetchRecords(fetchCtx(makeCtx(), 'computers'), null);
+    await expect(fetched).rejects.toBeInstanceOf(DriverResourceUnavailableError);
+    await expect(fetched).rejects.toThrow('Intune is not licensed in this tenant, so computers and mobile devices are skipped.');
+  });
+
+  it('fails the run on any other 401 while the Intune permission is granted', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: TOKEN_401 }));
+    const fetched = driver.fetchRecords(fetchCtx(makeCtx(), 'computers'), null);
+    await expect(fetched).rejects.toBeInstanceOf(DriverAuthError);
+    await expect(fetched).rejects.not.toBeInstanceOf(DriverResourceUnavailableError);
+  });
+
+  it('names the missing permission on a 401 when the Intune permission is not granted', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: UNLICENSED_401 }));
+    const base = makeCtx();
+    const ctx = { ...base, secret: { ...(base.secret as object), grantedRoles: WITHOUT_INTUNE(MICROSOFT_PERMISSIONS) } };
+    const fetched = driver.fetchRecords(fetchCtx(ctx, 'computers'), null);
+    await expect(fetched).rejects.toBeInstanceOf(DriverResourceUnavailableError);
+    await expect(fetched).rejects.toThrow(/DeviceManagementManagedDevices\.Read\.All is not granted in this tenant/);
+  });
+
   it('names the missing permission when the Intune permission is not granted', async () => {
     installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: { status: 403, body: { error: { code: 'Forbidden' } } } }));
     const base = makeCtx();
@@ -638,6 +667,30 @@ describe('Check setup', () => {
     expect(notes).toContain(INTUNE_UNREADABLE_NOTE);
     expect(notes).not.toMatch(/Intune is not licensed/);
     expect(notes).toContain('"Conceal user, group, and site names in all reports" is on');
+  });
+
+  it('notes the Intune licence on a 401 UnknownError while the Intune permission is granted', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: UNLICENSED_401 }));
+    const notes = ((await diagnoseMicrosoftConnection(makeCtx())).notes ?? []).map((n) => n.message);
+    expect(notes).toContain('Intune is not licensed in this tenant, so computers and mobile devices are skipped.');
+    expect(notes).not.toContain(INTUNE_UNREADABLE_NOTE);
+  });
+
+  it('does not call any other 401 unlicensed in Check setup', async () => {
+    installFetchTable(baseTable({ [`${G}/deviceManagement/managedDevices`]: TOKEN_401 }));
+    const notes = ((await diagnoseMicrosoftConnection(makeCtx())).notes ?? []).map((n) => n.message);
+    expect(notes).toContain(INTUNE_UNREADABLE_NOTE);
+    expect(notes.join(' | ')).not.toMatch(/Intune is not licensed/);
+  });
+
+  it('names the missing Intune permission on a 401 in Check setup', async () => {
+    installFetchTable(baseTable({
+      [TOKEN_URL]: { body: { access_token: jwt({ tid: TENANT, roles: WITHOUT_INTUNE(MICROSOFT_PERMISSIONS) }), expires_in: 3600 } },
+      [`${G}/deviceManagement/managedDevices`]: UNLICENSED_401,
+    }));
+    const notes = ((await diagnoseMicrosoftConnection(makeCtx())).notes ?? []).map((n) => n.message).join(' | ');
+    expect(notes).toMatch(/DeviceManagementManagedDevices\.Read\.All is not granted in this tenant/);
+    expect(notes).not.toMatch(/Intune is not licensed/);
   });
 
   it('notes the Intune licence only on Graph\'s "not applicable to target tenant" answer', async () => {

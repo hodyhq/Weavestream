@@ -155,7 +155,13 @@ function setup(options: {
     // Tagged-template call (strings array) = the scope watermark lock
     // probe; Prisma.sql-object call = the guarded stale transition,
     // which reports survivors via RETURNING.
+    // Like real Prisma: a void-returning statement (an advisory lock) cannot go
+    // through $queryRaw, which fails to deserialize the void column.
+    $executeRaw: jest.fn().mockResolvedValue(1),
     $queryRaw: jest.fn(async (query: readonly string[] | { values?: unknown[] }) => {
+      if (Array.isArray(query) && String(query[0]).includes('pg_advisory_xact_lock')) {
+        throw new Error("Failed to deserialize column of type 'void'.");
+      }
       if (Array.isArray(query)) return [{ id: 'watermark-row' }];
       if (!options.binding || typeof options.binding !== 'object') return [];
       const values = (query as { values?: unknown[] }).values;
@@ -1214,7 +1220,10 @@ describe('AssetsService integration system writes', () => {
         await expect(service.writeFromIntegration({
           ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
         })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
-        const lock = tx.$queryRaw.mock.calls.find((call) => Array.isArray(call[0]) && String(call[0][0]).includes('pg_advisory_xact_lock'));
+        const isLock = (call: unknown[]) => Array.isArray(call[0]) && String(call[0][0]).includes('pg_advisory_xact_lock');
+        // The lock returns void, which only $executeRaw accepts through Prisma.
+        expect(tx.$queryRaw.mock.calls.some(isLock)).toBe(false);
+        const lock = tx.$executeRaw.mock.calls.find(isLock);
         expect(lock).toBeDefined();
         expect(lock!.slice(1)).toEqual([`cobind:${ids.integration}:${ids.manual}`]);
         expect(tx.integrationSyncRecord.findFirst).toHaveBeenCalled();
@@ -1226,7 +1235,8 @@ describe('AssetsService integration system writes', () => {
           ...input, ...coBind, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
         })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
         expect(tx.asset.updateMany).not.toHaveBeenCalled();
-        const locked = tx.$queryRaw.mock.calls.some((call) => Array.isArray(call[0]) && String(call[0][0]).includes('pg_advisory_xact_lock'));
+        const locked = [...tx.$queryRaw.mock.calls, ...tx.$executeRaw.mock.calls]
+          .some((call) => Array.isArray(call[0]) && String(call[0][0]).includes('pg_advisory_xact_lock'));
         expect(locked).toBe(false);
       });
 

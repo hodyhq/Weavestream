@@ -4,10 +4,8 @@ import { IntegrationsCoreModule } from './integrations-core.module.js';
 import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registrar.js';
 import { CloudflareListsController } from './cloudflare/cloudflare-lists.controller.js';
 import { TicketsGlobalController } from './tickets-global.controller.js';
-import {
-  IntegrationOAuthAppsController,
-  IntegrationOAuthController,
-} from './oauth/integration-oauth.controller.js';
+import { IntegrationOAuthController } from './oauth/integration-oauth.controller.js';
+import { IntegrationConnectionsMigrationService } from './oauth/integration-connections-migration.service.js';
 import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
 import { MicrosoftReportNamesController } from './microsoft-365/microsoft-report-names.controller.js';
 import { MicrosoftReportNamesService } from './microsoft-365/microsoft-report-names.service.js';
@@ -39,7 +37,6 @@ import { IntegrationPriorityService } from './integration-priority.service.js';
     IntegrationsController,
     CloudflareListsController,
     TicketsGlobalController,
-    IntegrationOAuthAppsController,
     IntegrationOAuthController,
     MicrosoftReportNamesController,
     IntegrationMatchFieldController,
@@ -49,6 +46,7 @@ import { IntegrationPriorityService } from './integration-priority.service.js';
   ],
   providers: [
     IntegrationSyncQueueRegistrar,
+    IntegrationConnectionsMigrationService,
     IntegrationOAuthService,
     MicrosoftReportNamesService,
     IntegrationMatchFieldService,

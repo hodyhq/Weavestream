@@ -5,8 +5,10 @@ import type { Lookup } from './section-rows.js';
  * Per-run lookup cache shared by the drivers that page several resources
  * off the same tenant lookups (licences, usage reports, ...).
  *
- * ponytail: single process, per run. Keyed by integration + snapshot so
- * every page of one run shares one fetch; entries expire after the TTL.
+ * ponytail: single process, per run. Keyed by integration + connection +
+ * snapshot so every page of one run shares one fetch; entries expire after
+ * the TTL. The connection is part of the key because one OAuth integration
+ * serves several client tenants: two tenants never share a lookup.
  */
 const RUN_CACHE_TTL_MS = 15 * 60_000;
 const runCache = new Map<string, { expiresAt: number; value: Promise<unknown> }>();
@@ -22,7 +24,7 @@ export function __runCacheSizeForTests(): number {
 }
 
 function prefixOf(ctx: IntegrationContext, snapshotAt: string): string {
-  return `${ctx.integrationId ?? ctx.correlationId}\0${snapshotAt}\0`;
+  return `${ctx.integrationId ?? ctx.correlationId}\0${ctx.connectionId ?? ''}\0${snapshotAt}\0`;
 }
 
 /** Drops every cached lookup of one run (called when a resource finishes). */

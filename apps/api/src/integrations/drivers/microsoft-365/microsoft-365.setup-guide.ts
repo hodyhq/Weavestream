@@ -60,7 +60,7 @@ export const MICROSOFT_365_SETUP_GUIDE: SetupGuideStep[] = [
     id: S.credentials,
     title: 'Paste the app into Weavestream',
     body: [
-      'In Weavestream, go to **Admin > Settings > Integrations** and fill in the **Microsoft app** card: the **Application (client) ID**, the secret **Value**, the secret expiry date and, to let Check setup verify the secret fully, your **Directory (tenant) ID**. Press **Save Microsoft app**.',
+      'In Weavestream, go to **Admin > Integrations** and open the **Microsoft 365** integration (add it once with **New integration** if it is not there yet; one per Weavestream install). On its **App** tab, fill in the **Application (client) ID**, the secret **Value**, the secret expiry date and, to let Check setup verify the secret fully, your **Directory (tenant) ID**. Press **Save Microsoft app**.',
       'Then press **Check setup**. Steps that pass turn green. If a step turns red, follow its message.',
     ].join('\n\n'),
   },
@@ -68,7 +68,7 @@ export const MICROSOFT_365_SETUP_GUIDE: SetupGuideStep[] = [
     id: S.connect,
     title: 'Connect a customer (admin consent)',
     body: [
-      'Do this once per customer. Go to **Integrations > New integration > Microsoft 365**, then press **Connect with Microsoft** on the **Credentials & schedule** tab.',
+      'Do this once per customer. Open the **Microsoft 365** integration, go to its **Connections** tab and press **Connect a client**. Each customer tenant becomes one connection of the same integration.',
       'Sign in as that customer\'s **Global Administrator** or **Privileged Role Administrator**. A Cloud Application Administrator or Application Administrator cannot grant Microsoft Graph application permissions.',
       'Microsoft lists every permission. The app shows as **unverified**; that is expected for a self-hosted app and does not stop an admin from approving. Press **Accept**.',
       'Weavestream then checks the token Microsoft issues for that tenant and shows **Connected to** the tenant name. No password or user token is stored.',

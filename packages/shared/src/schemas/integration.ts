@@ -424,11 +424,11 @@ export function oauthSecretExpiryWarning(expiresAt: string | null | undefined, n
   const today = Date.parse(`${new Date(nowMs).toISOString().slice(0, 10)}T00:00:00.000Z`);
   const days = Math.round((end - today) / 86_400_000);
   if (days < 0) {
-    return `The client secret expired on ${day}. Create a new secret and save it under Settings > Integrations, or connections stop working.`;
+    return `The client secret expired on ${day}. Create a new secret and save it on the integration's App tab, or connections stop working.`;
   }
   if (days > OAUTH_SECRET_EXPIRY_WARNING_DAYS) return null;
   const when = days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`;
-  return `The client secret expires on ${day} (${when}). Create a new secret and save it under Settings > Integrations before then.`;
+  return `The client secret expires on ${day} (${when}). Create a new secret and save it on the integration's App tab before then.`;
 }
 
 const httpsUrlSchema = z
@@ -1374,7 +1374,7 @@ export const integrationTargetProvenanceSchema = z
 export type IntegrationTargetProvenance = z.infer<typeof integrationTargetProvenanceSchema>;
 
 /**
- * Admin view of an instance-wide OAuth app. The client secret is
+ * Admin view of an OAuth integration's app (App tab). The client secret is
  * write-only: only `secretMask` (its last four characters) is returned.
  */
 export const integrationOAuthAppSchema = z.object({
@@ -1431,35 +1431,51 @@ export const updateIntegrationOAuthAppSchema = z
   .strict();
 export type UpdateIntegrationOAuthAppInput = z.infer<typeof updateIntegrationOAuthAppSchema>;
 
-/** Connection state of one OAuth integration (never carries tokens). */
-export const integrationOAuthStatusSchema = z.object({
+/** Status of one client-tenant connection (never carries tokens). */
+export const integrationConnectionStatusSchema = z.enum(['ok', 'needs_reconnect']);
+export type IntegrationConnectionStatus = z.infer<typeof integrationConnectionStatusSchema>;
+
+/** One client tenant connected to an OAuth integration. */
+export const integrationConnectionSchema = z.object({
+  id: z.string().uuid(),
+  /** Google customer id / Microsoft tenant id. */
+  externalOrgId: z.string(),
+  /** Primary domain (Google) or tenant name (Microsoft), when known. */
+  displayName: z.string().nullable(),
+  /** Google: the admin account that approved. Microsoft: null. */
+  connectedAs: z.string().nullable(),
+  connectedAt: z.string(),
+  /** Granted scopes (Google) or application permissions (Microsoft). */
+  grantedScopes: z.array(z.string()),
+  /** `needs_reconnect` also when the stored grant cannot be read. */
+  status: integrationConnectionStatusSchema,
+  lastErrorAt: z.string().nullable(),
+  /** Latest finished sync of a company mapping of this tenant, if any. */
+  lastSyncAt: z.string().nullable(),
+  /** Microsoft only: the admin's choice about real names in usage reports. */
+  reportNames: z.enum(['shown', 'hidden']).nullable(),
+});
+export type IntegrationConnection = z.infer<typeof integrationConnectionSchema>;
+
+/** Connections tab of an OAuth integration. */
+export const integrationConnectionsSchema = z.object({
   provider: integrationOAuthProviderSchema,
   appConfigured: z.boolean(),
-  /** Callback URL registered with the provider (shown in the setup guide). */
+  /** Callback URL registered with the provider. */
   redirectUri: z.string(),
-  /**
-   * A stored grant exists but cannot be decrypted or parsed (e.g. key
-   * rotated). `connection` is null; the UI offers Reconnect and Disconnect.
-   */
-  needsReconnect: z.boolean(),
-  /** Fixed warning when the OAuth app's client secret expires within 30 days, else null. */
+  /** Fixed warning when the app's client secret expires within 30 days, else null. */
   appSecretExpiryWarning: z.string().nullable(),
-  connection: z
-    .object({
-      connectedAs: z.string().nullable(),
-      connectedAt: z.string(),
-      grantedScopes: z.array(z.string()),
-      /** Admin consent only: the verified tenant id. */
-      tenantId: z.string().optional(),
-      /**
-       * Admin consent only (Microsoft): the admin's choice about real names in
-       * usage reports. Absent until chosen.
-       */
-      reportNames: z.enum(['shown', 'hidden']).optional(),
-    })
-    .nullable(),
+  /** True once the app's client secret expiry date has passed. */
+  appSecretExpired: z.boolean(),
+  connections: z.array(integrationConnectionSchema),
 });
-export type IntegrationOAuthStatus = z.infer<typeof integrationOAuthStatusSchema>;
+export type IntegrationConnections = z.infer<typeof integrationConnectionsSchema>;
+
+/** Start a connect flow: a new client tenant, or Reconnect of one connection. */
+export const startIntegrationConnectionSchema = z
+  .object({ connectionId: z.string().uuid().optional() })
+  .strict();
+export type StartIntegrationConnectionInput = z.infer<typeof startIntegrationConnectionSchema>;
 
 export const integrationOAuthStartResponseSchema = z.object({
   authorizeUrl: z.string().url(),

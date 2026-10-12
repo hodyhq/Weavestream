@@ -236,8 +236,10 @@ export class IntegrationsController {
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request,
+    @Query('connectionId', new ParseUUIDPipe({ optional: true })) connectionId?: string,
   ) {
-    const ctx = await this.integrations.loadDriverContext(id);
+    // OAuth drivers test one client tenant: the picked connection, else the only one.
+    const ctx = await this.integrations.loadDriverContext(id, connectionId ? { connectionId } : { onlyConnection: true });
     const correlationId = randomUUID();
     const http = this.httpDefaults();
     try {
@@ -251,6 +253,7 @@ export class IntegrationsController {
               secret: ctx.secret,
               integrationId: ctx.integrationId,
               oauthClient: ctx.oauthClient,
+              connectionId: ctx.connectionId,
               credentialVersion: ctx.credentialVersion,
               http,
               correlationId,
@@ -306,8 +309,10 @@ export class IntegrationsController {
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request,
+    @Query('connectionId', new ParseUUIDPipe({ optional: true })) connectionId?: string,
   ): Promise<IntegrationSetupCheck> {
-    const ctx = await this.integrations.loadDriverContext(id);
+    // OAuth drivers probe one client tenant: the connection picked on the Connections tab, else the only one.
+    const ctx = await this.integrations.loadDriverContext(id, connectionId ? { connectionId } : { onlyConnection: true });
     const driver = this.drivers.get(ctx.driver);
     if (!driver.diagnose) throw new BadRequestException('This integration has no setup check.');
     let diagnosed: IntegrationSetupCheck;
@@ -319,6 +324,7 @@ export class IntegrationsController {
           secret: ctx.secret,
           integrationId: ctx.integrationId,
           oauthClient: ctx.oauthClient,
+          connectionId: ctx.connectionId,
           credentialVersion: ctx.credentialVersion,
           http: this.httpDefaults(),
           correlationId: randomUUID(),
@@ -354,7 +360,11 @@ export class IntegrationsController {
       ip: meta(req).ip,
       userAgent: meta(req).userAgent,
       before: null,
-      after: { ok: result.ok, failedStepIds: result.failures.map((f) => f.stepId) },
+      after: {
+        ok: result.ok,
+        failedStepIds: result.failures.map((f) => f.stepId),
+        ...(ctx.connectionId ? { connectionId: ctx.connectionId } : {}),
+      },
     });
     return result;
   }
@@ -362,6 +372,9 @@ export class IntegrationsController {
   @Get(':id/source-orgs')
   @RequirePermission('integration.manage')
   async listSourceOrgs(@Param('id', new ParseUUIDPipe()) id: string) {
+    // OAuth drivers: the organizations are the connected client tenants (no provider call).
+    const connected = await this.integrations.listConnectedOrgs(id);
+    if (connected) return { orgs: connected };
     const ctx = await this.integrations.loadDriverContext(id);
     const driver = this.drivers.get(ctx.driver);
     const integrationCtx: IntegrationContext = {
@@ -496,8 +509,6 @@ export class IntegrationsController {
     @Param('resourceKey') resourceKey: string,
     @Query('externalOrgId') externalOrgId?: string,
   ) {
-    const ctx = await this.integrations.loadDriverContext(id);
-    const driver = this.drivers.get(ctx.driver);
     // Multi-resource drivers branch on `resourceKey`, but most still
     // need an `externalOrgId` to probe a real tenant. Fall back to the
     // first existing per-company mapping so the UI doesn't have to
@@ -512,6 +523,8 @@ export class IntegrationsController {
         'No organization mappings exist yet. Map at least one upstream organization to load its source fields.',
       );
     }
+    const ctx = await this.integrations.loadDriverContext(id, { externalOrgId: resolvedOrgId });
+    const driver = this.drivers.get(ctx.driver);
     const integrationCtx: IntegrationContext & {
       externalOrgId: string;
       resourceKey: string;
@@ -520,6 +533,7 @@ export class IntegrationsController {
       secret: ctx.secret,
       integrationId: ctx.integrationId,
       oauthClient: ctx.oauthClient,
+      connectionId: ctx.connectionId,
       credentialVersion: ctx.credentialVersion,
       http: this.httpDefaults(),
       correlationId: randomUUID(),

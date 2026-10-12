@@ -10,7 +10,7 @@ import type {
 import { AssetTargetWriter } from './reconstruction/asset-target.writer.js';
 import { hasEligibleNativeBinding } from './reconstruction/native-binding-ownership.js';
 import { BreezeDriver } from './drivers/breeze/breeze.driver.js';
-import { DriverResourceUnavailableError } from './drivers/integration-driver.js';
+import { DriverAuthError, DriverResourceUnavailableError } from './drivers/integration-driver.js';
 import { buildResourceExecutionStages } from './integration-sync.service.js';
 import type { AssetReconstructionInput } from './reconstruction/reconstruction-target.js';
 import { z } from 'zod';
@@ -213,11 +213,12 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       recalculate: jest.fn(async () => { pending.push('completeness'); }),
       clearNonParticipant: jest.fn(async () => { pending.push('completeness-clear'); }),
     };
+    const integrations = { loadDriverContext: jest.fn().mockResolvedValue({ config: {}, secret: {} }) };
     const service = new IntegrationSyncRunnerService(
       prisma as never,
       { values: { INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
       audit as never,
-      { loadDriverContext: jest.fn().mockResolvedValue({ config: {}, secret: {} }) } as never,
+      integrations as never,
       {
         get: jest.fn().mockReturnValue(driver),
         list: () => [{ key: 'typed', resources: [], ...driver.descriptor }, { key: 'legacy-rmm', resources: [{ key: 'devices' }] }],
@@ -228,8 +229,26 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       completeness as never,
       new FieldTypesRegistry(),
     );
-    return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness };
+    return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness, integrations };
   }
+
+  it('loads only the connection of the mapping tenant and marks it on an auth failure', async () => {
+    const { service, driver, prisma, integrations } = setup();
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    (prisma as unknown as Record<string, unknown>).integrationConnection = { updateMany };
+    integrations.loadDriverContext.mockResolvedValueOnce({ config: {}, secret: {}, connectionId: 'conn-1' });
+    driver.fetchRecords.mockRejectedValueOnce(new DriverAuthError('Reconnect it.'));
+    await expect(service.runMapping({
+      syncRunId: 'auth-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'failed' });
+    expect(integrations.loadDriverContext).toHaveBeenCalledWith('integration', { externalOrgId: 'org-1' });
+    expect(driver.fetchRecords).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'conn-1', externalOrgId: 'org-1' }), null);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'conn-1' },
+      data: { status: 'needs_reconnect', lastErrorAt: expect.any(Date) },
+    });
+  });
 
   it('maps one scalar definition to only its configured target field and skips unmapped rows', () => {
     const { service } = setup();

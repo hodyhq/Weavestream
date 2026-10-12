@@ -1,16 +1,48 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { IntegrationOAuthApp, IntegrationSetupCheck } from '@weavestream/shared';
 import { INTEGRATION_OAUTH_PROVIDER_LABELS, problemMessage } from '@weavestream/shared';
 import { copyToClipboard } from '@weavestream/shared/browser';
-import { apiFetch } from '../../../../lib/api';
-import { Btn, Field, Icon, Input, Tag, useToast } from '../../../../components/ui';
-import { ScopeList, SetupGuide } from '../../../../components/integrations/setup-guide';
-import { SectionHeader } from './settings-form';
+import { apiFetch } from '../../../../../lib/api';
+import { Btn, Field, Icon, Input, Tag, useToast } from '../../../../../components/ui';
+import { ScopeList, SetupGuide } from '../../../../../components/integrations/setup-guide';
+import { SectionHeader } from '../../settings/settings-form';
 
 /**
- * Instance OAuth app for one provider (Admin > Settings > Integrations).
+ * App tab of an OAuth integration: loads the integration's app, then shows
+ * the card below. One integration exists per provider, so this is the
+ * Google or Microsoft app of the install.
+ */
+export function OAuthAppTab({
+  integrationId,
+  provider,
+}: {
+  integrationId: string;
+  provider: IntegrationOAuthApp['provider'];
+}) {
+  const [state, setState] = useState<{ app: IntegrationOAuthApp | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    void apiFetch<IntegrationOAuthApp>(`/admin/integrations/${integrationId}/oauth-app`).then(
+      (res) => {
+        if (live) setState({ app: res.ok && res.data ? res.data : null });
+      },
+      // apiFetch rethrows network failures: show the card's "Could not load" state, not "Loading…" forever.
+      () => {
+        if (live) setState({ app: null });
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [integrationId]);
+  if (!state) return <p style={mutedStyle}>Loading the app settings…</p>;
+  return <IntegrationOAuthAppCard integrationId={integrationId} initial={state.app} provider={provider} />;
+}
+
+/**
+ * The OAuth app of one integration (its App tab).
  *
  * Shows the redirect URI and scopes to register with the provider, and
  * saves the client ID + secret through a step-up gated route. The secret
@@ -19,9 +51,11 @@ import { SectionHeader } from './settings-form';
  * optionally, the operator's own directory (tenant) ID for Check setup.
  */
 export function IntegrationOAuthAppCard({
+  integrationId,
   initial,
   provider = 'google',
 }: {
+  integrationId: string;
   initial: IntegrationOAuthApp | null;
   provider?: IntegrationOAuthApp['provider'];
 }) {
@@ -59,7 +93,7 @@ export function IntegrationOAuthAppCard({
   async function save() {
     if (!canSave) return;
     setPending(true);
-    const res = await apiFetch<IntegrationOAuthApp>(`/settings/integration-oauth-apps/${provider}`, {
+    const res = await apiFetch<IntegrationOAuthApp>(`/admin/integrations/${integrationId}/oauth-app`, {
       method: 'PUT',
       body: JSON.stringify({
         clientId: clientId.trim(),
@@ -85,7 +119,7 @@ export function IntegrationOAuthAppCard({
 
   async function runCheck() {
     setChecking(true);
-    const res = await apiFetch<IntegrationSetupCheck>(`/settings/integration-oauth-apps/${provider}/check`, {
+    const res = await apiFetch<IntegrationSetupCheck>(`/admin/integrations/${integrationId}/oauth-app/check`, {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -109,8 +143,8 @@ export function IntegrationOAuthAppCard({
           label={title}
           help={
             isMicrosoft
-              ? 'One multi-tenant Entra app registration for this Weavestream install. Every Microsoft 365 integration connects through it by admin consent.'
-              : `One ${label} Cloud OAuth client for this Weavestream install. Every ${label} integration connects through it.`
+              ? 'One multi-tenant Entra app registration for this Weavestream install. Every client tenant on the Connections tab connects through it by admin consent.'
+              : `One ${label} Cloud OAuth client for this Weavestream install. Every client tenant on the Connections tab connects through it.`
           }
         />
         <Tag tone={app.configured ? 'ok' : 'warn'}>{app.configured ? 'configured' : 'not configured'}</Tag>
@@ -145,7 +179,7 @@ export function IntegrationOAuthAppCard({
           <ScopeList groups={app.scopeGroups} />
         </Field>
       ) : (
-        <p style={mutedStyle}>Scopes appear here once an integration that uses this app is available.</p>
+        <p style={mutedStyle}>This integration requests no scopes.</p>
       )}
 
       <div style={gridStyle}>

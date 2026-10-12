@@ -63,16 +63,24 @@ export const INTUNE_PERMISSION = 'DeviceManagementManagedDevices.Read.All';
  * - HTTP 400 `BadRequest` "Request not applicable to target tenant.": the
  *   tenant has no active Intune licence
  *   (learn.microsoft.com/en-us/answers/questions/1063413).
- * - HTTP 403 while the app is not known to hold the permission.
+ * - HTTP 401 `UnknownError` while the permission IS granted: also no Intune
+ *   licence (what Graph answers managedDevices on such a tenant, seen live).
+ *   Any other 401 with the permission granted is a token or consent problem
+ *   and is not identified.
+ * - HTTP 403 while the app is not known to hold the permission, or HTTP 401
+ *   while the granted roles are known to lack it.
  */
 export function intuneUnavailableMessage(error: unknown, roles: readonly string[] | null): string | null {
-  if (error instanceof GraphRequestError && error.notApplicableToTenant) {
-    return 'Intune is not licensed in this tenant, so computers and mobile devices are skipped.';
+  const unlicensed = 'Intune is not licensed in this tenant, so computers and mobile devices are skipped.';
+  if (error instanceof GraphRequestError && error.notApplicableToTenant) return unlicensed;
+  if (!(error instanceof GraphAccessError)) return null;
+  if (roles?.includes(INTUNE_PERMISSION)) {
+    return error.status === 401 && error.graphCode === 'UnknownError' ? unlicensed : null;
   }
-  if (!(error instanceof GraphAccessError) || error.status !== 403 || roles?.includes(INTUNE_PERMISSION)) return null;
-  if (roles) {
+  if (roles && (error.status === 401 || error.status === 403)) {
     return `${INTUNE_PERMISSION} is not granted in this tenant, so computers and mobile devices are skipped. Add it on the app, then a Global Administrator presses Reconnect.`;
   }
+  if (error.status !== 403) return null;
   return `Intune devices are not available (needs Microsoft Intune and ${INTUNE_PERMISSION}), so computers and mobile devices are skipped.`;
 }
 

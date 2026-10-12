@@ -8,7 +8,7 @@ description: Connect Microsoft 365 tenants by admin consent to sync people, Intu
 
 **Microsoft 365** is Microsoft's suite of business email, storage and collaboration apps, with identities in **Microsoft Entra ID** and devices in **Microsoft Intune**.
 
-The Weavestream Microsoft 365 driver is **read-only** (with one exception an admin must opt into, see [Report names](#report-names-the-one-change-weavestream-can-make)). One integration is one customer tenant. You register one multi-tenant app in your own Entra tenant for your whole Weavestream install, and each customer is connected with a single **Connect with Microsoft** approval by one of their Global Administrators.
+The Weavestream Microsoft 365 driver is **read-only** (with one exception an admin must opt into, see [Report names](#report-names-the-one-change-weavestream-can-make)). A Weavestream install has **one** Microsoft 365 integration. Its **App** tab holds the one multi-tenant app you register in your own Entra tenant, and its **Connections** tab holds one connection per customer tenant, each made with a single admin-consent approval by one of their Global Administrators.
 
 ## Overview & Features
 
@@ -76,7 +76,7 @@ Microsoft hides user, group and site names in its usage reports by default, so m
 
 **Microsoft 365 admin center > Settings > Org settings > Services > Reports > "Conceal user, group, and site names in all reports"** (Microsoft Graph: `adminReportSettings.displayConcealedNames`).
 
-After connecting, the integration's **Credentials & schedule** tab reads the current value from the tenant and asks: **Show real names in Microsoft usage reports so storage can be matched to users?**
+After connecting, click the tenant's row on the integration's **Connections** tab. Weavestream reads the current value from that tenant and asks: **Show real names in Microsoft usage reports so storage can be matched to users?**
 
 - **Yes, show real names (turn the setting off)**: after a confirmation that names the setting, Weavestream sends one `PATCH https://graph.microsoft.com/v1.0/admin/reportSettings` with `displayConcealedNames: false`. The change is **tenant-wide**: every Microsoft 365 usage report of that tenant (admin center, Microsoft Graph, Power BI, Teams admin center) then shows real user names, group names and site URLs. Anyone in the tenant who can read usage reports (for example Global, Exchange, SharePoint or Teams administrators and Reports Readers) sees them, and so does Weavestream. Microsoft records the change in the tenant's audit log.
 - **No, keep names hidden (change nothing)**: nothing is sent to the tenant. Storage rows say they are hidden by the tenant's report privacy setting, and Check setup notes it.
@@ -84,11 +84,20 @@ After connecting, the integration's **Credentials & schedule** tab reads the cur
 
 **Optional permissions.** Reading the value needs `ReportSettings.Read.All` (or `ReportSettings.ReadWrite.All`); changing it needs `ReportSettings.ReadWrite.All`. Both are optional. When the tenant did not grant `ReportSettings.ReadWrite.All`, the page still shows the current value (when it can be read) and, instead of the buttons, the steps to change it by hand: sign in to the Microsoft 365 admin center as a Global Administrator, go to **Settings > Org settings**, on the **Services** tab select **Reports**, clear (show names) or select (hide names) **Conceal user, group, and site names in all reports**, and select **Save**. Weavestream never attempts the change without the permission.
 
-Each choice needs an MFA step-up, is stored with the connection, and writes an `integration.microsoft.report_names` audit row with the setting name, the value before and after, and whether anything changed (`.failed` with a reason when Microsoft refused). If the value cannot be read, nothing is changed. This PATCH is the only write the integration ever makes, and it is never made during a sync.
+The choice is per connection (client tenant). Each choice needs an MFA step-up, is stored with that connection, and writes an `integration.microsoft.report_names` audit row with the setting name, the value before and after, and whether anything changed (`.failed` with a reason when Microsoft refused). If the value cannot be read, nothing is changed. This PATCH is the only write the integration ever makes, and it is never made during a sync.
 
 ## Setup Instructions
 
-The same steps are shown in Weavestream under **Admin > Settings > Integrations > Microsoft app** and on each Microsoft 365 integration, with copy buttons.
+The same steps are shown in Weavestream on the Microsoft 365 integration's **App** tab, with copy buttons. Steps 1–4 are done once per install; step 5 onward once per customer.
+
+The integration has these tabs:
+
+- **App**: client ID, client secret (write-only), secret expiry, directory (tenant) ID, redirect URI and permissions with copy buttons, the setup guide and **Check setup**.
+- **Connections**: one row per customer tenant (name and tenant ID, granted permissions, connected at, last sync, status: ok, needs reconnect or app secret expired) with **Reconnect** and **Disconnect**. Press **Connect a client** to add a tenant. Click a row for its **Check setup** and the report-names choice.
+- **Organizations**: every connected tenant, to map to a company.
+- **Map layouts**, resource tabs, **Differences**, **Run history** and **Credentials & schedule** are shared by all connections.
+
+Only one Microsoft 365 integration can exist; **New integration** refuses a second one.
 
 ### Step 1: Register one multi-tenant app in Entra
 
@@ -127,15 +136,19 @@ Open **API permissions > Add a permission > Microsoft Graph > Application permis
 
 ### Step 4: Paste the app into Weavestream
 
-**Admin > Settings > Integrations > Microsoft app**: paste the **Application (client) ID**, the secret value, the secret expiry date and, optionally, your **Directory (tenant) ID**, then press **Save Microsoft app** and **Check setup**. With the tenant ID, Check setup proves the client and secret by requesting a token in your own tenant; without it, it can still catch a wrong secret, an unknown app or a single-tenant app.
+Go to **Admin > Integrations**. If there is no Microsoft 365 integration yet, press **New integration** and choose **Microsoft 365** (once per install). Open it, and on the **App** tab paste the **Application (client) ID**, the secret value, the secret expiry date and, optionally, your **Directory (tenant) ID**, then press **Save Microsoft app** and **Check setup**. With the tenant ID, Check setup proves the client and secret by requesting a token in your own tenant; without it, it can still catch a wrong secret, an unknown app or a single-tenant app.
 
-From 30 days before the expiry date, the card and every Microsoft 365 integration show a warning.
+From 30 days before the expiry date, the App and Connections tabs show a warning; after it, every connection shows **app secret expired**.
+
+<!-- TODO(screenshot): ![Microsoft 365 integration, App tab with the app saved](./assets/microsoft-365-app-tab.png) -->
 
 ### Step 5: Connect a customer (admin consent)
 
-**Integrations > New integration > Microsoft 365**, then **Connect with Microsoft** on the **Credentials & schedule** tab. Sign in as the customer's **Global Administrator** or **Privileged Role Administrator** and press **Accept**. A Cloud Application Administrator or Application Administrator cannot grant Microsoft Graph application permissions. The app shows as **unverified**; that is expected and does not stop an admin from approving.
+Open the **Microsoft 365** integration, go to its **Connections** tab and press **Connect a client** (this asks you to confirm with MFA). Sign in as the customer's **Global Administrator** or **Privileged Role Administrator** and press **Accept**. A Cloud Application Administrator or Application Administrator cannot grant Microsoft Graph application permissions. The app shows as **unverified**; that is expected and does not stop an admin from approving.
 
-Weavestream never trusts the tenant Microsoft names in the return link: it requests a token for that tenant and checks the token's tenant, the app, and the tenant reported by Microsoft Graph, then shows **Connected to** the tenant's name. If some permissions were not granted, the connection is saved and **Check setup** lists them.
+Weavestream never trusts the tenant Microsoft names in the return link: it requests a token for that tenant and checks the token's tenant, the app, and the tenant reported by Microsoft Graph, then adds the tenant as a new row. If some permissions were not granted, the connection is saved and its **Check setup** lists them. A tenant that is already connected cannot be added twice: use **Reconnect** on its row. Reconnect only accepts consent from that same tenant; consent from another tenant changes nothing and says so.
+
+<!-- TODO(screenshot): ![Connections tab with two customer tenants](./assets/microsoft-365-connections.png) -->
 
 ### Step 6: Choose whether usage reports show real names
 
@@ -175,11 +188,11 @@ Check setup reads only the AADSTS number and the Graph error code Microsoft retu
 
 ## Security Model
 
-- **App-only, no user tokens.** Weavestream holds one client secret (yours) and, per customer, only the verified tenant ID, the granted permissions, the consent time and the report-names choice. Access tokens are minted per tenant with the client credentials grant, cached in memory per integration until shortly before they expire, and dropped on a reconnect or a new client secret. There is no refresh token.
+- **App-only, no user tokens.** Weavestream holds one client secret (yours) and, per customer, only the verified tenant ID, the granted permissions, the consent time and the report-names choice. Access tokens are minted per tenant with the client credentials grant, cached in memory per connection until shortly before they expire, and dropped on a reconnect or a new client secret. There is no refresh token.
 - **Encrypted secret with an expiry warning.** The client secret is encrypted at rest (AES-256-GCM), write-only (only its last four characters are shown), saved with an MFA step-up and audited. Weavestream warns 30 days before the expiry date you enter.
-- **Verified tenant.** The consent callback's `tenant` value is never trusted: the token's tenant (`tid`) and Microsoft Graph's own answer must both match it, and the token's app must be yours. The state is random, single use, valid for ten minutes and bound to the signed-in user and the integration. Error callbacks are mapped to fixed messages; Microsoft's description is never stored, logged or shown.
+- **Verified tenant.** The consent callback's `tenant` value is never trusted: the token's tenant (`tid`) and Microsoft Graph's own answer must both match it, and the token's app must be yours. The state is random, single use, valid for ten minutes and bound to the signed-in user, the integration and the intent (a new connection, or Reconnect of one connection). Error callbacks are mapped to fixed messages; Microsoft's description is never stored, logged or shown.
 - **Least privilege.** Every permission is read-only except the optional `ReportSettings.ReadWrite.All`, which is never needed for a sync and is used for one PATCH of `displayConcealedNames`, only from the explicit, step-up gated, audited admin action, never during a sync. A connection with more permissions than the list is refused. Report usage downloads are only followed to Microsoft hosts.
 - **Read-only sync.** The sync and Check setup only send GET requests to Microsoft Graph (plus `$batch` requests whose sub-requests are fixed to GET). Report downloads follow Microsoft's redirect through the egress guard without the access token.
-- **Tenant isolation.** A connection only ever feeds the company its tenant is mapped to; a mapped tenant that differs from the consented one, or from what Microsoft Graph reports, stops the sync.
+- **Tenant isolation.** A sync of a company mapping only loads the connection whose tenant ID equals the mapping's, so one tenant's consent never reaches another tenant's mapping. Each connection's consent is encrypted bound to that connection and its integration. A mapped tenant that differs from the consented one, or from what Microsoft Graph reports, still stops the sync.
 - **Customer control.** The customer can remove access at any time by deleting the Weavestream enterprise application in their tenant; Weavestream then shows **Reconnect**. Conditional Access policies for users do not apply to this app-only identity.
 - **Hidden from client users.** Microsoft 365 sections and differences are never shown to client users.

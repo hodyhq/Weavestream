@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { setDefaultFetchForTests, setDefaultResolveForTests } from '../../common/egress/safe-fetch.js';
-import { integrationSecretAad } from '../../crypto/integration-secret-encryption.service.js';
+import { integrationConnectionSecretAad } from '../../crypto/integration-secret-encryption.service.js';
 import { Microsoft365Driver } from '../drivers/microsoft-365/microsoft-365.driver.js';
 import { MICROSOFT_PERMISSIONS } from '../drivers/microsoft-365/microsoft-365.graph.js';
 import { IntegrationOAuthService, classifyConsentError, oauthStateKey } from './integration-oauth.service.js';
@@ -13,6 +13,7 @@ import {
 const INTEGRATION_ID = '00000000-0000-4000-8000-000000000071';
 const TENANT = '11111111-2222-4333-8444-555555555555';
 const OTHER_TENANT = '99999999-2222-4333-8444-555555555555';
+const CONN = '00000000-0000-4000-8000-0000000000c1';
 const USER = { id: 'user-1' } as never;
 const OTHER_USER = { id: 'user-2' } as never;
 const META = { ip: '127.0.0.1', userAgent: 'jest' };
@@ -69,22 +70,42 @@ function setup(opts: { secret?: object | null } = {}) {
       return v;
     }),
   };
-  let ciphertext = opts.secret ? crypto.encrypt(JSON.stringify(opts.secret), integrationSecretAad(INTEGRATION_ID)) : null;
+  type Row = { id: string; integrationId: string; externalOrgId: string; secretCiphertext: string; displayName: string | null; status: string; connectedAt: Date; lastErrorAt: Date | null };
+  const rows: Row[] = opts.secret
+    ? [{
+        id: CONN,
+        integrationId: INTEGRATION_ID,
+        externalOrgId: TENANT,
+        displayName: 'Contoso',
+        status: 'ok',
+        connectedAt: new Date('2026-10-01T00:00:00.000Z'),
+        lastErrorAt: null,
+        secretCiphertext: crypto.encrypt(JSON.stringify(opts.secret), integrationConnectionSecretAad(INTEGRATION_ID, CONN)),
+      }]
+    : [];
+  const match = (r: Row, where: Record<string, unknown>) => Object.entries(where).every(([k, v]) => (r as unknown as Record<string, unknown>)[k] === v);
   const prisma = {
     integration: {
-      findUnique: jest.fn(async () => ({ id: INTEGRATION_ID, driver: 'microsoft-365', secret: ciphertext === null ? null : { ciphertext } })),
+      findUnique: jest.fn(async () => ({ id: INTEGRATION_ID, driver: 'microsoft-365', config: {} })),
     },
     integrationOAuthApp: { findUnique: jest.fn(async () => ({ id: 'app-1', secretExpiresAt: new Date(Date.now() + 10 * 86_400_000) })) },
-    integrationSecret: {
-      upsert: jest.fn(async ({ create }: { create: { ciphertext: string } }) => {
-        ciphertext = create.ciphertext;
-        return {};
+    integrationConnection: {
+      findMany: jest.fn(async ({ where }: { where: Record<string, unknown> }) => rows.filter((r) => match(r, where))),
+      findFirst: jest.fn(async ({ where }: { where: Record<string, unknown> }) => rows.find((r) => match(r, where)) ?? null),
+      create: jest.fn(async ({ data }: { data: Row }) => {
+        if (rows.some((r) => r.externalOrgId === data.externalOrgId)) throw Object.assign(new Error('unique'), { code: 'P2002' });
+        rows.push({ ...data, lastErrorAt: data.lastErrorAt ?? null });
+        return data;
       }),
-      deleteMany: jest.fn(async () => {
-        ciphertext = null;
-        return { count: 1 };
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: Partial<Row> }) => Object.assign(rows.find((r) => r.id === where.id)!, data)),
+      deleteMany: jest.fn(async ({ where }: { where: Record<string, unknown> }) => {
+        const i = rows.findIndex((r) => match(r, where));
+        if (i >= 0) rows.splice(i, 1);
+        return { count: i >= 0 ? 1 : 0 };
       }),
     },
+    integrationCompanyMapping: { findMany: jest.fn(async () => []) },
+    integrationSyncRunCompanyResult: { groupBy: jest.fn(async () => []) },
   };
   const drivers = {
     has: () => true,
@@ -101,12 +122,15 @@ function setup(opts: { secret?: object | null } = {}) {
   const service = new IntegrationOAuthService(prisma as never, { client: redis } as never, env as never, audit as never, crypto as never, drivers as never, apps as never);
   // No real propagation wait in tests.
   (service as unknown as { sleep: () => Promise<void> }).sleep = async () => undefined;
-  const stored = () => (ciphertext === null ? null : parseStoredAdminConsent(JSON.parse(crypto.decrypt(ciphertext, integrationSecretAad(INTEGRATION_ID)))));
-  return { service, redis, store, prisma, audit, stored };
+  const stored = () => {
+    const row = rows[0];
+    return row ? parseStoredAdminConsent(JSON.parse(crypto.decrypt(row.secretCiphertext, integrationConnectionSecretAad(INTEGRATION_ID, row.id)))) : null;
+  };
+  return { service, redis, store, prisma, audit, stored, rows };
 }
 
-async function startState(service: IntegrationOAuthService, actor = USER): Promise<{ state: string; url: URL }> {
-  const { authorizeUrl } = await service.start(actor, INTEGRATION_ID);
+async function startState(service: IntegrationOAuthService, actor = USER, connectionId?: string): Promise<{ state: string; url: URL }> {
+  const { authorizeUrl } = await service.start(actor, INTEGRATION_ID, connectionId ? { connectionId } : {});
   const url = new URL(authorizeUrl);
   return { state: url.searchParams.get('state')!, url };
 }
@@ -130,7 +154,7 @@ describe('admin consent: start', () => {
     expect(url.searchParams.get('scope')).toBe('https://graph.microsoft.com/.default');
     expect(url.searchParams.get('redirect_uri')).toContain('/oauth/callback');
     expect(url.searchParams.has('code_challenge')).toBe(false);
-    expect(JSON.parse(store.get(oauthStateKey(state))!)).toEqual({ integrationId: INTEGRATION_ID, userId: 'user-1', flow: 'admin_consent' });
+    expect(JSON.parse(store.get(oauthStateKey(state))!)).toEqual({ integrationId: INTEGRATION_ID, userId: 'user-1', connectionId: null, flow: 'admin_consent' });
   });
 });
 
@@ -143,7 +167,7 @@ describe('admin consent: callback', () => {
     });
     const { state } = await startState(service);
     const landing = await service.callback(USER, { state, tenant: TENANT, admin_consent: 'True' }, META);
-    expect(landing).toBe(`https://ws.example.test/admin/integrations/${INTEGRATION_ID}?oauth=connected`);
+    expect(landing).toBe(`https://ws.example.test/admin/integrations/${INTEGRATION_ID}?tab=connections&oauth=connected`);
     expect(stored()).toMatchObject({ tenantId: TENANT, tenantName: 'Contoso', grantedRoles: MICROSOFT_PERMISSIONS });
     expect(JSON.stringify(stored())).not.toMatch(/refresh/i);
     const tokenCall = calls.find((c) => c.url === TOKEN_URL)!;
@@ -250,7 +274,7 @@ describe('admin consent: callback', () => {
     const { state } = await startState(service);
     const description = 'AADSTS90094: <script>alert(1)</script> secret detail';
     const landing = await service.callback(USER, { state, error: 'access_denied', error_description: description }, META);
-    expect(landing).toBe(`https://ws.example.test/admin/integrations/${INTEGRATION_ID}?oauth=failed&reason=admin_required`);
+    expect(landing).toBe(`https://ws.example.test/admin/integrations/${INTEGRATION_ID}?tab=connections&oauth=failed&reason=admin_required`);
     expect(JSON.stringify(audit.log.mock.calls)).not.toContain('script');
     expect(JSON.stringify(audit.log.mock.calls)).not.toContain('secret detail');
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ after: expect.objectContaining({ reason: 'provider_denied', providerError: 'access_denied', aadsts: 90094 }) }));
@@ -262,42 +286,93 @@ describe('admin consent: callback', () => {
     expect(classifyConsentError({ error: 'weird<b>', error_description: 42 })).toEqual({ providerError: 'other', aadsts: null, landing: 'consent_declined' });
   });
 
-  it('keeps the report-names choice on a reconnect of the same tenant', async () => {
+  it('keeps the report-names choice on a reconnect of the same connection', async () => {
     const { service, stored } = setup({ secret: { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z', reportNames: 'shown' } });
     scriptFetch({
       [TOKEN_URL]: { body: { access_token: token(), expires_in: 3600 } },
       [ORG_URL]: { body: { value: [{ id: TENANT, displayName: 'Contoso' }] } },
     });
-    const { state } = await startState(service);
-    await service.callback(USER, { state, tenant: TENANT, admin_consent: 'True' }, META);
+    const { state } = await startState(service, USER, CONN);
+    expect(await service.callback(USER, { state, tenant: TENANT, admin_consent: 'True' }, META)).toContain('oauth=connected');
     expect(stored()?.reportNames).toBe('shown');
+  });
+
+  it('accepts a reconnect of a migrated connection whose tenant id differs only in case', async () => {
+    const { service, rows, stored } = setup({ secret: { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z' } });
+    rows[0]!.externalOrgId = TENANT.toUpperCase();
+    scriptFetch({
+      [TOKEN_URL]: { body: { access_token: token(), expires_in: 3600 } },
+      [ORG_URL]: { body: { value: [{ id: TENANT, displayName: 'Contoso' }] } },
+    });
+    const { state } = await startState(service, USER, CONN);
+    expect(await service.callback(USER, { state, tenant: TENANT, admin_consent: 'True' }, META)).toContain('oauth=connected');
+    expect(rows).toHaveLength(1);
+    expect(stored()?.consentedAt).not.toBe('2026-10-01T00:00:00.000Z');
+  });
+
+  it('refuses a new connection for a tenant connected under another case', async () => {
+    const { service, rows } = setup({ secret: { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z' } });
+    rows[0]!.externalOrgId = TENANT.toUpperCase();
+    scriptFetch({
+      [TOKEN_URL]: { body: { access_token: token(), expires_in: 3600 } },
+      [ORG_URL]: { body: { value: [{ id: TENANT, displayName: 'Contoso' }] } },
+    });
+    const { state } = await startState(service);
+    expect(await service.callback(USER, { state, tenant: TENANT, admin_consent: 'True' }, META)).toContain('reason=already_connected');
+    expect(rows).toHaveLength(1);
+  });
+
+  it('refuses a reconnect consented in a different tenant than the connection', async () => {
+    const { service, stored, rows } = setup({ secret: { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z' } });
+    scriptFetch({
+      [`https://login.microsoftonline.com/${OTHER_TENANT}/oauth2/v2.0/token`]: { body: { access_token: token({ tid: OTHER_TENANT }), expires_in: 3600 } },
+      [ORG_URL]: { body: { value: [{ id: OTHER_TENANT, displayName: 'Fabrikam' }] } },
+    });
+    const { state } = await startState(service, USER, CONN);
+    expect(await service.callback(USER, { state, tenant: OTHER_TENANT, admin_consent: 'True' }, META)).toContain('reason=wrong_tenant');
+    expect(rows).toHaveLength(1);
+    expect(stored()?.tenantId).toBe(TENANT);
+  });
+
+  it('connects a second tenant as its own connection', async () => {
+    const { service, rows } = setup({ secret: { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z' } });
+    scriptFetch({
+      [`https://login.microsoftonline.com/${OTHER_TENANT}/oauth2/v2.0/token`]: { body: { access_token: token({ tid: OTHER_TENANT }), expires_in: 3600 } },
+      [ORG_URL]: { body: { value: [{ id: OTHER_TENANT, displayName: 'Fabrikam' }] } },
+    });
+    const { state } = await startState(service);
+    expect(await service.callback(USER, { state, tenant: OTHER_TENANT, admin_consent: 'True' }, META)).toContain('oauth=connected');
+    expect(rows.map((r) => r.externalOrgId)).toEqual([TENANT, OTHER_TENANT]);
+    expect(rows[1]!.displayName).toBe('Fabrikam');
   });
 });
 
-describe('admin consent: status and disconnect', () => {
+describe('admin consent: connections and disconnect', () => {
   it('shows the tenant name, roles, choice and the app secret expiry warning', async () => {
-    const { service } = setup({ secret: { tenantId: TENANT, tenantName: 'Contoso', grantedRoles: ['User.Read.All'], consentedAt: '2026-10-01T00:00:00.000Z' } });
-    const status = await service.status(INTEGRATION_ID);
-    expect(status.connection).toEqual({ connectedAs: 'Contoso', connectedAt: '2026-10-01T00:00:00.000Z', grantedScopes: ['User.Read.All'], tenantId: TENANT });
-    expect(status.appSecretExpiryWarning).toMatch(/expires on .* \(in \d+ days\)/);
+    const { service } = setup({ secret: { tenantId: TENANT, tenantName: 'Contoso', grantedRoles: ['User.Read.All'], consentedAt: '2026-10-01T00:00:00.000Z', reportNames: 'hidden' } });
+    const list = await service.listConnections(INTEGRATION_ID);
+    expect(list.connections[0]).toMatchObject({ id: CONN, displayName: 'Contoso', externalOrgId: TENANT, grantedScopes: ['User.Read.All'], connectedAs: null, reportNames: 'hidden', status: 'ok' });
+    expect(list.appSecretExpiryWarning).toMatch(/expires on .* \(in \d+ days\)/);
+    expect(list.appSecretExpired).toBe(false);
   });
 
   it('disconnects by wiping the consent (nothing to revoke) and audits it', async () => {
     const { service, stored, audit } = setup({ secret: { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z' } });
     const calls = scriptFetch({});
-    await service.disconnect(USER, INTEGRATION_ID, META);
+    await service.disconnect(USER, INTEGRATION_ID, CONN, META);
     expect(stored()).toBeNull();
     expect(calls).toHaveLength(0);
-    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'integration.oauth.disconnect', before: { connected: true } }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'integration.oauth.disconnect', before: { connectionId: CONN, tenantId: TENANT } }));
   });
 });
 
 describe('admin consent: access tokens', () => {
-  const ctx = (version: string) => ({
+  const ctx = (version: string, connectionId?: string, tenantId: string = TENANT) => ({
     config: {},
-    secret: { tenantId: TENANT, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z' },
+    secret: { tenantId, grantedRoles: [], consentedAt: '2026-10-01T00:00:00.000Z' },
     oauthClient: CLIENT,
     integrationId: INTEGRATION_ID,
+    ...(connectionId ? { connectionId } : {}),
     credentialVersion: version,
     correlationId: 'c',
     http: { timeoutMs: 5_000, maxRetries: 0, backoffMs: 1 },
@@ -312,6 +387,21 @@ describe('admin consent: access tokens', () => {
     await getOAuthAccessToken(ctx('v2'), driver.descriptor.oauth!);
     expect(calls).toHaveLength(2);
     expect(new URLSearchParams(calls[0]!.body).get('refresh_token')).toBeNull();
+  });
+
+  it('caches one token per connection: two tenants never share or evict a token', async () => {
+    const otherTokenUrl = `https://login.microsoftonline.com/${OTHER_TENANT}/oauth2/v2.0/token`;
+    const calls = scriptFetch({
+      [TOKEN_URL]: { body: { access_token: 'tok-a', expires_in: 3600 } },
+      [otherTokenUrl]: { body: { access_token: 'tok-b', expires_in: 3600 } },
+    });
+    const a = ctx(`${CONN}@v1`, CONN);
+    const b = ctx('conn-b@v1', '00000000-0000-4000-8000-0000000000c2', OTHER_TENANT);
+    expect(await getOAuthAccessToken(a, driver.descriptor.oauth!)).toBe('tok-a');
+    expect(await getOAuthAccessToken(b, driver.descriptor.oauth!)).toBe('tok-b');
+    expect(await getOAuthAccessToken(a, driver.descriptor.oauth!)).toBe('tok-a');
+    expect(await getOAuthAccessToken(b, driver.descriptor.oauth!)).toBe('tok-b');
+    expect(calls).toHaveLength(2);
   });
 
   it('turns AADSTS refusals into fixed DriverAuthError text', async () => {

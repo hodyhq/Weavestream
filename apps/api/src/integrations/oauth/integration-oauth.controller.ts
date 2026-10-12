@@ -3,7 +3,6 @@ import {
   Controller,
   Get,
   HttpCode,
-  NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
@@ -16,9 +15,9 @@ import {
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import {
-  integrationOAuthProviderSchema,
+  startIntegrationConnectionSchema,
   updateIntegrationOAuthAppSchema,
-  type IntegrationOAuthProvider,
+  type StartIntegrationConnectionInput,
   type UpdateIntegrationOAuthAppInput,
 } from '@weavestream/shared';
 import { ZodBody } from '../../common/zod-validation.pipe.js';
@@ -31,64 +30,28 @@ import { IntegrationOAuthAppService } from './integration-oauth-app.service.js';
 import { IntegrationOAuthService, type OAuthCallbackQuery } from './integration-oauth.service.js';
 import { OAuthCallbackRedirectFilter } from './oauth-callback-redirect.filter.js';
 
-function parseProvider(raw: string): IntegrationOAuthProvider {
-  const parsed = integrationOAuthProviderSchema.safeParse(raw);
-  if (!parsed.success) throw new NotFoundException('Unknown OAuth provider.');
-  return parsed.data;
-}
-
 /**
- * Instance OAuth apps (Admin > Settings > Integrations). Settings
- * permission; saving the client secret also needs a fresh step-up.
- */
-@Controller({ path: 'settings/integration-oauth-apps', version: '1' })
-export class IntegrationOAuthAppsController {
-  constructor(private readonly apps: IntegrationOAuthAppService) {}
-
-  @Get(':provider')
-  @RequirePermission('settings.manage')
-  get(@Param('provider') provider: string) {
-    return this.apps.get(parseProvider(provider));
-  }
-
-  @Put(':provider')
-  @RequirePermission('settings.manage')
-  @RequireStepUp()
-  @InteractiveOnly()
-  update(
-    @CurrentUser() user: AuthedUser,
-    @Param('provider') provider: string,
-    @Body(new ZodBody(updateIntegrationOAuthAppSchema)) dto: UpdateIntegrationOAuthAppInput,
-    @Req() req: Request,
-  ) {
-    return this.apps.update(user, parseProvider(provider), dto, meta(req));
-  }
-
-  /** Check setup: verifies the saved client against the provider (read-only). */
-  @Post(':provider/check')
-  @RequirePermission('settings.manage')
-  @InteractiveOnly()
-  @Throttle({ global: { limit: 10, ttl: 60_000 } })
-  @HttpCode(200)
-  check(@CurrentUser() user: AuthedUser, @Param('provider') provider: string, @Req() req: Request) {
-    return this.apps.check(user, parseProvider(provider), meta(req));
-  }
-}
-
-/**
- * OAuth connect / disconnect for integrations whose driver declares
- * `oauth`. Interactive sessions only: an API key can never start or
- * complete a grant.
+ * The OAuth app (App tab) and client-tenant connections (Connections tab)
+ * of integrations whose driver declares `oauth`. Interactive sessions only:
+ * an API key can never read the app, start or complete a grant. Writing
+ * the app, connecting and disconnecting need a fresh step-up; all of it is
+ * audited.
  *
- *   - GET  /admin/integrations/:id/oauth             connection status
- *   - POST /admin/integrations/:id/oauth/start       provider authorize URL
- *   - GET  /admin/integrations/oauth/callback        provider redirect target
- *   - POST /admin/integrations/:id/oauth/disconnect  revoke + wipe
+ *   - GET  /admin/integrations/:id/oauth-app                         app (secret masked)
+ *   - PUT  /admin/integrations/:id/oauth-app                         save app
+ *   - POST /admin/integrations/:id/oauth-app/check                   Check setup (app only)
+ *   - GET  /admin/integrations/:id/connections                       connections
+ *   - POST /admin/integrations/:id/connections/start                 authorize URL ({ connectionId? } = reconnect)
+ *   - POST /admin/integrations/:id/connections/:connectionId/disconnect  revoke + delete
+ *   - GET  /admin/integrations/oauth/callback                        provider redirect target
  */
 @Controller({ path: 'admin/integrations', version: '1' })
 @InteractiveOnly()
 export class IntegrationOAuthController {
-  constructor(private readonly oauth: IntegrationOAuthService) {}
+  constructor(
+    private readonly oauth: IntegrationOAuthService,
+    private readonly apps: IntegrationOAuthAppService,
+  ) {}
 
   @Get('oauth/callback')
   @RequirePermission('integration.manage')
@@ -102,28 +65,61 @@ export class IntegrationOAuthController {
     res.redirect(302, await this.oauth.callback(user, query ?? {}, meta(req)));
   }
 
-  @Get(':id/oauth')
+  @Get(':id/oauth-app')
   @RequirePermission('integration.manage')
-  status(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.oauth.status(id);
+  getApp(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.apps.get(id);
   }
 
-  @Post(':id/oauth/start')
+  @Put(':id/oauth-app')
   @RequirePermission('integration.manage')
   @RequireStepUp()
-  start(@CurrentUser() user: AuthedUser, @Param('id', new ParseUUIDPipe()) id: string) {
-    return this.oauth.start(user, id);
+  updateApp(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodBody(updateIntegrationOAuthAppSchema)) dto: UpdateIntegrationOAuthAppInput,
+    @Req() req: Request,
+  ) {
+    return this.apps.update(user, id, dto, meta(req));
   }
 
-  @Post(':id/oauth/disconnect')
+  /** Check setup: verifies the saved client against the provider (read-only). */
+  @Post(':id/oauth-app/check')
+  @RequirePermission('integration.manage')
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  @HttpCode(200)
+  checkApp(@CurrentUser() user: AuthedUser, @Param('id', new ParseUUIDPipe()) id: string, @Req() req: Request) {
+    return this.apps.check(user, id, meta(req));
+  }
+
+  @Get(':id/connections')
+  @RequirePermission('integration.manage')
+  listConnections(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.oauth.listConnections(id);
+  }
+
+  @Post(':id/connections/start')
+  @RequirePermission('integration.manage')
+  @RequireStepUp()
+  @HttpCode(200)
+  start(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodBody(startIntegrationConnectionSchema)) dto: StartIntegrationConnectionInput,
+  ) {
+    return this.oauth.start(user, id, dto);
+  }
+
+  @Post(':id/connections/:connectionId/disconnect')
   @RequirePermission('integration.manage')
   @RequireStepUp()
   @HttpCode(204)
   async disconnect(
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('connectionId', new ParseUUIDPipe()) connectionId: string,
     @Req() req: Request,
   ): Promise<void> {
-    await this.oauth.disconnect(user, id, meta(req));
+    await this.oauth.disconnect(user, id, connectionId, meta(req));
   }
 }

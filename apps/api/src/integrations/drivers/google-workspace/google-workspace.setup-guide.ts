@@ -88,7 +88,7 @@ export const GOOGLE_WORKSPACE_SETUP_GUIDE: SetupGuideStep[] = [
     id: S.credentials,
     title: 'Paste the client into Weavestream',
     body: [
-      'In Weavestream, go to **Admin > Settings > Integrations**. Paste the **Client ID** and **Client secret** into the Google OAuth app card and press **Save OAuth app**.',
+      'In Weavestream, go to **Admin > Integrations** and open the **Google Workspace** integration (add it once with **New integration** if it is not there yet; one per Weavestream install). On its **App** tab, paste the **Client ID** and **Client secret** and press **Save OAuth app**.',
       'Then press **Check setup** in the guide. Steps that pass turn green. If a step turns red, follow its message.',
     ].join('\n\n'),
   },
@@ -96,7 +96,7 @@ export const GOOGLE_WORKSPACE_SETUP_GUIDE: SetupGuideStep[] = [
     id: S.connect,
     title: 'Connect a customer',
     body: [
-      'Do this once per customer. Go to **Integrations > New integration > Google Workspace**, then press **Connect with Google** on the **Credentials & schedule** tab.',
+      'Do this once per customer. Open the **Google Workspace** integration, go to its **Connections** tab and press **Connect a client**. Each customer tenant becomes one connection of the same integration.',
       'Sign in with that customer\'s **super admin**. A delegated admin also works if their role can read users, groups, reports, licences and devices.',
       'On the "Google hasn\'t verified this app" screen, press **Advanced**, then **Go to Weavestream (unsafe)**. The warning appears because the app is your own and not reviewed by Google. Your data only goes to your own Weavestream server.',
       'Tick every permission and press **Continue**. If a box is left unticked, that data is missing until you reconnect.',

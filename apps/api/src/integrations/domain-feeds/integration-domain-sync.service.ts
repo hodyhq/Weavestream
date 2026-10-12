@@ -127,12 +127,14 @@ export class IntegrationDomainSyncService {
     }
     const { companyId, integrationId } = mapping;
 
-    const loaded = await this.integrations.loadDriverContext(integrationId);
+    // Only the connection of this mapping's own tenant.
+    const loaded = await this.integrations.loadDriverContext(integrationId, { externalOrgId: mapping.externalOrgId });
     const domains = await feed.list(
       {
         config: loaded.config,
         secret: loaded.secret,
         oauthClient: loaded.oauthClient,
+        connectionId: loaded.connectionId,
         credentialVersion: loaded.credentialVersion,
         integrationId,
         http: {
@@ -173,7 +175,14 @@ export class IntegrationDomainSyncService {
 
     // Rows this integration linked in this company that the provider no
     // longer reports. Stamp once so the date records when it went missing.
-    const linked = await this.prisma.monitoredDomain.findMany({
+    // shortcut: rows carry the integration, not the tenant, so a company
+    // mapped to several tenants of one integration is never stamped (each
+    // tenant would mark the other's domains missing); store the connection
+    // on the row if that case needs missing detection.
+    const otherTenants = await this.prisma.integrationCompanyMapping.count({
+      where: { integrationId, companyId, id: { not: mapping.id } },
+    });
+    const linked = otherTenants > 0 ? [] : await this.prisma.monitoredDomain.findMany({
       where: { companyId, [feed.link]: integrationId, archivedAt: null, [feed.missing]: null },
       select: { id: true, hostname: true },
     });

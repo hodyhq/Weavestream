@@ -1436,6 +1436,8 @@ model Integration {
   updatedAt     DateTime          @updatedAt @map("updated_at")
 
   secret            IntegrationSecret?
+  oauthApp          IntegrationOAuthApp?
+  connections       IntegrationConnection[]
   companyMappings   IntegrationCompanyMapping[]
   resources         IntegrationResource[]
   syncRuns          IntegrationSyncRun[]
@@ -1511,24 +1513,56 @@ model IntegrationSecret {
   @@map("integration_secrets")
 }
 
-/// Instance-wide OAuth client for one provider (e.g. Google), shared by
-/// every integration whose driver connects through that provider. The
-/// client secret is an AES-256-GCM blob (embedded `kid`) under
-/// `INTEGRATION_SECRET_KEY`, AAD bound to the provider. GLOBAL: no tenant.
+/// The OAuth app (client) of one OAuth-connected integration (Google
+/// Workspace, Microsoft 365), owned by that integration: at most one
+/// integration exists per provider. The client secret is an AES-256-GCM blob
+/// (embedded `kid`) under `INTEGRATION_SECRET_KEY`, AAD bound to the owning
+/// integration. A row with no `integrationId` is a pre-connections
+/// instance-wide app not yet adopted by an integration (see
+/// `IntegrationConnectionsMigrationService`). GLOBAL: no tenant.
 model IntegrationOAuthApp {
-  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  provider         String   @unique
-  clientId         String   @map("client_id")
-  secretCiphertext String   @map("secret_ciphertext")
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider         String    @unique
+  integrationId    String?   @unique @map("integration_id") @db.Uuid
+  clientId         String    @map("client_id")
+  secretCiphertext String    @map("secret_ciphertext")
   /// Client secret expiry date as entered by the operator (warned 30 days ahead).
   secretExpiresAt  DateTime? @map("secret_expires_at") @db.Date
   /// The operator's own directory (tenant) id; only Check setup uses it (Microsoft).
-  tenantId         String?  @map("tenant_id")
-  updatedBy        String?  @map("updated_by") @db.Uuid
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  tenantId         String?   @map("tenant_id")
+  updatedBy        String?   @map("updated_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
   @@map("integration_oauth_apps")
+}
+
+/// One client tenant connected to an OAuth integration: a Google customer
+/// (refresh token) or a Microsoft tenant (admin consent). `externalOrgId`
+/// is the Google customer id / Microsoft tenant id; a company mapping can
+/// only use the connection whose `externalOrgId` equals its own. The secret
+/// is an AES-256-GCM blob under `INTEGRATION_SECRET_KEY`, AAD bound to the
+/// connection id and the integration id. GLOBAL: no tenant.
+model IntegrationConnection {
+  id               String    @id @db.Uuid
+  integrationId    String    @map("integration_id") @db.Uuid
+  externalOrgId    String    @map("external_org_id")
+  displayName      String?   @map("display_name")
+  secretCiphertext String    @map("secret_ciphertext")
+  /// 'ok' | 'needs_reconnect'
+  status           String    @default("ok")
+  connectedBy      String?   @map("connected_by") @db.Uuid
+  connectedAt      DateTime  @default(now()) @map("connected_at")
+  lastErrorAt      DateTime? @map("last_error_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, externalOrgId])
+  @@map("integration_connections")
 }
 
 // Phase 11 — tenant-scoped row that ties a single external organisation
