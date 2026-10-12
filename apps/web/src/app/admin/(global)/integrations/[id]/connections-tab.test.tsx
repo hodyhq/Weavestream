@@ -1,16 +1,18 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { DriverOAuthDescriptor } from '@weavestream/shared';
+import type { DriverOAuthDescriptor, IntegrationConnection } from '@weavestream/shared';
 import { ToastProvider } from '../../../../../components/ui';
-import { OAuthConnection } from './oauth-connection';
+import { ConnectionsTab } from './connections-tab';
 
 const apiFetch = jest.fn();
 const refresh = jest.fn();
 const replace = jest.fn();
 let search = new URLSearchParams();
+let mobile = false;
 
 jest.mock('../../../../../lib/api', () => ({ apiFetch: (...a: unknown[]) => apiFetch(...a) }));
+jest.mock('../../../../../lib/hooks/use-is-mobile', () => ({ useIsMobile: () => mobile }));
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ refresh, replace }),
   usePathname: () => '/admin/integrations/int-1',
@@ -24,15 +26,45 @@ const oauth: DriverOAuthDescriptor = {
   scopes: ['scope.read'],
 };
 
-function status(over: Record<string, unknown> = {}) {
-  return { ok: true, status: 200, data: { provider: 'google', appConfigured: true, redirectUri: 'https://ws.example.test/cb', needsReconnect: false, appSecretExpiryWarning: null, connection: null, ...over } };
+const CONN_A = '00000000-0000-4000-8000-0000000000a1';
+
+function conn(over: Partial<IntegrationConnection> = {}): IntegrationConnection {
+  return {
+    id: CONN_A,
+    externalOrgId: 'C0example1',
+    displayName: 'example.com',
+    connectedAs: 'admin@example.test',
+    connectedAt: '2026-01-05T12:00:00Z',
+    grantedScopes: ['scope.read'],
+    status: 'ok',
+    lastErrorAt: null,
+    lastSyncAt: null,
+    reportNames: null,
+    ...over,
+  };
 }
 
-async function renderIt() {
+function list(over: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      provider: 'google',
+      appConfigured: true,
+      redirectUri: 'https://ws.example.test/cb',
+      appSecretExpiryWarning: null,
+      appSecretExpired: false,
+      connections: [],
+      ...over,
+    },
+  };
+}
+
+async function renderIt(props: Partial<Parameters<typeof ConnectionsTab>[0]> = {}) {
   await act(async () => {
     render(
       <ToastProvider>
-        <OAuthConnection integrationId="int-1" oauth={oauth} />
+        <ConnectionsTab integrationId="int-1" oauth={oauth} {...props} />
       </ToastProvider>,
     );
   });
@@ -43,116 +75,143 @@ beforeEach(() => {
   refresh.mockReset();
   replace.mockReset();
   search = new URLSearchParams();
+  mobile = false;
 });
 
-describe('OAuthConnection', () => {
-  it('offers Connect with Google and sends the browser to the authorize URL', async () => {
+describe('ConnectionsTab', () => {
+  it('connects a new client tenant without a connection id and sends the browser to the provider', async () => {
     const open = jest.spyOn(window, 'open').mockReturnValue(null);
     apiFetch
-      .mockResolvedValueOnce(status())
+      .mockResolvedValueOnce(list())
       .mockResolvedValueOnce({ ok: true, status: 200, data: { authorizeUrl: 'https://auth.example.test/authorize?x=1' } });
     await renderIt();
-    expect(screen.getByText('not connected')).toBeInTheDocument();
+    expect(screen.getByText(/No client tenants yet/)).toBeInTheDocument();
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Connect with Google/ }));
+      fireEvent.click(screen.getByRole('button', { name: /Connect a client/ }));
     });
-    expect(apiFetch).toHaveBeenLastCalledWith('/admin/integrations/int-1/oauth/start', {
-      method: 'POST',
-      body: '{}',
-    });
+    expect(apiFetch).toHaveBeenLastCalledWith('/admin/integrations/int-1/connections/start', { method: 'POST', body: '{}' });
     expect(open).toHaveBeenCalledWith('https://auth.example.test/authorize?x=1', '_self');
   });
 
-  it('shows who connected, with Reconnect and Disconnect', async () => {
-    apiFetch.mockResolvedValueOnce(
-      status({
-        connection: { connectedAs: 'admin@example.test', connectedAt: '2026-01-05T12:00:00Z', grantedScopes: [] },
-      }),
-    );
+  it('lists one row per tenant and binds Reconnect to that connection', async () => {
+    jest.spyOn(window, 'open').mockReturnValue(null);
+    apiFetch
+      .mockResolvedValueOnce(list({ connections: [conn(), conn({ id: 'b', externalOrgId: 'C0example2', displayName: 'example.org', status: 'needs_reconnect' })] }))
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { authorizeUrl: 'https://auth.example.test/authorize' } });
     await renderIt();
-    expect(screen.getByText('admin@example.test')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Reconnect/ })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /Disconnect/ })).toBeInTheDocument();
-  });
-
-  it('offers Reconnect and Disconnect when the saved grant is unreadable', async () => {
-    apiFetch.mockResolvedValueOnce(status({ needsReconnect: true }));
-    await renderIt();
+    expect(screen.getByText('example.com')).toBeInTheDocument();
+    expect(screen.getAllByText('admin@example.test')).toHaveLength(2);
     expect(screen.getByText('needs reconnect')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Reconnect/ })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /Disconnect/ })).toBeInTheDocument();
-    expect(screen.queryByText('not connected')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect example.com' }));
+    });
+    expect(apiFetch).toHaveBeenLastCalledWith('/admin/integrations/int-1/connections/start', {
+      method: 'POST',
+      body: JSON.stringify({ connectionId: CONN_A }),
+    });
   });
 
-  it('disables connecting and links to Settings when the OAuth app is missing', async () => {
-    apiFetch.mockResolvedValueOnce(status({ appConfigured: false }));
+  it('shows app secret expired as the status of every connection', async () => {
+    apiFetch.mockResolvedValueOnce(list({ connections: [conn()], appSecretExpired: true, appSecretExpiryWarning: 'The client secret expired on 2026-10-01.' }));
     await renderIt();
-    expect(screen.getByRole('button', { name: /Connect with Google/ })).toBeDisabled();
-    expect(screen.getByRole('link', { name: 'Set it up in Settings' })).toHaveAttribute(
-      'href',
-      '/admin/settings?tab=integrations',
-    );
+    expect(screen.getByText('app secret expired')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('expired on 2026-10-01');
   });
 
-  it('disconnects after confirmation', async () => {
+  it('disables connecting and links to the App tab when the app is missing', async () => {
+    apiFetch.mockResolvedValueOnce(list({ appConfigured: false }));
+    await renderIt();
+    expect(screen.getByRole('button', { name: /Connect a client/ })).toBeDisabled();
+    expect(screen.getByRole('link', { name: 'Set it up on the App tab' })).toHaveAttribute('href', '/admin/integrations/int-1?tab=app');
+  });
+
+  it('disconnects one connection after confirmation', async () => {
     jest.spyOn(window, 'confirm').mockReturnValue(true);
     apiFetch
-      .mockResolvedValueOnce(
-        status({ connection: { connectedAs: null, connectedAt: '2026-01-05T12:00:00Z', grantedScopes: [] } }),
-      )
+      .mockResolvedValueOnce(list({ connections: [conn()] }))
       .mockResolvedValueOnce({ ok: true, status: 204, data: null })
-      .mockResolvedValueOnce(status());
+      .mockResolvedValueOnce(list());
     await renderIt();
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Disconnect/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Disconnect example.com' }));
     });
-    expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/int-1/oauth/disconnect', {
-      method: 'POST',
-      body: '{}',
-    });
-    await waitFor(() => expect(screen.getByText('not connected')).toBeInTheDocument());
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/int-1/connections/${CONN_A}/disconnect`, { method: 'POST', body: '{}' });
+    await waitFor(() => expect(screen.getByText(/No client tenants yet/)).toBeInTheDocument());
     expect(refresh).toHaveBeenCalled();
+  });
+
+  it('runs Check setup for the selected connection', async () => {
+    apiFetch
+      .mockResolvedValueOnce(list({ connections: [conn()] }))
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { ok: true, passedStepIds: ['connect'], failures: [] } });
+    await renderIt({ setupGuide: [{ id: 'connect', title: 'Connect a customer', body: 'Sign in.' }] });
+    fireEvent.click(screen.getByText('example.com'));
+    fireEvent.click(screen.getByRole('button', { name: /Setup guide/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Check setup/ }));
+    });
+    expect(apiFetch).toHaveBeenLastCalledWith(`/admin/integrations/int-1/check?connectionId=${CONN_A}`, { method: 'POST', body: '{}' });
+    expect(screen.getByText('Setup check passed.')).toBeInTheDocument();
+  });
+
+  it('renders cards on a phone', async () => {
+    mobile = true;
+    apiFetch.mockResolvedValueOnce(list({ connections: [conn()] }));
+    await renderIt();
+    expect(screen.getByText('Tenant')).toBeInTheDocument();
+    expect(screen.getByText('C0example1')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconnect example.com' })).toBeInTheDocument();
   });
 
   it.each([
     ['connected', 'Connected with Google.'],
     ['failed', /Could not connect with Google/],
   ])('turns ?oauth=%s into a toast and strips the flag', async (flag, message) => {
-    search = new URLSearchParams({ oauth: flag, tab: 'creds' });
-    apiFetch.mockResolvedValueOnce(status());
+    search = new URLSearchParams({ oauth: flag, tab: 'connections' });
+    apiFetch.mockResolvedValueOnce(list());
     await renderIt();
     expect(screen.getByText(message)).toBeInTheDocument();
-    expect(replace).toHaveBeenCalledWith('/admin/integrations/int-1?tab=creds');
+    expect(replace).toHaveBeenCalledWith('/admin/integrations/int-1?tab=connections');
+  });
+
+  it('turns the reconnect reasons into fixed text', async () => {
+    search = new URLSearchParams('oauth=failed&reason=wrong_tenant');
+    apiFetch.mockResolvedValueOnce(list());
+    await renderIt();
+    expect(screen.getByText(/signed in to a different tenant/)).toBeInTheDocument();
+  });
+
+  it('ignores an unknown reason value and inherited keys (generic text, nothing echoed)', async () => {
+    for (const reason of ['<b>evil</b>', 'constructor']) {
+      search = new URLSearchParams({ oauth: 'failed', reason });
+      apiFetch.mockResolvedValueOnce(list());
+      const view = await (async () => {
+        let r: ReturnType<typeof render> | undefined;
+        await act(async () => {
+          r = render(
+            <ToastProvider>
+              <ConnectionsTab integrationId="int-1" oauth={oauth} />
+            </ToastProvider>,
+          );
+        });
+        return r!;
+      })();
+      expect(screen.getByText(/Could not connect with Google/)).toBeInTheDocument();
+      expect(screen.queryByText(/evil/)).not.toBeInTheDocument();
+      view.unmount();
+    }
   });
 
   it('ignores any other flag value', async () => {
     search = new URLSearchParams({ oauth: '<b>provider text</b>' });
-    apiFetch.mockResolvedValueOnce(status());
+    apiFetch.mockResolvedValueOnce(list());
     await renderIt();
     expect(replace).not.toHaveBeenCalled();
   });
-
-  it('shows the setup guide and runs the connection check once connected', async () => {
-    apiFetch
-      .mockResolvedValueOnce(status({ connection: { connectedAs: 'admin@example.test', connectedAt: '2026-10-01T00:00:00.000Z', grantedScopes: [] } }))
-      .mockResolvedValueOnce({ ok: true, status: 200, data: { ok: true, passedStepIds: ['connect'], failures: [] } });
-    await act(async () => {
-      render(
-        <ToastProvider>
-          <OAuthConnection integrationId="int-1" oauth={oauth} setupGuide={[{ id: 'connect', title: 'Connect a customer', body: 'Sign in.' }]} />
-        </ToastProvider>,
-      );
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Setup guide/ }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Check setup/ }));
-    });
-    expect(apiFetch).toHaveBeenLastCalledWith('/admin/integrations/int-1/check', { method: 'POST', body: '{}' });
-    expect(screen.getByText('Setup check passed.')).toBeInTheDocument();
-  });
 });
 
-describe('OAuthConnection (Microsoft admin consent)', () => {
+describe('ConnectionsTab (Microsoft admin consent)', () => {
   const msOauth: DriverOAuthDescriptor = {
     provider: 'microsoft',
     consentFlow: 'admin_consent',
@@ -163,60 +222,25 @@ describe('OAuthConnection (Microsoft admin consent)', () => {
   };
   const reportNames = { ok: true, status: 200, data: { concealed: true, choice: null, readError: null, canChange: true } };
 
-  async function renderMs() {
-    await act(async () => {
-      render(
-        <ToastProvider>
-          <OAuthConnection integrationId="int-1" oauth={msOauth} />
-        </ToastProvider>,
-      );
-    });
-  }
-
-  it('offers Connect with Microsoft and says who must approve', async () => {
-    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
-    await renderMs();
-    expect(screen.getByRole('button', { name: /Connect with Microsoft/ })).toBeEnabled();
-    expect(screen.getByText(/Global Administrator or Privileged Role Administrator/)).toBeInTheDocument();
-  });
-
-  it('shows the connected tenant, the secret expiry warning and the report-names prompt', async () => {
+  it('says who must approve, shows granted permissions, and asks the report-names choice per connection', async () => {
     apiFetch.mockImplementation(async (url: string) =>
       url.endsWith('/microsoft/report-names')
         ? reportNames
-        : status({
-            provider: 'microsoft',
-            appSecretExpiryWarning: 'The client secret expires on 2026-10-20 (in 11 days).',
-            connection: { connectedAs: 'Contoso', connectedAt: '2026-10-05T12:00:00Z', grantedScopes: [], tenantId: '11111111-2222-4333-8444-555555555555' },
-          }),
+        : list({ provider: 'microsoft', connections: [conn({ externalOrgId: '11111111-2222-4333-8444-555555555555', displayName: 'Example Tenant', connectedAs: null, grantedScopes: ['User.Read.All'] })] }),
     );
-    await renderMs();
-    expect(screen.getByText(/Connected to/)).toBeInTheDocument();
-    expect(screen.getByText('Contoso')).toBeInTheDocument();
-    expect(screen.getByText(/expires on 2026-10-20/)).toBeInTheDocument();
+    await renderIt({ oauth: msOauth });
+    expect(screen.getByText(/Global Administrator or Privileged Role Administrator/)).toBeInTheDocument();
+    expect(screen.getByText('1 granted')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Example Tenant'));
     await waitFor(() => expect(screen.getByLabelText('Usage report names')).toBeInTheDocument());
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/int-1/connections/${CONN_A}/microsoft/report-names`);
   });
 
   it('turns a failure reason into fixed text and strips it from the URL', async () => {
     search = new URLSearchParams('oauth=failed&reason=admin_required');
-    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
-    await renderMs();
-    expect(screen.getByText(/must approve/)).toBeInTheDocument();
+    apiFetch.mockResolvedValueOnce(list({ provider: 'microsoft' }));
+    await renderIt({ oauth: msOauth });
+    expect(screen.getByText(/must approve\. Sign in/)).toBeInTheDocument();
     expect(replace).toHaveBeenCalledWith('/admin/integrations/int-1');
-  });
-
-  it('ignores an unknown reason value (generic text, nothing echoed)', async () => {
-    search = new URLSearchParams('oauth=failed&reason=<b>evil</b>');
-    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
-    await renderMs();
-    expect(screen.getByText(/Could not connect with Microsoft/)).toBeInTheDocument();
-    expect(screen.queryByText(/evil/)).not.toBeInTheDocument();
-  });
-
-  it('ignores inherited object keys as a reason', async () => {
-    search = new URLSearchParams('oauth=failed&reason=constructor');
-    apiFetch.mockResolvedValueOnce(status({ provider: 'microsoft' }));
-    await renderMs();
-    expect(screen.getByText(/Could not connect with Microsoft/)).toBeInTheDocument();
   });
 });

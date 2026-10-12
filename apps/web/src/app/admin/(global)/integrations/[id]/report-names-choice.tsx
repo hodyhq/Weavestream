@@ -40,7 +40,16 @@ function valueText(concealed: boolean | null): string {
  * before asking; "show" and "turn concealment back on" each change that one
  * setting once, after a confirmation that names it; "keep" changes nothing.
  */
-export function ReportNamesChoice({ integrationId, choice: initialChoice }: { integrationId: string; choice: 'shown' | 'hidden' | null }) {
+export function ReportNamesChoice({
+  integrationId,
+  connectionId,
+  choice: initialChoice,
+}: {
+  integrationId: string;
+  /** The client tenant (connection) the choice belongs to. */
+  connectionId: string;
+  choice: 'shown' | 'hidden' | null;
+}) {
   const toast = useToast();
   const [state, setState] = useState<MicrosoftReportNames | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -48,14 +57,14 @@ export function ReportNamesChoice({ integrationId, choice: initialChoice }: { in
   const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await apiFetch<MicrosoftReportNames>(`/admin/integrations/${integrationId}/microsoft/report-names`);
+    const res = await apiFetch<MicrosoftReportNames>(`/admin/integrations/${integrationId}/connections/${connectionId}/microsoft/report-names`);
     if (res.ok && res.data) {
       setState(res.data);
       setLoadFailed(false);
     } else {
       setLoadFailed(true);
     }
-  }, [integrationId]);
+  }, [integrationId, connectionId]);
 
   useEffect(() => {
     void load();
@@ -67,7 +76,7 @@ export function ReportNamesChoice({ integrationId, choice: initialChoice }: { in
     setBusy(action);
     let res: Awaited<ReturnType<typeof apiFetch<MicrosoftReportNames>>>;
     try {
-      res = await apiFetch<MicrosoftReportNames>(`/admin/integrations/${integrationId}/microsoft/report-names`, {
+      res = await apiFetch<MicrosoftReportNames>(`/admin/integrations/${integrationId}/connections/${connectionId}/microsoft/report-names`, {
         method: 'POST',
         body: JSON.stringify({ action }),
       });
