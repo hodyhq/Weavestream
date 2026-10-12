@@ -2274,7 +2274,7 @@ export class AssetsService {
     // per integration and asset, so only one record co-binds it. Without
     // that transaction the check cannot be serialized: refuse to co-bind.
     if (!input.tx) return false;
-    await input.tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`cobind:${input.integrationId}:${target.id}`}, 0))`;
+    await input.tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`cobind:${input.integrationId}:${target.id}`}, 0))`;
     const own = await client.integrationSyncRecord.findFirst({
       where: { companyId: input.companyId, assetId: target.id, companyMapping: { integrationId: input.integrationId } },
       select: { id: true },
