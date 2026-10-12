@@ -14,7 +14,7 @@ Weavestream's integration layer synchronises asset and infrastructure data from 
 ## Architecture & How It Works
 
 1. **Configure Provider Connections**  
-   Operators supply credentials (API tokens, OAuth2 client secrets, service principal keys, or controller URLs) and map source organisations or sites to target Weavestream companies.
+   Operators supply credentials (API tokens, OAuth2 client secrets, service principal keys, or controller URLs) and map source organisations or sites to target Weavestream companies. OAuth providers (Google Workspace, Microsoft 365) have one integration per install: its **App** tab holds the OAuth app and its **Connections** tab one connection per customer tenant.
 
 2. **Sync Orchestration**  
    Sync jobs run on demand or on a configurable schedule (via UTC cron expressions). The background worker invokes the provider driver to fetch source records, apply field transformations, and upsert records into Weavestream asset layouts.

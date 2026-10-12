@@ -8,7 +8,7 @@ description: Connect Google Workspace tenants with one click to sync people, dev
 
 **Google Workspace** is Google's suite of business email, storage and collaboration apps, managed from the Google Admin console.
 
-The Weavestream Google Workspace driver is **read-only**. One integration is one customer tenant. You set up one Google Cloud OAuth app for your whole Weavestream install, and then each customer is connected with a single **Connect with Google** sign-in by one of their admins.
+The Weavestream Google Workspace driver is **read-only**. A Weavestream install has **one** Google Workspace integration. Its **App** tab holds the one Google Cloud OAuth app for your install, and its **Connections** tab holds one connection per customer tenant, each made with a single Google sign-in by one of their admins.
 
 ## Overview & Features
 
@@ -82,7 +82,16 @@ Chromebook **auto-update expiration** can optionally be mapped to a date field m
 
 ## Setup Instructions
 
-The same steps are shown in Weavestream under **Admin > Settings > Integrations** (Google OAuth app card) and on each Google Workspace integration's **Credentials & schedule** tab. Steps 1–6 are done **once per Weavestream install**. Steps 7–9 are done **once per customer**.
+The same steps are shown in Weavestream on the Google Workspace integration's **App** tab (and, for one connection, on its **Connections** tab). Steps 1–6 are done **once per Weavestream install**. Steps 7–9 are done **once per customer**.
+
+The integration has these tabs:
+
+- **App**: client ID, client secret (write-only, last four characters shown), redirect URI and scopes with copy buttons, the setup guide and **Check setup**.
+- **Connections**: one row per customer tenant (domain and customer ID, who connected, when, last sync, status) with **Reconnect** and **Disconnect**. Press **Connect a client** to add a tenant. Click a row to run **Check setup** for that tenant.
+- **Organizations**: every connected tenant, to map to a company.
+- **Map layouts**, resource tabs, **Differences**, **Run history** and **Credentials & schedule** are shared by all connections.
+
+Only one Google Workspace integration can exist; **New integration** refuses a second one.
 
 ### Step 1: Create a Google Cloud project
 
@@ -124,17 +133,21 @@ Press **Create** and copy the **Client ID** and **Client secret**. Google shows 
 
 ### Step 6: Paste the client into Weavestream
 
-In **Admin > Settings > Integrations**, paste the Client ID and Client secret into the **Google OAuth app** card and press **Save OAuth app** (this asks you to confirm with MFA). Then press **Check setup**: steps that pass turn green, and a red step tells you what to fix. Check setup proves the client ID and secret only; the redirect URI step stays unconfirmed ("Redirect URI is confirmed on the first successful connect") until the first connect succeeds, after which the connected integration's Check setup shows it passed.
+Go to **Admin > Integrations**. If there is no Google Workspace integration yet, press **New integration** and choose **Google Workspace** (once per install). Open it, go to the **App** tab, paste the Client ID and Client secret and press **Save OAuth app** (this asks you to confirm with MFA). Then press **Check setup**: steps that pass turn green, and a red step tells you what to fix. Check setup proves the client ID and secret only; the redirect URI step stays unconfirmed ("Redirect URI is confirmed on the first successful connect") until the first connect succeeds, after which a connection's Check setup shows it passed.
+
+<!-- TODO(screenshot): ![Google Workspace integration, App tab with the client saved](./assets/google-workspace-app-tab.png) -->
 
 ### Step 7: Connect a customer
 
-1. Go to **Admin > Integrations > New integration** and choose **Google Workspace**.
-2. On the **Credentials & schedule** tab, press **Connect with Google**.
+1. Open the **Google Workspace** integration and go to its **Connections** tab.
+2. Press **Connect a client** (this asks you to confirm with MFA).
 3. Sign in with that customer's **super admin**. A delegated admin also works if their role can read users, groups, reports, licences and devices.
 4. On the "Google hasn't verified this app" screen, press **Advanced**, then **Go to Weavestream (unsafe)**. This warning appears because the app is your own and not reviewed by Google; the data only goes to your own Weavestream server.
 5. Tick every permission and press **Continue**.
 
-Back in Weavestream, press **Check setup** in the setup guide to confirm each API answers.
+Back in Weavestream, the tenant appears as a new row. Click it and press **Check setup** in the setup guide to confirm each API answers. A tenant that is already connected cannot be added twice: use **Reconnect** on its row. Reconnect only accepts a sign-in to that same tenant; signing in to another tenant changes nothing and says so.
+
+<!-- TODO(screenshot): ![Connections tab with two client tenants](./assets/google-workspace-connections.png) -->
 
 ### Step 8: If the customer blocks third-party apps
 
@@ -142,7 +155,7 @@ If sign-in fails with "access blocked" or `admin_policy_enforced`, the customer 
 
 ### Step 9: Map layouts and run the first sync
 
-1. Open **Organizations** and map the tenant to its Weavestream company.
+1. Open **Organizations**: every connected tenant is listed there. Map it to its Weavestream company.
 2. Open **Map layouts** (see below), then set **Status** to active and save.
 3. Run a **Dry run**, check **Run history**, then **Run sync now**.
 
@@ -170,8 +183,8 @@ An adopted asset keeps the name you gave it. Assets that Google created follow t
 | Check setup: step 8 red, or sign-in says access blocked | The customer blocks unconfigured apps (`admin_policy_enforced`) | Mark the client ID **Trusted** in the customer's Admin console (step 8). |
 | Check setup: step 3 red, or sign-in says the app is limited to its organisation | Audience is **Internal** (`org_internal`) | Set Audience to **External** and publish the app. |
 | After Google sign-in you land on the login page, or Check setup says "API_URL and APP_URL must share a host" | `API_URL` is on a different host from `APP_URL`, so the browser does not send the session cookie to the callback | Serve the API under the web app's host (for example `APP_URL=https://ws.example.com`, `API_URL=https://ws.example.com/api`), update the redirect URI on the OAuth client, and connect again. |
-| Integration shows **needs reconnect**: the saved connection can't be read | The stored connection was encrypted under a key that is no longer configured, or is damaged | Press **Disconnect** (it wipes the unreadable connection without calling Google), then **Connect with Google**. If `INTEGRATION_SECRET_KEY` was rotated by mistake, restore the old key instead. |
-| **Reconnect** shown on the integration | The refresh token was revoked, the admin was deleted or lost admin rights, or it went unused for 6 months (`invalid_grant`) | Press **Reconnect** and sign in with a current admin. |
+| A connection shows **needs reconnect**: the saved connection can't be read | The stored connection was encrypted under a key that is no longer configured, or is damaged | Press **Disconnect** on its row (it removes the unreadable connection without calling Google), then **Connect a client**. If `INTEGRATION_SECRET_KEY` was rotated by mistake, restore the old key instead. |
+| A connection shows **needs reconnect** after a sync | The refresh token was revoked, the admin was deleted or lost admin rights, or it went unused for 6 months (`invalid_grant`) | Press **Reconnect** and sign in with a current admin. |
 | Connections stop working after a week | The app is still in **Testing** (tokens expire after 7 days) | Press **Publish app** under **Audience**, then reconnect each customer. |
 | "Google hasn't verified this app" warning | Expected for a self-hosted app | Press **Advanced**, then **Go to Weavestream (unsafe)**. |
 | Google refuses new connections with a user cap message | An unverified app allows 100 approving admins over the project's life | Use a new Cloud project for the next customers, or submit the app for Google verification. |
@@ -185,11 +198,11 @@ An adopted asset keeps the name you gave it. Assets that Google created follow t
 
 - **Read-only.** The driver only sends GET requests to Google. Check setup is read-only too.
 - **Scopes requested**: `openid`, `userinfo.email`, and `admin.directory.user.readonly`, `admin.directory.group.readonly`, `admin.directory.group.member.readonly`, `admin.directory.domain.readonly`, `admin.directory.customer.readonly`, `admin.directory.device.chromeos.readonly`, `admin.directory.device.mobile.readonly`, `admin.reports.usage.readonly`, `apps.licensing` (each prefixed with `https://www.googleapis.com/auth/`). Google offers no read-only variant of `apps.licensing`; Weavestream only reads with it.
-- **Encrypted secrets.** The OAuth client secret and each customer's refresh token are encrypted at rest (AES-256-GCM) and never shown again or logged. Saving the client needs settings permission and an MFA step-up, and is audited.
-- **State and PKCE.** Every connect uses a single-use random state bound to the signed-in user and a PKCE code verifier.
-- **Exact scopes only.** Weavestream never asks Google to add previously granted scopes to a connection. If Google returns a grant with a scope Weavestream did not request, the connect fails and is audited (`excess_scopes`); a grant missing some requested scopes still connects, and Check setup names what is missing. Credentials of a Google integration can only be set by Connect and removed by Disconnect.
+- **Encrypted secrets.** The OAuth client secret and each customer's refresh token are encrypted at rest (AES-256-GCM) and never shown again or logged. Saving the client, connecting and disconnecting need the integration management permission and an MFA step-up, and are audited. Each connection's refresh token is encrypted bound to that connection and its integration, so it cannot be moved onto another tenant's row.
+- **State and PKCE.** Every connect uses a single-use random state bound to the signed-in user, the integration and the intent (a new connection, or Reconnect of one connection), plus a PKCE code verifier. The tenant is read from Google with the new grant before anything is stored.
+- **Exact scopes only.** Weavestream never asks Google to add previously granted scopes to a connection. If Google returns a grant with a scope Weavestream did not request, the connect fails and is audited (`excess_scopes`); a grant missing some requested scopes still connects, and Check setup names what is missing. Connections of a Google integration can only be added by Connect a client and removed by Disconnect.
 - **Callback URLs stay out of logs.** Weavestream logs request paths without their query string, so the authorization code and state of `/oauth/callback` never reach its logs. Configure your reverse proxy the same way (log the path, not the query string, for `/v1/admin/integrations/oauth/callback`), or keep proxy access logs short-lived and access-controlled.
-- **Tenant isolation.** A connection's tokens only ever feed the company its tenant is mapped to; a token for a different tenant stops the sync.
+- **Tenant isolation.** A sync of a company mapping only loads the connection whose customer ID equals the mapping's, so one tenant's token never reaches another tenant's mapping. The driver also re-checks the customer ID with Google and stops the sync on a mismatch.
 - **No raw Google errors.** Errors shown in Weavestream are fixed messages; Google's own error text is never passed through.
 - **Hidden from client users.** Google Workspace sections and differences are never shown to client users, even on assets they can see.
 - **Audited choices.** Resolving a difference needs permission to edit that asset's company and writes an `integration.difference.resolve` audit row (ids and the choice, never the values). A bulk action on the **Differences** tab writes one such row per difference plus an `integration.difference.resolve_bulk` summary row (counts only); differences in companies you cannot edit are skipped and listed.
