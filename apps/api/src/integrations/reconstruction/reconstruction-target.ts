@@ -1,5 +1,6 @@
 import type { IntegrationFieldDiff, MatchFirstIndexCache } from '../../assets/assets.service.js';
 import { createHash } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import {
@@ -320,6 +321,23 @@ export function contextGap(
   return null;
 }
 
+const nativeWriteLogger = new Logger('ReconstructionTarget');
+
+/**
+ * Name, Prisma code, and one line of the message, never the payload. Prisma
+ * messages open with an invocation header and may list the call's arguments
+ * (field values) in the middle; the cause is on the last line. Double-quoted
+ * text (Postgres quotes offending values that way) is redacted.
+ */
+export function safeErrorSummary(error: unknown): string {
+  if (!(error instanceof Error)) return `non-error ${typeof error}`;
+  const code = (error as { code?: unknown }).code;
+  const lines = error.message.split('\n').map((line) => line.trim()).filter(Boolean);
+  const line = (error.name.startsWith('PrismaClient') ? lines.at(-1) : lines[0]) ?? '';
+  const message = line.replace(/"[^"]*"/g, '"<redacted>"').slice(0, 200);
+  return `${error.name}${typeof code === 'string' ? ` ${code}` : ''}: ${message}`;
+}
+
 export function nativeWriteErrorOutcome(
   ctx: ReconstructionWriteContext,
   input: ReconstructionInput,
@@ -359,6 +377,13 @@ export function nativeWriteErrorOutcome(
       }),
     );
   }
+  // The gap stays generic for the client; the cause goes to the server log
+  // (a raw Prisma failure here once hid a broken co-bind lock for days).
+  nativeWriteLogger.warn(
+    `Native target write failed: ${safeErrorSummary(error)} ` +
+      `(integration=${ctx.integrationId} company=${ctx.companyId} resource=${ctx.resourceId}/${ctx.resourceKey} ` +
+      `target=${ctx.existingTargetId ?? 'new'} record=sha256:${createHash('sha256').update(input.externalId).digest('hex').slice(0, 12)})`,
+  );
   return blockedOutcome(
     ctx,
     input,

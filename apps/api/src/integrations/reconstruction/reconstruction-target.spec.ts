@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   MAX_RECONSTRUCTION_INPUT_BYTES,
   articleReconstructionInputSchema,
@@ -5,6 +6,7 @@ import {
   buildProvenance,
   contextGap,
   invalidInputOutcome,
+  nativeWriteErrorOutcome,
   reconstructionInputByteLength,
   type ArticleReconstructionInput,
   type AssetReconstructionInput,
@@ -166,5 +168,45 @@ describe('reconstruction input byte bounds', () => {
     expect(candidate.markdown.length).toBeLessThan(MAX_RECONSTRUCTION_INPUT_BYTES);
     expect(reconstructionInputByteLength(candidate)).toBe(MAX_RECONSTRUCTION_INPUT_BYTES + 1);
     expect(articleReconstructionInputSchema.safeParse(candidate).success).toBe(false);
+  });
+});
+
+describe('native write failure logging', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('logs a non-HTTP failure by name, code, and cause line without the payload, keeping the gap generic', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const error = Object.assign(
+      new Error([
+        '',
+        'Invalid `tx.asset.update()` invocation:',
+        '{ data: { serial: "SECRET-FIELD-VALUE", token: "tok_live_123" } }',
+        'Raw query failed. Code: `22P02`. Message: `invalid input syntax for type uuid: "leaked-value"`',
+      ].join('\n')),
+      { name: 'PrismaClientKnownRequestError', code: 'P2010' },
+    );
+    const outcome = nativeWriteErrorOutcome(context(), input, error);
+    expect(outcome.gaps).toEqual([expect.objectContaining({ kind: 'synchronization_error', message: 'The native target write failed.' })]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]![0]);
+    expect(line).toContain('PrismaClientKnownRequestError P2010: Raw query failed.');
+    expect(line).toContain(`integration=${ids.integration}`);
+    expect(line).toContain(`company=${ids.company}`);
+    expect(line).toContain(`resource=${ids.resource}/devices`);
+    expect(line).not.toMatch(/SECRET-FIELD-VALUE|tok_live_123|leaked-value|org-1:devices:device-1/);
+  });
+
+  it('uses the first line of a plain error, truncated', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    nativeWriteErrorOutcome(context(), input, new TypeError(`${'x'.repeat(300)}\nsecond line payload`));
+    const line = String(warn.mock.calls[0]![0]);
+    expect(line).toContain(`TypeError: ${'x'.repeat(200)} (`);
+    expect(line).not.toContain('payload');
+  });
+
+  it('does not log mapped HTTP failures', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    nativeWriteErrorOutcome(context(), input, { getStatus: () => 409 });
+    expect(warn).not.toHaveBeenCalled();
   });
 });
