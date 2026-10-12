@@ -88,7 +88,7 @@ function matches(r: object, where: Record<string, unknown>): boolean {
   });
 }
 
-function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViolation?: boolean; driver?: string } = {}) {
+function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViolation?: boolean; driver?: string; otherTenantMappings?: number } = {}) {
   const locks = advisoryLocks();
   const tick = () => new Promise((r) => setImmediate(r));
   const monitoredDomain = {
@@ -122,6 +122,7 @@ function harness(rows: MonitoredDomain[], opts: { companyId?: string; uniqueViol
         integration: { driver: opts.driver ?? 'google-workspace' },
         company: { archivedAt: null },
       })),
+      count: jest.fn(async () => opts.otherTenantMappings ?? 0),
     },
     monitoredDomain,
     $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
@@ -295,6 +296,16 @@ describe('IntegrationDomainSyncService.syncMapping (Google Workspace)', () => {
     mockListWorkspaceDomains.mockResolvedValue([ws('old.example', 'SECONDARY')]);
     await svc.syncMapping(MAPPING, null);
     expect(gone).toMatchObject({ workspaceRole: 'SECONDARY', workspaceMissingSince: null });
+  });
+
+  it('never stamps missing when the company is mapped to another tenant of the same integration', async () => {
+    // Rows carry the integration, not the tenant: tenant A would mark tenant B's domains missing.
+    const other = row({ id: 'other', hostname: 'tenant-b.example', source: 'GOOGLE_WORKSPACE', integrationId: INT, workspaceIntegrationId: INT, workspaceRole: 'PRIMARY' });
+    const { svc } = harness([other], { otherTenantMappings: 1 });
+    mockListWorkspaceDomains.mockResolvedValue([]);
+
+    await expect(svc.syncMapping(MAPPING, null)).resolves.toMatchObject({ missing: 0 });
+    expect(other).toMatchObject({ workspaceRole: 'PRIMARY', workspaceMissingSince: null });
   });
 
   it('audits the run against the mapping and its company', async () => {
