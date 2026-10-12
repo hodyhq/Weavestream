@@ -169,8 +169,8 @@ export class IntegrationConnectionsMigrationService implements OnApplicationBoot
         report.skipped.push({ integrationId: kept.id, provider, reason: 'mapping_on_other_tenant' });
         return;
       }
+      // Stored lower case like a new connection; the lookup by mapping ignores case for admin consent.
       const mapped = tenants[0];
-      externalOrgId = mapped ? mapped.externalOrgId : externalOrgId;
       displayName = consent.tenantName ?? mapped?.externalOrgName ?? null;
       connectedAt = consent.consentedAt;
     } else {

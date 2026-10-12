@@ -251,4 +251,14 @@ describe('OAuthAppTab', () => {
     expect(await screen.findByDisplayValue('client-1')).toBeInTheDocument();
     expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/${ID}/oauth-app`);
   });
+
+  it('shows the load failure instead of loading forever when the request throws', async () => {
+    apiFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(
+      <ToastProvider>
+        <OAuthAppTab integrationId={ID} provider="google" />
+      </ToastProvider>,
+    );
+    expect(await screen.findByText(/Could not load the .* settings/)).toBeInTheDocument();
+  });
 });

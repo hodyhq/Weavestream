@@ -324,18 +324,30 @@ export function contextGap(
 const nativeWriteLogger = new Logger('ReconstructionTarget');
 
 /**
- * Name, Prisma code, and one line of the message, never the payload. Prisma
- * messages open with an invocation header and may list the call's arguments
- * (field values) in the middle; the cause is on the last line. Double-quoted
- * text (Postgres quotes offending values that way) is redacted.
+ * Error name, Prisma code, and the constraint or field names from Prisma's
+ * `meta`, never message text: messages can carry field values, emails, or
+ * tokens (CWE-532). Every logged token is checked against an identifier shape.
  */
+const SAFE_IDENTIFIER = /^[A-Za-z0-9_.]{1,120}$/;
+
 export function safeErrorSummary(error: unknown): string {
   if (!(error instanceof Error)) return `non-error ${typeof error}`;
+  const name = SAFE_IDENTIFIER.test(error.name) ? error.name : 'Error';
   const code = (error as { code?: unknown }).code;
-  const lines = error.message.split('\n').map((line) => line.trim()).filter(Boolean);
-  const line = (error.name.startsWith('PrismaClient') ? lines.at(-1) : lines[0]) ?? '';
-  const message = line.replace(/"[^"]*"/g, '"<redacted>"').slice(0, 200);
-  return `${error.name}${typeof code === 'string' ? ` ${code}` : ''}: ${message}`;
+  const parts = [name];
+  if (typeof code === 'string' && /^P\d{4}$/.test(code)) parts.push(code);
+  if (error.name === 'PrismaClientKnownRequestError') {
+    const meta = (error as { meta?: Record<string, unknown> }).meta ?? {};
+    const target = meta.target;
+    const targets = (Array.isArray(target) ? target : [target]).filter(
+      (t): t is string => typeof t === 'string' && SAFE_IDENTIFIER.test(t),
+    );
+    if (targets.length) parts.push(`target=${targets.join(',')}`);
+    if (typeof meta.field_name === 'string' && SAFE_IDENTIFIER.test(meta.field_name)) {
+      parts.push(`field=${meta.field_name}`);
+    }
+  }
+  return parts.join(' ');
 }
 
 export function nativeWriteErrorOutcome(

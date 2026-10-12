@@ -10,6 +10,7 @@ import type {
   CreateIntegrationInput,
   CreateIntegrationResourceInput,
   DriverDescriptor,
+  DriverOAuthDescriptor,
   DriverResourceDescriptor,
   IntegrationDto,
   IntegrationFieldMappingDto,
@@ -42,7 +43,7 @@ import { EnvService } from '../config/env.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
-import { Prisma } from '@prisma/client';
+import { Prisma, type IntegrationConnection } from '@prisma/client';
 import { assertStringIdList } from '../common/safe-id-list.js';
 import { maskSecretTail } from '../common/redact-secrets.js';
 import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
@@ -51,7 +52,7 @@ import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { scanSensitiveMaterial } from './sensitive-material.js';
 import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
-import type { OAuthClientCredentials } from './oauth/oauth-token.js';
+import { isAdminConsent, type OAuthClientCredentials } from './oauth/oauth-token.js';
 import {
   getTenantContext,
   runWithTenantContext,
@@ -225,6 +226,9 @@ export function minimalRecommendation(
  * service exposes the per-resource read/write methods consumed by the
  * controller and the sync runner.
  */
+/** Which connection of an OAuth integration `loadDriverContext` loads; ignored by other drivers. */
+export type ConnectionScope = { externalOrgId?: string; connectionId?: string; onlyConnection?: boolean };
+
 @Injectable()
 export class IntegrationsService {
   private readonly logger = new Logger(IntegrationsService.name);
@@ -287,9 +291,14 @@ export class IntegrationsService {
     this.assertNoSecretForOAuth(descriptor, input.secret, false);
     this.validateDriverPayload(descriptor, input.config, input.secret);
     this.validateDriverConfiguration(input.driver, input.config, input.secret);
-    if (descriptor.oauth) await this.assertNoOtherOAuthIntegration(descriptor);
 
     const created = await this.prisma.$transaction(async (tx) => {
+      if (descriptor.oauth) {
+        // Serialize concurrent creates of the same provider so the check below sees
+        // the other insert. $executeRaw: the lock returns void, which $queryRaw cannot read.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`oauth-provider:${descriptor.oauth.provider}`}, 0))`;
+        await this.assertNoOtherOAuthIntegration(descriptor, tx);
+      }
       const row = await tx.integration.create({
         data: {
           driver: input.driver,
@@ -591,12 +600,14 @@ export class IntegrationsService {
    * OAuth drivers (Google Workspace, Microsoft 365) have one connection per
    * client tenant: `scope` picks it by the mapping's `externalOrgId` (the
    * only lookup the sync paths use, so a mapping can only ever receive the
-   * grant of its own tenant) or by connection id (Connections tab). The
-   * driver still re-verifies the tenant against the provider.
+   * grant of its own tenant) or by connection id (Connections tab).
+   * `onlyConnection` (Test connection, Check setup without a pick) takes the
+   * integration's single connection and refuses when there are several.
+   * The driver still re-verifies the tenant against the provider.
    */
   async loadDriverContext(
     id: string,
-    scope: { externalOrgId?: string; connectionId?: string } = {},
+    scope: ConnectionScope = {},
   ): Promise<{
     integrationId: string;
     driver: string;
@@ -617,7 +628,7 @@ export class IntegrationsService {
     });
     if (!row) throw new NotFoundException(`Integration ${id} not found`);
     const oauth = this.drivers.has(row.driver) ? this.drivers.describe(row.driver).oauth : undefined;
-    if (oauth) return this.loadConnectionContext(row, scope);
+    if (oauth) return this.loadConnectionContext(row, oauth, scope);
     if (!row.secret) {
       throw new BadRequestException('Integration has no credential bundle configured.');
     }
@@ -660,18 +671,34 @@ export class IntegrationsService {
 
   private async loadConnectionContext(
     row: { id: string; driver: string; config: unknown },
-    scope: { externalOrgId?: string; connectionId?: string },
+    oauth: DriverOAuthDescriptor,
+    scope: ConnectionScope,
   ) {
+    let connection: IntegrationConnection | null;
     if (!scope.externalOrgId && !scope.connectionId) {
-      throw new BadRequestException('Pick a connection: this integration connects one client tenant at a time.');
+      const only = scope.onlyConnection
+        ? await this.prisma.integrationConnection.findMany({ where: { integrationId: row.id }, take: 2 })
+        : [];
+      if (only.length !== 1) {
+        throw new BadRequestException('Pick a connection: this integration connects one client tenant at a time.');
+      }
+      connection = only[0]!;
+    } else {
+      connection = await this.prisma.integrationConnection.findFirst({
+        where: {
+          integrationId: row.id,
+          ...(scope.connectionId ? { id: scope.connectionId } : {}),
+          ...(scope.externalOrgId
+            ? {
+                // Microsoft tenant ids are GUIDs (any case); Google customer ids are exact.
+                externalOrgId: isAdminConsent(oauth)
+                  ? { equals: scope.externalOrgId, mode: 'insensitive' as const }
+                  : scope.externalOrgId,
+              }
+            : {}),
+        },
+      });
     }
-    const connection = await this.prisma.integrationConnection.findFirst({
-      where: {
-        integrationId: row.id,
-        ...(scope.connectionId ? { id: scope.connectionId } : {}),
-        ...(scope.externalOrgId ? { externalOrgId: scope.externalOrgId } : {}),
-      },
-    });
     if (!connection) {
       throw new BadRequestException(
         scope.connectionId
@@ -1466,10 +1493,13 @@ export class IntegrationsService {
    * One integration per OAuth provider: every client tenant is a connection
    * of it. Checked again by the unique app row, which allows one per provider.
    */
-  private async assertNoOtherOAuthIntegration(descriptor: DriverDescriptor): Promise<void> {
+  private async assertNoOtherOAuthIntegration(
+    descriptor: DriverDescriptor,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
     const provider = descriptor.oauth!.provider;
     const sameProvider = this.drivers.list().filter((d) => d.oauth?.provider === provider);
-    const existing = await this.prisma.integration.findFirst({
+    const existing = await tx.integration.findFirst({
       where: { driver: { in: sameProvider.map((d) => d.key) } },
       select: { name: true },
     });

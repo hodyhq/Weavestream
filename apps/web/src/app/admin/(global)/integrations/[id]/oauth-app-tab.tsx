@@ -24,9 +24,15 @@ export function OAuthAppTab({
   const [state, setState] = useState<{ app: IntegrationOAuthApp | null } | null>(null);
   useEffect(() => {
     let live = true;
-    void apiFetch<IntegrationOAuthApp>(`/admin/integrations/${integrationId}/oauth-app`).then((res) => {
-      if (live) setState({ app: res.ok && res.data ? res.data : null });
-    });
+    void apiFetch<IntegrationOAuthApp>(`/admin/integrations/${integrationId}/oauth-app`).then(
+      (res) => {
+        if (live) setState({ app: res.ok && res.data ? res.data : null });
+      },
+      // apiFetch rethrows network failures: show the card's "Could not load" state, not "Loading…" forever.
+      () => {
+        if (live) setState({ app: null });
+      },
+    );
     return () => {
       live = false;
     };

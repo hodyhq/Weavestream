@@ -74,13 +74,17 @@ export function ConnectionsTab({
   const adminConsent = oauth.consentFlow === 'admin_consent';
 
   const load = useCallback(async () => {
-    const res = await apiFetch<IntegrationConnections>(`/admin/integrations/${integrationId}/connections`);
-    if (res.ok && res.data) {
-      setData(res.data);
-      setLoadFailed(false);
-    } else {
-      setLoadFailed(true);
+    try {
+      const res = await apiFetch<IntegrationConnections>(`/admin/integrations/${integrationId}/connections`);
+      if (res.ok && res.data) {
+        setData(res.data);
+        setLoadFailed(false);
+        return;
+      }
+    } catch {
+      // apiFetch rethrows network failures: show the load-failed state below.
     }
+    setLoadFailed(true);
   }, [integrationId]);
 
   useEffect(() => {
@@ -110,19 +114,25 @@ export function ConnectionsTab({
   /** New client tenant (no id) or Reconnect of one connection. */
   async function connect(connectionId?: string) {
     setBusy(connectionId ?? 'new');
-    const res = await apiFetch<IntegrationOAuthStartResponse>(`/admin/integrations/${integrationId}/connections/start`, {
-      method: 'POST',
-      body: JSON.stringify(connectionId ? { connectionId } : {}),
-    });
-    if (!res.ok || !res.data) {
-      setBusy(null);
-      if (!res.stepUpCancelled) {
-        toast.push(problemMessage(res.problem) ?? `Could not start the ${label} sign-in.`, 'danger');
+    try {
+      const res = await apiFetch<IntegrationOAuthStartResponse>(`/admin/integrations/${integrationId}/connections/start`, {
+        method: 'POST',
+        body: JSON.stringify(connectionId ? { connectionId } : {}),
+      });
+      if (!res.ok || !res.data) {
+        setBusy(null);
+        if (!res.stepUpCancelled) {
+          toast.push(problemMessage(res.problem) ?? `Could not start the ${label} sign-in.`, 'danger');
+        }
+        return;
       }
-      return;
+      // Same-tab navigation to the provider (busy stays set); `open` rather than `location` so it is testable.
+      window.open(res.data.authorizeUrl, '_self');
+    } catch {
+      // apiFetch rethrows network failures; the buttons must not stay disabled.
+      setBusy(null);
+      toast.push(`Could not start the ${label} sign-in.`, 'danger');
     }
-    // Same-tab navigation to the provider; `open` rather than `location` so it is testable.
-    window.open(res.data.authorizeUrl, '_self');
   }
 
   async function disconnect(row: IntegrationConnection) {
@@ -134,14 +144,21 @@ export function ConnectionsTab({
       return;
     }
     setBusy(row.id);
-    const res = await apiFetch<null>(`/admin/integrations/${integrationId}/connections/${row.id}/disconnect`, {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
-    setBusy(null);
-    if (!res.ok && res.status !== 204) {
-      if (!res.stepUpCancelled) toast.push(problemMessage(res.problem) ?? 'Could not disconnect.', 'danger');
+    try {
+      const res = await apiFetch<null>(`/admin/integrations/${integrationId}/connections/${row.id}/disconnect`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      if (!res.ok && res.status !== 204) {
+        if (!res.stepUpCancelled) toast.push(problemMessage(res.problem) ?? 'Could not disconnect.', 'danger');
+        return;
+      }
+    } catch {
+      // apiFetch rethrows network failures; the buttons must not stay disabled.
+      toast.push('Could not disconnect.', 'danger');
       return;
+    } finally {
+      setBusy(null);
     }
     toast.push(`Disconnected ${name}.`, 'ok');
     if (selectedId === row.id) setSelectedId(null);
@@ -151,16 +168,22 @@ export function ConnectionsTab({
 
   async function runCheck(connectionId: string) {
     setChecking(true);
-    const res = await apiFetch<IntegrationSetupCheck>(
-      `/admin/integrations/${integrationId}/check?connectionId=${encodeURIComponent(connectionId)}`,
-      { method: 'POST', body: JSON.stringify({}) },
-    );
-    setChecking(false);
-    if (!res.ok || !res.data) {
-      toast.push(problemMessage(res.problem) ?? 'Could not run the setup check.', 'danger');
-      return;
+    try {
+      const res = await apiFetch<IntegrationSetupCheck>(
+        `/admin/integrations/${integrationId}/check?connectionId=${encodeURIComponent(connectionId)}`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      if (!res.ok || !res.data) {
+        toast.push(problemMessage(res.problem) ?? 'Could not run the setup check.', 'danger');
+        return;
+      }
+      setCheck(res.data);
+    } catch {
+      // apiFetch rethrows network failures; the button must not stay stuck loading.
+      toast.push('Could not run the setup check.', 'danger');
+    } finally {
+      setChecking(false);
     }
-    setCheck(res.data);
   }
 
   function select(row: IntegrationConnection) {

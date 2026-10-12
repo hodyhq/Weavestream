@@ -95,11 +95,11 @@ function service(prisma: unknown) {
 const googleGrant = { refreshToken: 'test-refresh-gw', grantedScopes: ['scope.read'], connectedAs: 'admin@example.test', connectedAt: '2026-09-01T00:00:00.000Z' };
 const consent = { tenantId: TENANT, tenantName: 'Example Tenant', grantedRoles: ['User.Read.All'], consentedAt: '2026-09-02T00:00:00.000Z', reportNames: 'shown' };
 
-function opsLike() {
+function opsLike(msTenant = TENANT, msMappedTenant = msTenant) {
   return fakeDb({
     integrations: [
       { id: GW, driver: 'google-workspace', createdAt: new Date('2026-08-01'), secret: { id: 's-gw', ciphertext: crypto.encrypt(JSON.stringify(googleGrant), integrationSecretAad(GW)) } },
-      { id: MS, driver: 'microsoft-365', createdAt: new Date('2026-08-02'), secret: { id: 's-ms', ciphertext: crypto.encrypt(JSON.stringify(consent), integrationSecretAad(MS)) } },
+      { id: MS, driver: 'microsoft-365', createdAt: new Date('2026-08-02'), secret: { id: 's-ms', ciphertext: crypto.encrypt(JSON.stringify({ ...consent, tenantId: msTenant }), integrationSecretAad(MS)) } },
       { id: RMM, driver: 'level', createdAt: new Date('2026-08-03'), secret: { id: 's-rmm', ciphertext: crypto.encrypt('{"apiKey":"test-key"}', integrationSecretAad(RMM)) } },
     ],
     apps: [
@@ -108,7 +108,7 @@ function opsLike() {
     ],
     mappings: [
       { integrationId: GW, externalOrgId: 'C0example1', externalOrgName: 'example.com' },
-      { integrationId: MS, externalOrgId: TENANT, externalOrgName: 'Example Tenant' },
+      { integrationId: MS, externalOrgId: msMappedTenant, externalOrgName: 'Example Tenant' },
     ],
   });
 }
@@ -143,6 +143,15 @@ describe('IntegrationConnectionsMigrationService', () => {
     expect(fake.db.integrationSecret.deleteMany).toHaveBeenCalledTimes(2);
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'integration.connection.migrated', entityId: GW, actorId: null }));
     expect(JSON.stringify(audit.log.mock.calls)).not.toContain('test-refresh-gw');
+  });
+
+  it('stores a Microsoft tenant in lower case even when the mapping spelled it in upper case', async () => {
+    const tenant = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const fake = opsLike(tenant, tenant.toUpperCase());
+    const { svc } = service(fake.prisma);
+    const report = await svc.run();
+    expect(report.skipped).toEqual([]);
+    expect(fake.connections.find((c) => c.integrationId === MS)).toMatchObject({ externalOrgId: tenant });
   });
 
   it('re-encrypts the app secrets under the integration-bound AAD', async () => {

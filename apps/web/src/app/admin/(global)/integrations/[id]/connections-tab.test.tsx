@@ -154,6 +154,45 @@ describe('ConnectionsTab', () => {
     expect(screen.getByText('Setup check passed.')).toBeInTheDocument();
   });
 
+  it('shows the load failure when the list request throws', async () => {
+    apiFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await renderIt();
+    expect(screen.getByText(/Could not load the connections/)).toBeInTheDocument();
+  });
+
+  it('re-enables the row buttons and reports an error when a request throws', async () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    apiFetch
+      .mockResolvedValueOnce(list({ connections: [conn()] }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await renderIt();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Disconnect example.com' }));
+    });
+    expect(screen.getByText('Could not disconnect.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Disconnect example.com' })).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect example.com' }));
+    });
+    expect(screen.getByText(/Could not start the .* sign-in/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconnect example.com' })).toBeEnabled();
+  });
+
+  it('stops the setup check spinner when the request throws', async () => {
+    apiFetch
+      .mockResolvedValueOnce(list({ connections: [conn()] }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await renderIt({ setupGuide: [{ id: 'connect', title: 'Connect a customer', body: 'Sign in.' }] });
+    fireEvent.click(screen.getByText('example.com'));
+    fireEvent.click(screen.getByRole('button', { name: /Setup guide/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Check setup/ }));
+    });
+    expect(screen.getByText('Could not run the setup check.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Check setup/ })).toBeEnabled();
+  });
+
   it('renders cards on a phone', async () => {
     mobile = true;
     apiFetch.mockResolvedValueOnce(list({ connections: [conn()] }));

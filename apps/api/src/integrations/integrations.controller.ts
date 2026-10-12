@@ -236,8 +236,10 @@ export class IntegrationsController {
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request,
+    @Query('connectionId', new ParseUUIDPipe({ optional: true })) connectionId?: string,
   ) {
-    const ctx = await this.integrations.loadDriverContext(id);
+    // OAuth drivers test one client tenant: the picked connection, else the only one.
+    const ctx = await this.integrations.loadDriverContext(id, connectionId ? { connectionId } : { onlyConnection: true });
     const correlationId = randomUUID();
     const http = this.httpDefaults();
     try {
@@ -251,6 +253,7 @@ export class IntegrationsController {
               secret: ctx.secret,
               integrationId: ctx.integrationId,
               oauthClient: ctx.oauthClient,
+              connectionId: ctx.connectionId,
               credentialVersion: ctx.credentialVersion,
               http,
               correlationId,
@@ -308,8 +311,8 @@ export class IntegrationsController {
     @Req() req: Request,
     @Query('connectionId', new ParseUUIDPipe({ optional: true })) connectionId?: string,
   ): Promise<IntegrationSetupCheck> {
-    // OAuth drivers probe one client tenant: the connection picked on the Connections tab.
-    const ctx = await this.integrations.loadDriverContext(id, connectionId ? { connectionId } : {});
+    // OAuth drivers probe one client tenant: the connection picked on the Connections tab, else the only one.
+    const ctx = await this.integrations.loadDriverContext(id, connectionId ? { connectionId } : { onlyConnection: true });
     const driver = this.drivers.get(ctx.driver);
     if (!driver.diagnose) throw new BadRequestException('This integration has no setup check.');
     let diagnosed: IntegrationSetupCheck;

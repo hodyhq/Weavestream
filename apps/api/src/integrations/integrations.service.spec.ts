@@ -1,6 +1,6 @@
 import type { DriverDescriptor } from '@weavestream/shared';
 import { IntegrationsService, ensureResourceDestination, validateResourceRegistry, validateResourceTargetConfig, assertResourcePatchCompatible } from './integrations.service.js';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { BREEZE_RECOMMENDED_DESTINATIONS } from './drivers/breeze/breeze.driver.js';
 import {
@@ -1111,8 +1111,13 @@ describe('IntegrationsService OAuth drivers', () => {
 
   function setup(
     client: { clientId: string; clientSecret: string; version?: string } | null,
-    opts: { connections?: Array<{ id: string; externalOrgId: string; secretCiphertext: string; updatedAt: Date }>; existingOfProvider?: boolean } = {},
+    opts: {
+      connections?: Array<{ id: string; externalOrgId: string; secretCiphertext: string; updatedAt: Date }>;
+      existingOfProvider?: boolean;
+      descriptor?: DriverDescriptor;
+    } = {},
   ) {
+    const descriptor = opts.descriptor ?? oauthDescriptor;
     const connections = opts.connections ?? [
       { id: CONN_A, externalOrgId: 'C-a', secretCiphertext: crypto.encrypt(grant('a'), `integration:${id}:connection:${CONN_A}:secret`), updatedAt: new Date('2026-01-01T00:00:00Z') },
       { id: CONN_B, externalOrgId: 'C-b', secretCiphertext: crypto.encrypt(grant('b'), `integration:${id}:connection:${CONN_B}:secret`), updatedAt: new Date('2026-01-01T00:00:00Z') },
@@ -1133,11 +1138,24 @@ describe('IntegrationsService OAuth drivers', () => {
       },
       integrationConnection: {
         findFirst: jest.fn(async ({ where }: { where: Record<string, unknown> }) =>
-          connections.find((c) => Object.entries(where).every(([k, v]) => k === 'integrationId' ? v === id : (c as Record<string, unknown>)[k] === v)) ?? null),
-        findMany: jest.fn(async () => connections.map((c) => ({ externalOrgId: c.externalOrgId, displayName: `${c.externalOrgId}.example` }))),
+          connections.find((c) => Object.entries(where).every(([k, v]) => {
+            if (k === 'integrationId') return v === id;
+            const actual = (c as Record<string, unknown>)[k];
+            if (v && typeof v === 'object') {
+              const f = v as { equals: string; mode?: string };
+              return f.mode === 'insensitive' ? String(actual).toLowerCase() === f.equals.toLowerCase() : actual === f.equals;
+            }
+            return actual === v;
+          })) ?? null),
+        findMany: jest.fn(async (args?: { take?: number }) =>
+          args?.take ? connections.slice(0, args.take) : connections.map((c) => ({ externalOrgId: c.externalOrgId, displayName: `${c.externalOrgId}.example` }))),
       },
+      $executeRaw: jest.fn(async () => 0),
+      $transaction: jest.fn(),
     };
-    const drivers = { has: () => true, describe: () => oauthDescriptor, list: () => [oauthDescriptor], kindOf: () => 'security' };
+    // The create transaction runs on the same mock, so the lock and the re-check go through `tx`.
+    prisma.$transaction.mockImplementation(async (fn: (tx: typeof prisma) => unknown) => fn(prisma));
+    const drivers = { has: () => true, describe: () => descriptor, list: () => [descriptor], kindOf: () => 'security' };
     const oauthApps = { getClient: jest.fn(async () => client) };
     const service = new IntegrationsService(
       prisma as never, crypto as never, {} as never, drivers as never,
@@ -1175,6 +1193,29 @@ describe('IntegrationsService OAuth drivers', () => {
 
   it('requires a connection scope for OAuth drivers', async () => {
     await expect(setup(null).service.loadDriverContext(id)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('takes the only connection when asked for it, and refuses to guess between several or none', async () => {
+    const single = setup(null, {
+      connections: [{ id: CONN_A, externalOrgId: 'C-a', secretCiphertext: crypto.encrypt(grant('a'), `integration:${id}:connection:${CONN_A}:secret`), updatedAt: new Date(0) }],
+    });
+    await expect(single.service.loadDriverContext(id, { onlyConnection: true })).resolves.toMatchObject({ connectionId: CONN_A });
+    await expect(setup(null).service.loadDriverContext(id, { onlyConnection: true })).rejects.toThrow(/Pick a connection/);
+    await expect(setup(null, { connections: [] }).service.loadDriverContext(id, { onlyConnection: true })).rejects.toThrow(/Pick a connection/);
+  });
+
+  it('matches a Google customer id exactly', async () => {
+    await expect(setup(null).service.loadDriverContext(id, { externalOrgId: 'c-A' })).rejects.toThrow(/not connected/);
+  });
+
+  it('finds a Microsoft tenant connection whatever the mapping spelling (migrated upper case, reconnected lower case)', async () => {
+    const TENANT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    // Reconnect after Disconnect stores the tenant in lower case; the migrated mapping kept upper case.
+    const { service } = setup(null, {
+      descriptor: { ...oauthDescriptor, oauth: { provider: 'microsoft', scopes: ['s'], consentFlow: 'admin_consent' } } as unknown as DriverDescriptor,
+      connections: [{ id: CONN_A, externalOrgId: TENANT, secretCiphertext: crypto.encrypt(grant('a'), `integration:${id}:connection:${CONN_A}:secret`), updatedAt: new Date(0) }],
+    });
+    await expect(service.loadDriverContext(id, { externalOrgId: TENANT.toUpperCase() })).resolves.toMatchObject({ connectionId: CONN_A, externalOrgId: TENANT });
   });
 
   it('loads by connection id within the integration only', async () => {
@@ -1237,6 +1278,18 @@ describe('IntegrationsService OAuth drivers', () => {
     await expect(service.create(USER_ACTOR, { driver: 'fake-oauth', name: 'Second', config: {} } as never, { ip: null, userAgent: null } as never))
       .rejects.toThrow(/already exists \("Existing"\).*Connections tab/);
     expect(prisma.integration.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { driver: { in: ['fake-oauth'] } } }));
+  });
+
+  it('takes a provider lock through $executeRaw inside the create transaction before the check', async () => {
+    const { service, prisma } = setup(null, { existingOfProvider: true });
+    await expect(service.create(USER_ACTOR, { driver: 'fake-oauth', name: 'Second', config: {} } as never, { ip: null, userAgent: null } as never))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    const [sql, key] = prisma.$executeRaw.mock.calls[0] as unknown as [TemplateStringsArray, string];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock(hashtextextended(?, 0))');
+    expect(key).toBe('oauth-provider:google');
+    expect(prisma.$executeRaw.mock.invocationCallOrder[0]!).toBeLessThan(prisma.integration.findFirst.mock.invocationCallOrder[0]!);
   });
 });
 

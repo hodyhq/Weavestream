@@ -578,7 +578,7 @@ export class IntegrationOAuthService {
         where: { id: connectionId, integrationId },
       });
       if (!existing) return fail('connection_missing', grant.provider, {}, 'connection_missing');
-      // Tenant ids are compared without case: a migrated connection keeps its mapping's spelling.
+      // Tenant ids are compared without case: connections migrated by an earlier build kept their mapping's spelling.
       if (existing.externalOrgId.toLowerCase() !== grant.externalOrgId.toLowerCase()) {
         return fail(
           'reconnect_wrong_tenant',
