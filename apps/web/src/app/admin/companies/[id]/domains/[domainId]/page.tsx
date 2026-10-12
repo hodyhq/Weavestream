@@ -66,8 +66,8 @@ export default async function DomainDetailPage({
           { label: domain.hostname },
         )}
         title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-            {domain.hostname}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
+            <span style={{ overflowWrap: 'anywhere' }}>{domain.hostname}</span>
             <StatusPill status={domain.latestStatus} />
             {domain.visibleToClients ? (
               <Tag tone="accent">client-visible</Tag>
