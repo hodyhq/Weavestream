@@ -57,13 +57,17 @@ export function ReportNamesChoice({
   const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await apiFetch<MicrosoftReportNames>(`/admin/integrations/${integrationId}/connections/${connectionId}/microsoft/report-names`);
-    if (res.ok && res.data) {
-      setState(res.data);
-      setLoadFailed(false);
-    } else {
-      setLoadFailed(true);
+    try {
+      const res = await apiFetch<MicrosoftReportNames>(`/admin/integrations/${integrationId}/connections/${connectionId}/microsoft/report-names`);
+      if (res.ok && res.data) {
+        setState(res.data);
+        setLoadFailed(false);
+        return;
+      }
+    } catch {
+      // apiFetch rethrows network failures: show the load-failed state.
     }
+    setLoadFailed(true);
   }, [integrationId, connectionId]);
 
   useEffect(() => {

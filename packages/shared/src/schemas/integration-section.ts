@@ -130,7 +130,7 @@ export const integrationSectionSchema = z
     if (new Set(keys).size !== keys.length) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['groups'], message: 'Group keys must be unique' });
     }
-    if (JSON.stringify(section).length > INTEGRATION_SECTION_LIMITS.bytes) {
+    if (new TextEncoder().encode(JSON.stringify(section)).byteLength > INTEGRATION_SECTION_LIMITS.bytes) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Section is too large' });
     }
   });

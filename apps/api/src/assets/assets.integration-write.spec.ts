@@ -622,6 +622,18 @@ describe('AssetsService integration system writes', () => {
     expect(tx.asset.updateMany).not.toHaveBeenCalled();
   });
 
+  it('keeps the baseline of a field the source left out this run', async () => {
+    const { service } = setup({ target: asset(), binding: binding() });
+    // The source omitted the field (no mapping entry this run): its last
+    // integration-written checksum must survive for the next run.
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+      fieldValues: [],
+      previousFieldChecksums: { [ids.field]: 'integration-baseline', 'not-in-layout': 'x' },
+    })).resolves.toMatchObject({ fieldChecksums: { [ids.field]: 'integration-baseline' } });
+  });
+
   it('does not run side-effecting field resolution before a guarded write succeeds', async () => {
     const checksum = (value: unknown) =>
       createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');

@@ -402,13 +402,17 @@ export class DomainsService {
     const data: Prisma.MonitoredDomainUncheckedUpdateManyInput = {};
     if (input.hostname !== undefined) {
       const normalised = domainHostnameSchema.parse(input.hostname);
-      if (normalised !== existing.hostname && existing.source !== 'MANUAL') {
+      // A manual domain Google Workspace or Microsoft 365 also lists is synced too.
+      if (
+        normalised !== existing.hostname &&
+        (existing.source !== 'MANUAL' || existing.workspaceRole !== null || existing.microsoftDefault !== null)
+      ) {
         // The syncs match on hostname; a rename would orphan this row and
         // the next sweep would recreate the original beside it.
         const from =
           existing.source === 'CLOUDFLARE'
             ? 'Cloudflare'
-            : existing.source === 'MICROSOFT_365'
+            : existing.source === 'MICROSOFT_365' || (existing.source === 'MANUAL' && existing.workspaceRole === null)
               ? 'Microsoft 365'
               : 'Google Workspace';
         throw new BadRequestException(
