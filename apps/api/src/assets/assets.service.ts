@@ -1108,6 +1108,13 @@ export class AssetsService {
       valuesToWrite[field.slug] = value;
       fieldChecksums[fieldId] = assetFieldChecksum(value);
     }
+    // A fact the source left out this run keeps its baseline, so a later
+    // value is still compared with what the integration last wrote.
+    for (const [fieldId, checksum] of Object.entries(input.previousFieldChecksums)) {
+      if (!directionByFieldId.has(fieldId) && fieldById.has(fieldId) && fieldChecksums[fieldId] === undefined) {
+        fieldChecksums[fieldId] = checksum;
+      }
+    }
     await this.assertUniqueValues(
       layout,
       input.companyId,

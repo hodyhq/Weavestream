@@ -339,7 +339,7 @@ export function ConnectionsTab({
             <section aria-label={`Details of ${selected.displayName ?? selected.externalOrgId}`} style={detailStyle}>
               <h4 style={{ ...headerStyle, fontSize: 13 }}>{selected.displayName ?? selected.externalOrgId}</h4>
               {adminConsent && oauth.provider === 'microsoft' && (
-                <ReportNamesChoice integrationId={integrationId} connectionId={selected.id} choice={selected.reportNames} />
+                <ReportNamesChoice key={selected.id} integrationId={integrationId} connectionId={selected.id} choice={selected.reportNames} />
               )}
               {setupGuide && setupGuide.length > 0 && (
                 <SetupGuide

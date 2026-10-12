@@ -93,15 +93,22 @@ export function IntegrationOAuthAppCard({
   async function save() {
     if (!canSave) return;
     setPending(true);
-    const res = await apiFetch<IntegrationOAuthApp>(`/admin/integrations/${integrationId}/oauth-app`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        clientId: clientId.trim(),
-        ...(secret ? { clientSecret: secret } : {}),
-        ...(isMicrosoft ? { secretExpiresAt: expiresAt || null, tenantId: tenantId.trim() || null } : {}),
-      }),
-    });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof apiFetch<IntegrationOAuthApp>>>;
+    try {
+      res = await apiFetch<IntegrationOAuthApp>(`/admin/integrations/${integrationId}/oauth-app`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          clientId: clientId.trim(),
+          ...(secret ? { clientSecret: secret } : {}),
+          ...(isMicrosoft ? { secretExpiresAt: expiresAt || null, tenantId: tenantId.trim() || null } : {}),
+        }),
+      });
+    } catch {
+      toast.push(`Could not save the ${title}.`, 'danger');
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok || !res.data) {
       if (!res.stepUpCancelled) {
         toast.push(problemMessage(res.problem) ?? `Could not save the ${title}.`, 'danger');
@@ -119,11 +126,18 @@ export function IntegrationOAuthAppCard({
 
   async function runCheck() {
     setChecking(true);
-    const res = await apiFetch<IntegrationSetupCheck>(`/admin/integrations/${integrationId}/oauth-app/check`, {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
-    setChecking(false);
+    let res: Awaited<ReturnType<typeof apiFetch<IntegrationSetupCheck>>>;
+    try {
+      res = await apiFetch<IntegrationSetupCheck>(`/admin/integrations/${integrationId}/oauth-app/check`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    } catch {
+      toast.push('Could not run the setup check.', 'danger');
+      return;
+    } finally {
+      setChecking(false);
+    }
     if (!res.ok || !res.data) {
       toast.push(problemMessage(res.problem) ?? 'Could not run the setup check.', 'danger');
       return;

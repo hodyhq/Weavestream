@@ -366,13 +366,13 @@ function DomainDialog({
             value={form.hostname}
             autoFocus
             // The syncs match on hostname; the API rejects renames.
-            disabled={!!initial && initial.source !== 'MANUAL'}
+            disabled={!!initial && (initial.source !== 'MANUAL' || initial.workspaceRole !== null || initial.microsoftDefault !== null)}
             title={
               initial?.source === 'CLOUDFLARE'
                 ? 'Synced from Cloudflare'
-                : initial?.source === 'GOOGLE_WORKSPACE'
+                : initial?.source === 'GOOGLE_WORKSPACE' || initial?.workspaceRole != null
                   ? 'Synced from Google Workspace'
-                  : initial?.source === 'MICROSOFT_365'
+                  : initial?.source === 'MICROSOFT_365' || initial?.microsoftDefault != null
                     ? 'Synced from Microsoft 365'
                     : undefined
             }
