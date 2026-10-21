@@ -271,12 +271,13 @@ describe('LevelDriver devices', () => {
     expect(s.title).toBe('Level RMM');
     expect(s.groups.map((g) => g.key)).toEqual(['status', 'storage', 'network', 'security', 'patches', 'alerts', 'hardware', 'tags', 'notes']);
     expect(s.groups.find((g) => g.key === 'status')!.rows.map((r) => r.label)).toEqual(
-      ['Status', 'Last seen', 'Last reboot', 'Logged-in user', 'Maintenance mode', 'Platform', 'Group', 'Location (from IP)'],
+      ['Level', 'Status', 'Last seen', 'Last reboot', 'Logged-in user', 'Maintenance mode', 'Platform', 'Group', 'Location (from IP)'],
     );
     // Standard facts live in layout fields, never again in the block.
     expect(s.groups.find((g) => g.key === 'hardware')!.rows.map((r) => r.label)).toEqual(['Memory modules', 'Disks']);
     const labels = s.groups.flatMap((g) => g.rows.map((r) => r.label));
     for (const gone of ['Hostname', 'Manufacturer', 'Model', 'CPU', 'Memory', 'Role', 'Name', 'Version']) expect(labels).not.toContain(gone);
+    expect(row(s, 'status', 'Level')).toEqual({ kind: 'link', label: 'Level', value: 'https://app.level.io/device/dev-1/overview', text: 'Open in Level' });
     expect(row(s, 'status', 'Status')).toMatchObject({ kind: 'badge', value: 'Online', tone: 'success' });
     expect(row(s, 'status', 'Group')).toMatchObject({ value: 'Nested' });
     expect(row(s, 'status', 'Location (from IP)')).toMatchObject({ value: 'Example City, US' });

@@ -11,6 +11,7 @@ import {
   formatDiskSize,
   group,
   humanize,
+  link,
   list,
   num,
   obj,
@@ -34,6 +35,8 @@ import {
 export const SECTION_TITLE = 'Level RMM';
 /** Available updates and active alerts listed per device (the count covers all). */
 export const LIST_PREVIEW = 20;
+/** The device page in Level's web app; it takes the API's device id as-is. */
+export const LEVEL_APP = 'https://app.level.io';
 
 type Obj = Record<string, unknown>;
 
@@ -72,6 +75,7 @@ function riskTone(risk: string): 'neutral' | 'success' | 'warning' | 'danger' {
 function statusRows(d: LevelDevice): Row[] {
   const location = [str(d.city), str(d.country)].filter(Boolean).join(', ');
   return [
+    d.id ? link('Level', `${LEVEL_APP}/device/${encodeURIComponent(d.id)}/overview`, 'Open in Level') : null,
     typeof d.online === 'boolean' ? badge('Status', d.online ? 'Online' : 'Offline', d.online ? 'success' : 'neutral') : null,
     datetime('Last seen', str(d.last_seen_at)),
     datetime('Last reboot', str(d.last_reboot_time)),
